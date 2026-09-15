@@ -1,0 +1,14 @@
+node_modules/
+web/.vite/
+web/coverage/
+*.test
+.tmp-*
+.local-data/
+.functional-test-*/
+/controller.env
+/deploy/controller.env
+*.key
+/release/multi-cliproxyapi-linux-x64
+/release/multi-cliproxyapi-linux-x64.sha256
+/release/*.tar.gz
+/release/*.tar.gz.sha256

@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-09-14T06:51:52.268Z",
+  "evidence": [
+    "controller starts under actual service hardening with copied Node runtime",
+    "unprivileged controller creates and starts a real CPA via production polkit policy",
+    "systemd controller restart preserves independently managed CPA PID and session",
+    "manual stopped intent survives systemd controller restart",
+    "production runtime deletion clears its isolated instance directory"
+  ]
+}

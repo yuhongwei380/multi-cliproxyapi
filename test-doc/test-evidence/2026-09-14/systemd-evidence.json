@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-09-14T01:40:07.039Z",
+  "evidence": [
+    {
+      "name": "real systemd start under production sandbox directives",
+      "pid": 6123
+    },
+    {
+      "name": "real systemd restart changes PID",
+      "pid": 6145
+    },
+    {
+      "name": "systemd CPA management page and authenticated API"
+    },
+    {
+      "name": "real systemd stop confirms exit"
+    }
+  ]
+}

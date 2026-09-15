@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-09-14T06:47:59.653Z",
+  "root": "/mnt/d/github/multi-cliproxyapi/.functional-test-C63oH0/package-yqGelr",
+  "evidence": [
+    {
+      "name": "standalone package serves embedded HTML and JavaScript"
+    },
+    {
+      "name": "relative data-dir supports real instance creation and startup",
+      "pid": 13773
+    },
+    {
+      "name": "controller crash leaves CPA management page available"
+    },
+    {
+      "name": "package recovery preserves child PID and persisted session"
+    },
+    {
+      "name": "package deletes only its test instance"
+    }
+  ],
+  "output": "multi-cpa listening on 0.0.0.0:18788 (runtime=process)\nmulti-cpa listening on 0.0.0.0:18788 (runtime=process)\n"
+}

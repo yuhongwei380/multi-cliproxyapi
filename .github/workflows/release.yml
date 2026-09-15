@@ -1,0 +1,92 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Linux amd64 release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Run backend tests
+        run: npm test
+
+      - name: Run web tests
+        run: npm run test:web
+
+      - name: Build Linux amd64 package
+        run: npm run package:linux
+
+      - name: Verify release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary='release/multi-cliproxyapi-linux-x64'
+          checksum="${binary}.sha256"
+          test -x "$binary"
+          (cd release && sha256sum --check multi-cliproxyapi-linux-x64.sha256)
+          for script in install.sh start.sh stop.sh uninstall.sh; do
+            test -x "release/$script"
+          done
+
+      - name: Create release archive
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          safe_tag="$(printf '%s' "$GITHUB_REF_NAME" | sed 's/[^A-Za-z0-9._-]/-/g')"
+          archive="multi-cliproxyapi-${safe_tag}-linux-x64.tar.gz"
+          tar -C release -czf "release/$archive" \
+            multi-cliproxyapi-linux-x64 \
+            multi-cliproxyapi-linux-x64.sha256 \
+            README.md install.sh start.sh stop.sh uninstall.sh
+          (
+            cd release
+            sha256sum "$archive" > "$archive.sha256"
+          )
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          archive="release/${{ steps.archive.outputs.archive }}"
+          assets=(
+            "$archive"
+            "${archive}.sha256"
+            release/multi-cliproxyapi-linux-x64
+            release/multi-cliproxyapi-linux-x64.sha256
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --verify-tag \
+              --title "Multi CLIProxyAPI ${tag}" \
+              --generate-notes
+          fi

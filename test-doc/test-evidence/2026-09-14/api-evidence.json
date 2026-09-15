@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-09-14T01:43:53.530Z",
+  "evidence": [
+    {
+      "name": "authentication, cookie flags, isolated inventory"
+    },
+    {
+      "name": "cross-origin, invalid fields, duplicate names and ports rejected"
+    },
+    {
+      "name": "five-instance limit and independent real binary files"
+    },
+    {
+      "name": "real start, custom management password, restart changes PID",
+      "old_pid": 6628,
+      "new_pid": 6648
+    },
+    {
+      "name": "optimistic conflict, live port update, blank password preserves secret"
+    },
+    {
+      "name": "quota empty versus connection failure and recovery"
+    },
+    {
+      "name": "quota settings persist and invalid values are rejected"
+    },
+    {
+      "name": "delete rejects wrong password and stale revision; running instance deleted with isolation"
+    },
+    {
+      "name": "administrator password change, old rejection, new login, original restored"
+    },
+    {
+      "name": "audit outcomes, secret exclusion, log bounds and logout revocation"
+    }
+  ]
+}

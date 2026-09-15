@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-09-14T01:44:33.801Z",
+  "evidence": [
+    {
+      "name": "reuse previously installed official Linux asset",
+      "version": "v7.2.158",
+      "sha256": "fe8d8a62c2464289e6fc10595bbb9595fbc4978f2abbf75854d052b91ecacb34"
+    },
+    {
+      "name": "duplicate installation returns explicit conflict"
+    },
+    {
+      "name": "real unified switch preserves stopped intent and changes running PID"
+    },
+    {
+      "name": "creation after upgrade selects current version"
+    },
+    {
+      "name": "real rollback to original installed version"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "name": "multi-cliproxyapi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "engines": { "node": ">=22.5.0" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test server/*.test.js",
+    "build": "node --check server/index.js && npm --prefix web run build",
+    "test:web": "npm --prefix web run test:run",
+    "build:web": "npm --prefix web run build",
+    "package:linux": "node scripts/package-linux-sea.mjs"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,30 @@
+{
+  "name": "multi-cliproxyapi-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build --configLoader runner",
+    "test": "vitest",
+    "test:run": "vitest run --configLoader runner"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "typescript": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/react": "latest",
+    "@testing-library/user-event": "latest",
+    "jsdom": "latest",
+    "vitest": "latest"
+  }
+}

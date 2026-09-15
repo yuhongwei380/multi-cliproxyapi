@@ -1,0 +1,36 @@
+[Unit]
+Description=Multi CLIProxyAPI controller
+After=network-online.target polkit.service
+Wants=network-online.target polkit.service
+
+[Service]
+Type=simple
+User=multi-cpa
+Group=multi-cpa
+WorkingDirectory=/opt/mutli-cliproxycpa-data
+EnvironmentFile=-/etc/multi-cliproxyapi/controller.env
+ExecStart=/usr/local/lib/multi-cliproxyapi/runtime/node /usr/local/lib/multi-cliproxyapi/server/index.js --data-dir /opt/mutli-cliproxycpa-data --listen 0.0.0.0:8787
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/mutli-cliproxycpa-data
+
+[Install]
+WantedBy=multi-user.target

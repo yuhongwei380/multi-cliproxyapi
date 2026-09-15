@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-09-14T06:50:09.153Z",
+  "evidence": [
+    "multi-cpa principal may start, restart and stop the allowlisted test unit",
+    "unrelated unit start is denied without an interactive prompt"
+  ]
+}

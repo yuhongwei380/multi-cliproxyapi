@@ -1,0 +1,17 @@
+// The controller runs as the unprivileged multi-cpa account. It may control
+// only the per-instance template units created by this product. All other
+// systemd units and administrative verbs still require normal authorization.
+polkit.addRule(function (action, subject) {
+  if (subject.user !== "multi-cpa" || action.id !== "org.freedesktop.systemd1.manage-units") {
+    return polkit.Result.NOT_HANDLED;
+  }
+
+  var unit = action.lookup("unit");
+  var verb = action.lookup("verb");
+  if (typeof unit === "string" && typeof verb === "string" &&
+      /^multi-cpa@[A-Za-z0-9_-]+\.service$/.test(unit) &&
+      /^(start|stop|restart|status)$/.test(verb)) {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

@@ -1,0 +1,33 @@
+[Unit]
+Description=CLIProxyAPI instance %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=multi-cpa
+Group=multi-cpa
+WorkingDirectory=/opt/mutli-cliproxycpa-data/instances/%i
+ExecStart=/opt/mutli-cliproxycpa-data/instances/%i/bin/cli-proxy-api --config /opt/mutli-cliproxycpa-data/instances/%i/config.yaml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+InaccessiblePaths=/opt/mutli-cliproxycpa-data/control.db /opt/mutli-cliproxycpa-data/secrets.key /etc/multi-cliproxyapi
+ReadWritePaths=/opt/mutli-cliproxycpa-data/instances/%i

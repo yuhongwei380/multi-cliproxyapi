@@ -13,6 +13,8 @@ import { GitHubSource, Installer, UpgradeService, VersionService } from './relea
 import { AuthService, InstanceService, DeleteService, QuotaService } from './services.js'
 import { Controller, createHttpServer } from './http.js'
 import { ManagementAssets } from './management-assets.js'
+import { BrandingService } from './branding.js'
+import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL, normalizeLogLevel, ServiceLogger } from './logging.js'
 
 export const DEFAULT_ADMIN_PASSWORD = 'admin'
 
@@ -26,11 +28,12 @@ function parseArgs(argv) {
 }
 export function readConfig(argv = process.argv.slice(2), env = process.env) {
   const args = parseArgs(argv); const home = os.homedir() || '.'
+  const runtimeMode = args.runtime || env.MULTI_CPA_RUNTIME || 'systemd'
   return {
     dataDir: path.resolve(args.data_dir || env.MULTI_CPA_DATA_DIR || path.join(home, '.multi-cliproxyapi')),
     listen: args.listen || env.MULTI_CPA_LISTEN || '0.0.0.0:8787',
     adminPassword: env.MULTI_CPA_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD, version: args.version || env.MULTI_CPA_VERSION || '', quotaPath: args.quota_path || env.MULTI_CPA_QUOTA_PATH || '', secureCookies: String(args.secure_cookies ?? (env.MULTI_CPA_SECURE_COOKIES || '')).toLowerCase() === 'true',
-    unitDir: args.systemd_unit_dir || env.MULTI_CPA_SYSTEMD_UNIT_DIR || '/etc/systemd/system', runtimeMode: args.runtime || env.MULTI_CPA_RUNTIME || 'systemd', staticRoot: env.MULTI_CPA_STATIC_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'dist'), skipVersionInstall: String(env.MULTI_CPA_SKIP_VERSION_INSTALL || '').toLowerCase() === 'true'
+    unitDir: args.systemd_unit_dir || env.MULTI_CPA_SYSTEMD_UNIT_DIR || '/etc/systemd/system', runtimeMode, logLevel: normalizeLogLevel(args.log_level || env.MULTI_CPA_LOG_LEVEL || DEFAULT_LOG_LEVEL), logFile: args.log_file || env.MULTI_CPA_LOG_FILE || '', staticRoot: env.MULTI_CPA_STATIC_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'dist'), skipVersionInstall: String(env.MULTI_CPA_SKIP_VERSION_INSTALL || '').toLowerCase() === 'true'
   }
 }
 
@@ -67,9 +70,9 @@ export function createApplication(config, overrides = {}) {
   const deleteService = overrides.deleteService || new DeleteService({ store, runtime, units, instances, auth });
   const clients = async instance => { const secret = instances.decryptManagementSecret(instance); return new HTTPClient({ baseUrl: `http://127.0.0.1:${instance.port}`, managementSecret: secret, quotaPath: config.quotaPath, maxRetries: 4, retryBaseMs: 150 }) }
   instances.healthCheck = async instance => { const client = await clients(instance); await client.health() }
-  const quota = overrides.quota || new QuotaService({ store, instances, clients, secrets }); const source = overrides.source || new GitHubSource(); const installer = overrides.installer || new Installer({ source, root: versionsRoot }); const activator = overrides.activator || units; const upgrade = overrides.upgrade || new UpgradeService({ store, instances, runtime, activator, units, prepareVersion: binaryByVersion }); const versionService = overrides.versionService || new VersionService({ store, instances, installer });
-  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies })
-  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, activator, upgrade, controller }
+  const quota = overrides.quota || new QuotaService({ store, instances, clients, secrets }); const source = overrides.source || new GitHubSource(); const installer = overrides.installer || new Installer({ source, root: versionsRoot }); const activator = overrides.activator || units; const upgrade = overrides.upgrade || new UpgradeService({ store, instances, runtime, activator, units, prepareVersion: binaryByVersion }); const versionService = overrides.versionService || new VersionService({ store, instances, installer }); const branding = overrides.branding || new BrandingService({ store });
+  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
+  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, controller }
 }
 
 async function ensureInitialVersion(app, config, logger) {
@@ -103,8 +106,9 @@ async function ensureInitialVersion(app, config, logger) {
 
 export async function start(config = readConfig()) {
   const address = parseListen(config.listen)
-  const logger = { info: (...args) => console.log('multi-cpa', ...args), error: (...args) => console.error('multi-cpa', ...args) }
-  const app = createApplication(config)
+  const logger = new ServiceLogger({ filePath: config.logFile || (config.runtimeMode === 'systemd' ? DEFAULT_LOG_FILE : ''), level: config.logLevel || DEFAULT_LOG_LEVEL })
+  let app
+  try { app = createApplication(config, { logger }) } catch (error) { logger.error(`controller initialization failed: ${error.message}`); throw error }
   const runtimeLog = (level, message, context = {}) => { try { app.store.appendRuntimeLog({ level, source: 'controller', message, context }) } catch {} }
   delete process.env.MULTI_CPA_ADMIN_PASSWORD
   config = { ...config, adminPassword: '' }
@@ -131,6 +135,7 @@ export async function start(config = readConfig()) {
     logger.info(`listening on ${config.listen} (runtime=${config.runtimeMode})`)
     runtimeLog('info', 'controller started', { listen: config.listen, runtime: config.runtimeMode })
   } catch (error) {
+    logger.error(`controller startup failed: ${error.message}`)
     abort.abort()
     await new Promise(resolve => server.close(() => resolve()))
     app.store.close()

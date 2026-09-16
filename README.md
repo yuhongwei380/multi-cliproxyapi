@@ -29,6 +29,8 @@ sudo env MULTI_CPA_DATA_DIR=/srv/multi-cliproxycpa-data ./install.sh
 
 `start.sh` 和 `stop.sh` 只操作总控，子实例保持独立。`uninstall.sh` 会先检查所有 CPA 子服务和进程；只要有实例运行、正在启停或无法确认状态，就拒绝卸载。确认卸载服务和二进制后，还必须再次输入完整数据目录才能删除数据。
 
+如需安装时保留 14 天日志，可执行 `sudo env MULTI_CPA_LOG_RETENTION_DAYS=14 ./install.sh`；默认配置为 7 天。
+
 请在防火墙或 HTTPS 反向代理中限制 `8787` 和子实例端口的访问，并在使用局域网访问时修改总控和 CPA 的默认管理密码。需要 HTTPS Cookie 时设置 `MULTI_CPA_SECURE_COOKIES=true`。
 
 ## 源码开发
@@ -50,11 +52,13 @@ npm run build
 ./stop.sh
 ```
 
-源码测试服务默认使用项目目录下的 `.local-data`。可用以下变量覆盖数据目录、监听地址和日志路径：
+源码测试服务默认使用项目目录下的 `.local-data`。可用以下变量覆盖数据目录、监听地址、日志路径和日志等级：
 
 ```sh
 MULTI_CPA_DATA_DIR=/tmp/multi-cpa-data MULTI_CPA_LISTEN=127.0.0.1:8787 ./start.sh
 ```
+
+systemd 安装默认将控制器日志双写到 journal 和 `/var/log/multi-cpa.log`，默认等级为 `info`。安装脚本会生成 `/etc/logrotate.d/multi-cpa`，默认保留 7 天；执行安装时设置 `MULTI_CPA_LOG_RETENTION_DAYS=14` 可改为保留 14 天，也可以直接编辑该配置文件。`MULTI_CPA_LOG_LEVEL` 支持 `debug`、`info`、`warn`、`error`。
 
 ## 构建发布包
 
@@ -71,7 +75,13 @@ npm run package:linux
 - `release/install.sh`、`start.sh`、`stop.sh`、`uninstall.sh`：部署和生命周期脚本。
 
 构建过程会重新生成 `web/dist`，并清理打包 staging 和前端依赖目录。
-推送形如 `v0.1.0` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
+推送形如 `v26.9.0` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
+
+## 版本规则
+
+应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.0` 表示 2026 年 9 月的第一个发布版本；同一个月内的修复和小改动递增最后一位，例如 `26.9.1`。Git tag 使用 `v` 前缀，例如 `v26.9.0`。
+
+这个规则比无语义的 `0.x` 更容易判断发布时间，同时仍符合 SemVer 的三个数字段，现有 npm、构建和发布工具可以继续使用。两位年份在 2099 年之后会产生歧义；如果项目需要长期维护，应在进入 2100 年前切换为 `YYYY.MM.PATCH`，当前阶段保留 `YY.MM.PATCH` 更简洁。
 
 ## 功能说明
 

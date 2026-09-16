@@ -1,6 +1,7 @@
 import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { api, AuditLog, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
+import webPackage from '../package.json'
+import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
 import './app.css'
 import './management-link.css'
 
@@ -16,6 +17,18 @@ const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
   webhook_signing_enabled: false,
   webhook_secret_configured: false,
   webhook_secret: ''
+}
+
+const APP_VERSION = webPackage.version
+const DEFAULT_BRANDING: BrandingSettings = {
+  brand_name: 'CPA',
+  brand_subtitle: 'CONTROL CENTER',
+  banner_title: '静候流量。',
+  banner_description: 'CPA 总控 · 统一管理本机的 CLI Proxy API 实例。',
+  page_title: 'CLI Proxy API Management Center',
+  page_description: 'CPA 总控 · Local Control Plane',
+  copyright: '© 2026 Multi CLIProxyAPI',
+  icon: ''
 }
 
 const MODULE_LABELS: Record<Module, string> = {
@@ -39,6 +52,7 @@ function moduleHref(module: Module) {
 
 function App() {
   const [user, setUser] = useState<string | null>(null)
+  const [branding, setBranding] = useState<BrandingSettings>(DEFAULT_BRANDING)
   const [authLoading, setAuthLoading] = useState(true)
   const [loading, setLoading] = useState(false)
   const [instances, setInstances] = useState<Instance[]>([])
@@ -130,6 +144,7 @@ function App() {
   useEffect(() => {
     api.get('/auth/status')
       .then(status => {
+        if (status.branding) setBranding({ ...DEFAULT_BRANDING, ...status.branding } as BrandingSettings)
         if (status.authenticated) {
           setUser(status.username)
           void load()
@@ -139,8 +154,10 @@ function App() {
       .finally(() => setAuthLoading(false))
   }, [])
 
+  useEffect(() => { applyDocumentBranding(branding) }, [branding])
+
   if (authLoading) return <LoadingState label="正在检查会话…" />
-  if (!user) return <Login onLoggedIn={name => { setUser(name); void load() }} />
+  if (!user) return <Login branding={branding} onLoggedIn={name => { setUser(name); void load() }} />
 
   const navigate = (module: Module) => {
     setActiveModule(module)
@@ -236,11 +253,17 @@ function App() {
     setQuotaSettingsError('')
   }
 
+  const saveBranding = (settings: BrandingSettings) => {
+    setBranding(settings)
+    setSettingsNotice('品牌设置已更新')
+    setModal(null)
+  }
+
   return <div className="app-shell">
     <aside className="app-sidebar" aria-label="主导航">
       <div className="brand-lockup">
-        <span className="brand-mark" aria-hidden="true"><span /><span /><span /></span>
-        <div><strong>CPA</strong><small>CONTROL CENTER</small></div>
+        <BrandIcon branding={branding} />
+        <div><strong>{branding.brand_name}</strong>{branding.brand_subtitle && <small>{branding.brand_subtitle}</small>}</div>
       </div>
       <div className="sidebar-caption">运行</div>
       <nav className="sidebar-nav">
@@ -278,19 +301,20 @@ function App() {
       <main id={activeModule === 'overview' ? 'dashboard' : activeModule} className="dashboard-content">
         {error && <div className="alert" role="alert"><span>!</span>{error}<button aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
         {settingsNotice && <div className="success-toast" role="status"><span>✓</span>{settingsNotice}<button aria-label="关闭提示" onClick={() => setSettingsNotice('')}>×</button></div>}
-        {activeModule === 'overview' && <Overview instances={instances} quotas={quotas} versions={versions} upgradeState={upgradeState} loading={loading} busy={busy} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} onNavigate={navigate} />}
+        {activeModule === 'overview' && <Overview branding={branding} instances={instances} quotas={quotas} versions={versions} upgradeState={upgradeState} loading={loading} busy={busy} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} onNavigate={navigate} />}
         {activeModule === 'instances' && <InstanceManagement instances={instances} quotas={quotas} loading={loading} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} />}
         {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} periodOpen={quotaPeriodOpen} busy={busy} instanceBusy={instanceBusy} onTogglePeriod={() => { setQuotaPeriodOpen(open => !open); if (!quotaSettingsLoaded) void loadQuotaSettings() }} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} />}
         {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
+      <footer className="content-copyright" aria-label="版权信息"><span>{branding.copyright}</span><span className="content-version">v{APP_VERSION}</span></footer>
     </div>
     {modal === 'create' && <CreateDialog onClose={() => setModal(null)} onCreated={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'edit' && editTarget && <EditDialog instance={editTarget} onClose={() => setModal(null)} onSaved={() => { setModal(null); setEditTarget(null); void load() }} onError={setError} />}
     {modal === 'delete' && deleteTarget && <DeleteDialog instance={deleteTarget} challenge={challenge} onClose={() => setModal(null)} onDeleted={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'uninstall-version' && uninstallTarget && <UninstallVersionDialog version={uninstallTarget} busy={busy === 'version:uninstall:' + uninstallTarget.tag} onClose={() => { if (!busy) { setModal(null); setUninstallTarget(null) } }} onConfirm={() => void uninstallVersion(uninstallTarget.tag)} />}
-    {modal === 'admin-settings' && <AdminSettingsDialog onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('管理员密码已更新') }} />}
+    {modal === 'admin-settings' && <AdminSettingsDialog branding={branding} onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('管理员密码已更新') }} onBrandingSaved={saveBranding} />}
   </div>
 }
 
@@ -298,7 +322,7 @@ function NavigationLink({ module, activeModule, onNavigate, icon, ariaLabel, chi
   return <a className={'nav-item ' + (module === activeModule ? 'active' : '')} href={moduleHref(module)} aria-label={ariaLabel} aria-current={module === activeModule ? 'page' : undefined} onClick={event => { event.preventDefault(); onNavigate(module) }}><span className="nav-icon" aria-hidden="true">{icon}</span>{children}</a>
 }
 
-function Overview({ instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
+function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
   const running = instances.filter(instance => instance.status?.ready).length
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
@@ -306,7 +330,7 @@ function Overview({ instances, quotas, versions, upgradeState, loading, busy, in
   const low = snapshots.flatMap(quota => (quota.values ?? []).map(value => quotaPercent(value))).filter(value => value !== null && value <= 20).length
   return <>
     <section className="page-intro">
-      <div className="hero-copy"><div className="eyebrow">LOCAL CONTROL PLANE</div><h1>静候流量。</h1><p>CPA 总控 · 统一管理本机的 CLI Proxy API 实例。</p><div className="hero-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><a className="hero-link" href="#instances" onClick={event => { event.preventDefault(); onNavigate('instances') }}>查看实例 <span aria-hidden="true">→</span></a></div></div>
+      <div className="hero-copy"><div className="eyebrow">{branding.brand_name} · CONTROL PLANE</div><h1>{branding.banner_title}</h1><p>{branding.banner_description}</p><div className="hero-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><a className="hero-link" href="#instances" onClick={event => { event.preventDefault(); onNavigate('instances') }}>查看实例 <span aria-hidden="true">→</span></a></div></div>
       <div className="traffic-card"><div className="traffic-card-head"><span>运行观察</span><span className="live-pill"><span className="dot" />实时</span></div><strong>{running}</strong><small>正在运行的 CPA 实例</small><div className="traffic-rule"><span /><span /><span /></div><div className="traffic-footer"><span>托管实例 {instances.length}</span><span>快照 {successful}</span></div></div>
       <div className="intro-meta"><span className="live-indicator"><span className="dot" />服务在线</span><span className="mono-label">LAN / AMD64</span></div>
     </section>
@@ -383,24 +407,60 @@ function AuditLogRow({ item }: { item: AuditLog }) {
 function formatLogTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
 function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误' } as Record<string, string>)[level] ?? level }
 function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
-function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'version.install': '安装版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
+function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '安装版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
 
-function Login({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
+function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedIn: (name: string) => void }) {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const currentAddress = typeof window !== 'undefined' ? window.location.origin : '当前页面地址'
-  return <main className="login-wrap"><section className="login-brand" aria-hidden="true"><div className="brand-wordmark"><span>CLI</span><span>PROXY</span><span>API</span></div><div className="brand-signature"><span className="brand-mark dark"><span /><span /><span /></span><span>CLI Proxy API</span></div></section><section className="login-stage"><div className="login-panel"><div className="login-logo" aria-hidden="true"><span className="brand-mark"><span /><span /><span /></span></div><div className="login-heading"><div className="eyebrow">MANAGEMENT CENTER</div><h1 aria-label="CPA 总控">CLI Proxy API Management Center</h1><p>CPA 总控 · Local Control Plane</p></div><div className="language-row"><span>中文</span><span aria-hidden="true">⌄</span></div><p className="lead">登录以查看实例健康度与 OAuth 配额。</p><div className="address-card"><span>当前地址</span><strong>{currentAddress}</strong><small>总控服务使用当前页面地址建立连接</small></div><form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); try { const result = await api.post('/auth/login', { username, password }); onLoggedIn(result.username) } catch (cause) { setError(cause instanceof Error ? cause.message : '登录失败') } finally { setBusy(false) } }}><label>用户名<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label><label>管理员密码<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入管理员密码" /></label>{error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy}>{busy ? '验证中…' : '进入总控'}</button></form><p className="login-security">仅限局域网访问 · 会话由总控服务保护</p></div><div className="login-note">Linux amd64 · Local Control Plane</div></section></main>
+  return <main className="login-wrap"><section className="login-brand" aria-hidden="true"><div className="brand-wordmark"><span>{branding.brand_name}</span></div><div className="brand-signature"><BrandIcon branding={branding} variant="dark" /><span>{branding.brand_name}</span></div></section><section className="login-stage"><div className="login-panel"><div className="login-logo"><BrandIcon branding={branding} variant="large" /></div><div className="login-heading"><div className="eyebrow">{branding.brand_subtitle || 'MANAGEMENT CENTER'}</div><h1 aria-label={`${branding.brand_name} 总控`}>{branding.page_title}</h1><p>{branding.page_description}</p></div><div className="language-row"><span>中文</span><span aria-hidden="true">⌄</span></div><p className="lead">登录以查看实例健康度与 OAuth 配额。</p><div className="address-card"><span>当前地址</span><strong>{currentAddress}</strong><small>总控服务使用当前页面地址建立连接</small></div><form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); try { const result = await api.post('/auth/login', { username, password }); onLoggedIn(result.username) } catch (cause) { setError(cause instanceof Error ? cause.message : '登录失败') } finally { setBusy(false) } }}><label>用户名<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label><label>管理员密码<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入管理员密码" /></label>{error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy}>{busy ? '验证中…' : '进入总控'}</button></form><p className="login-security">仅限局域网访问 · 会话由总控服务保护</p></div><div className="login-note">{branding.copyright && <span>{branding.copyright}</span>}<span>v{APP_VERSION}</span></div></section></main>
 }
 
-function AdminSettingsDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function AdminSettingsDialog({ branding, onClose, onSaved, onBrandingSaved }: { branding: BrandingSettings; onClose: () => void; onSaved: () => void; onBrandingSaved: (settings: BrandingSettings) => void }) {
+  const [draft, setDraft] = useState(branding)
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  return <dialog open className="modal-backdrop"><div className="dialog settings-dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true"><SettingsIcon /></div><div className="eyebrow">ADMINISTRATOR SETTINGS</div><h2>管理员设置</h2><p>在这里更新总控管理员密码。修改后，新密码会用于登录和管理员操作。</p><form onSubmit={async event => { event.preventDefault(); setError(''); if (newPassword !== confirmPassword) { setError('两次输入的新密码不一致'); return } setBusy(true); try { await api.patch('/auth/password', { current_password: currentPassword, new_password: newPassword }); onSaved() } catch (cause) { setError(cause instanceof Error ? cause.message : '密码修改失败') } finally { setBusy(false) } }}><label>当前管理员密码<PasswordInput aria-label="当前管理员密码" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" autoFocus required placeholder="请输入当前密码" /></label><label>新管理员密码<PasswordInput aria-label="新管理员密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" required placeholder="请输入新密码" /></label><label>确认新管理员密码<PasswordInput aria-label="确认新管理员密码" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required placeholder="再次输入新密码" /></label>{error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? '保存中…' : '保存新密码'}</button></div></form></div></dialog>
+  const [brandingError, setBrandingError] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+  const [brandingBusy, setBrandingBusy] = useState(false)
+  const [passwordBusy, setPasswordBusy] = useState(false)
+  useEffect(() => setDraft(branding), [branding])
+  const update = (field: keyof BrandingSettings, value: string) => setDraft(previous => ({ ...previous, [field]: value }))
+  return <dialog open className="modal-backdrop"><div className="dialog settings-dialog"><button className="dialog-close" disabled={brandingBusy || passwordBusy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true"><SettingsIcon /></div><div className="eyebrow">CONTROL CENTER SETTINGS</div><h2>管理员设置</h2><p>在这里管理总控身份和管理员安全设置。品牌修改会同步到登录页、总览横幅、网页标题与浏览器图标。</p><section className="settings-block"><div className="settings-block-heading"><div><h3>品牌与网页信息</h3><p>控制台所有可见的品牌文案都从这里读取。</p></div><BrandIcon branding={draft} /></div><form onSubmit={async event => { event.preventDefault(); setBrandingError(''); setBrandingBusy(true); try { const saved = await api.patch('/branding', draft) as BrandingSettings; onBrandingSaved({ ...DEFAULT_BRANDING, ...saved }) } catch (cause) { setBrandingError(cause instanceof Error ? cause.message : '品牌设置保存失败') } finally { setBrandingBusy(false) } }}><div className="settings-grid"><label>品牌名称<input aria-label="品牌名称" value={draft.brand_name} onChange={event => update('brand_name', event.target.value)} maxLength={48} required /></label><label>品牌副标题<input aria-label="品牌副标题" value={draft.brand_subtitle} onChange={event => update('brand_subtitle', event.target.value)} maxLength={64} placeholder="例如 CONTROL CENTER" /></label><label>登录页横幅标题<input aria-label="登录页横幅标题" value={draft.banner_title} onChange={event => update('banner_title', event.target.value)} maxLength={80} required /></label><label>网页标题<input aria-label="网页标题" value={draft.page_title} onChange={event => update('page_title', event.target.value)} maxLength={80} required /></label><label className="settings-wide">横幅描述<input aria-label="横幅描述" value={draft.banner_description} onChange={event => update('banner_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">网页描述<input aria-label="网页描述" value={draft.page_description} onChange={event => update('page_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">Copyright<input aria-label="Copyright" value={draft.copyright} onChange={event => update('copyright', event.target.value)} maxLength={160} placeholder="留空隐藏版权信息" /></label><label>图标<input aria-label="品牌图标" value={draft.icon} onChange={event => update('icon', event.target.value)} maxLength={32} placeholder="例如 ✦ 或 ◆" /></label></div><p className="settings-hint">图标支持 emoji 或短字符，会用于侧栏、登录页和浏览器 favicon；当前版本号显示为 v{APP_VERSION}。</p>{brandingError && <p className="form-error" role="alert">{brandingError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{brandingBusy ? '保存中…' : '保存品牌设置'}</button></div></form></section><section className="settings-block settings-security"><div className="settings-block-heading"><div><h3>管理员密码</h3><p>修改后当前会话保持有效，新密码立即生效。</p></div></div><form onSubmit={async event => { event.preventDefault(); setPasswordError(''); if (newPassword !== confirmPassword) { setPasswordError('两次输入的新密码不一致'); return } setPasswordBusy(true); try { await api.patch('/auth/password', { current_password: currentPassword, new_password: newPassword }); onSaved() } catch (cause) { setPasswordError(cause instanceof Error ? cause.message : '密码修改失败') } finally { setPasswordBusy(false) } }}><label>当前管理员密码<PasswordInput aria-label="当前管理员密码" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" autoFocus required placeholder="请输入当前密码" /></label><label>新管理员密码<PasswordInput aria-label="新管理员密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" required placeholder="请输入新密码" /></label><label>确认新管理员密码<PasswordInput aria-label="确认新管理员密码" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required placeholder="再次输入新密码" /></label>{passwordError && <p className="form-error" role="alert">{passwordError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{passwordBusy ? '保存中…' : '保存新密码'}</button></div></form></section></div></dialog>
+}
+
+function BrandIcon({ branding, variant = '' }: { branding: BrandingSettings; variant?: string }) {
+  const value = branding.icon.trim()
+  if (value) return <span className={'brand-icon ' + variant} aria-hidden="true">{value}</span>
+  return <span className={'brand-mark ' + variant} aria-hidden="true"><span /><span /><span /></span>
+}
+
+function escapeXml(value: string) {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
+}
+
+function applyDocumentBranding(branding: BrandingSettings) {
+  if (typeof document === 'undefined') return
+  document.title = branding.page_title
+  let description = document.querySelector('meta[name="description"]') as HTMLMetaElement | null
+  if (!description) {
+    description = document.createElement('meta')
+    description.name = 'description'
+    document.head.append(description)
+  }
+  description.content = branding.page_description
+  let favicon = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null
+  if (!favicon) {
+    favicon = document.createElement('link')
+    favicon.rel = 'icon'
+    document.head.append(favicon)
+  }
+  const mark = (branding.icon || branding.brand_name.slice(0, 1) || 'C').slice(0, 2)
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#27356d"/><text x="32" y="42" fill="#72d5d4" font-size="28" font-family="sans-serif" font-weight="700" text-anchor="middle">' + escapeXml(mark) + '</text></svg>'
+  favicon.href = 'data:image/svg+xml,' + encodeURIComponent(svg)
 }
 
 type PasswordInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>

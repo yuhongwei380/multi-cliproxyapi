@@ -30,7 +30,7 @@ ProtectProc=invisible
 ProcSubset=pid
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/opt/mutli-cliproxycpa-data
+ReadWritePaths=/opt/mutli-cliproxycpa-data /var/log/multi-cpa.log
 
 [Install]
 WantedBy=multi-user.target

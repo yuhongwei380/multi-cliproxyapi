@@ -12,6 +12,8 @@ install -m 0600 /tmp/controller.env /etc/multi-cliproxyapi/controller.env
 ./deploy/install.sh /path/to/multi-cliproxyapi
 ```
 
+如需让安装脚本生成 14 天的轮转配置，可在执行安装脚本时设置 `MULTI_CPA_LOG_RETENTION_DAYS=14`；安装完成后也可以直接修改 `/etc/logrotate.d/multi-cpa`。
+
 `release/` 中的单文件二进制发布包同时提供 `install.sh`、`start.sh`、`stop.sh` 和 `uninstall.sh`。这组脚本不要求目标机另行安装 Node.js：`install.sh` 会安装二进制，注册总控 systemd 服务、`multi-cpa@.service` 模板和 polkit 规则，并通过 `--runtime systemd` 启动总控；数据默认保存在 `/opt/mutli-cliproxycpa-data`，可用 `MULTI_CPA_DATA_DIR` 覆盖。`start.sh` 与 `stop.sh` 只操作总控，已运行的子实例保持独立。`uninstall.sh` 会先确认停止并移除服务和二进制，再要求输入完整数据路径确认永久删除数据；拒绝第二次确认时会保留数据。直接复制二进制并使用 `nohup` 时，二进制默认采用脱离的本地子进程运行时，并将数据保存在 `/opt/mutli-cliproxycpa-data`；只有在已完成 systemd 注册后才设置 `MULTI_CPA_RUNTIME=systemd` 或传入 `--runtime systemd`。
 
 上面这一段针对 `release/` 单文件包；源码树中的 `deploy/install.sh /path/to/release` 也默认把数据放到 `/opt/mutli-cliproxycpa-data`，并支持用 `MULTI_CPA_DATA_DIR` 指定绝对路径。
@@ -30,7 +32,7 @@ CPA 版本由总控 Web 页面下载、校验并存入数据目录的 `versions/
 
 Codex 和 Claude 配额默认通过子实例的 `/v0/management/api-call` 获取，使用管理 API 返回的 `auth_index` 选择账户，由 CPA 在内部替换 `$TOKEN$`。总控不读取认证目录，不保存 OAuth Token，也不调用任何额度重置接口。其他提供商标记为不支持；如目标 CPA 提供经过验证的统一配额接口，可以设置 `MULTI_CPA_QUOTA_PATH` 覆盖默认适配器，该接口应返回 `values` / `quotas` 或 `remaining` / `total` 格式。请求协议依据官方管理页面校验，真实 OAuth 账户验收状态见 `test-doc/functional-test-status.md`。
 
-控制器日志写入 systemd journal，CPA 日志位于实例目录的 `logs/` 下。建议启用 journal 保留策略，并为数据目录下 `instances/*/logs/*.log` 配置 logrotate。
+控制器日志同时写入 systemd journal 和 `/var/log/multi-cpa.log`；WebUI 中的运行/审计日志仍保存在控制数据库。CPA 日志位于实例目录的 `logs/` 下。安装脚本会为控制器安装 `/etc/logrotate.d/multi-cpa`，默认每天轮转并保留 7 天（`rotate 7` + `maxage 7`）；安装时可设置 `MULTI_CPA_LOG_RETENTION_DAYS=14` 保留两周，或直接编辑该 logrotate 配置。`MULTI_CPA_LOG_LEVEL` 默认是 `info`，可改为 `debug`、`warn` 或 `error`。
 
 备份前先停止总控以保持 SQLite 快照一致；这不会停止已运行的 CPA 子实例：
 

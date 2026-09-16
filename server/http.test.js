@@ -11,10 +11,11 @@ import { AuthService, InstanceService, DeleteService, QuotaService } from './ser
 import { Installer, UpgradeService, VersionService } from './release.js'
 import { Controller, createHttpServer } from './http.js'
 import { instanceView } from './domain.js'
+import { BrandingService } from './branding.js'
 
 async function freePort() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, server, url: `http://127.0.0.1:${server.address().port}` }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const branding = new BrandingService({ store }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, branding, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, branding, server, url: `http://127.0.0.1:${server.address().port}` }
 }
 async function closeFixture(f) { f.server.closeAllConnections?.(); f.server.close(); f.store.close() }
 
@@ -79,7 +80,7 @@ test('administrator password endpoint requires the current password and keeps th
     const denied = await fetch(`${f.url}/api/auth/password`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ current_password: 'controller admin password', new_password: 'new-password' }) }); assert.equal(denied.status, 401)
     const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const cookie = login.headers.get('set-cookie').split(';')[0]
     const changed = await fetch(`${f.url}/api/auth/password`, { method: 'PATCH', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ current_password: 'controller admin password', new_password: 'new-password' }) }); assert.equal(changed.status, 200); assert.deepEqual(await changed.json(), { status: 'updated' })
-    const stillAuthenticated = await fetch(`${f.url}/api/auth/status`, { headers: { cookie } }); assert.deepEqual(await stillAuthenticated.json(), { authenticated: true, username: 'admin' })
+    const stillAuthenticated = await fetch(`${f.url}/api/auth/status`, { headers: { cookie } }); assert.deepEqual(await stillAuthenticated.json(), { authenticated: true, username: 'admin', branding: f.branding.get() })
     const oldLogin = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); assert.equal(oldLogin.status, 401)
     const newLogin = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'new-password' }) }); assert.equal(newLogin.status, 200)
   } finally { await closeFixture(f) }
@@ -94,5 +95,15 @@ test('log APIs are protected and mutations create audit and runtime entries', as
     const started = await fetch(`${f.url}/api/instances/${instance.id}/start`, { method: 'POST', headers: { cookie } }); assert.equal(started.status, 202)
     const runtime = await (await fetch(`${f.url}/api/logs/runtime?limit=20`, { headers: { cookie } })).json(); assert.ok(runtime.items.some(item => item.instance_id === instance.id && item.message === 'instance start succeeded'))
     const audit = await (await fetch(`${f.url}/api/logs/audit?limit=20`, { headers: { cookie } })).json(); assert.ok(audit.items.some(item => item.action === 'auth.login' && item.outcome === 'failed')); assert.ok(audit.items.some(item => item.action === 'instance.create' && item.outcome === 'success')); assert.ok(audit.items.some(item => item.action === 'instance.start' && item.resource_id === instance.id))
+  } finally { await closeFixture(f) }
+})
+
+test('branding API exposes defaults and persists a partial update', async () => {
+  const f = await fixture(); try {
+    const publicStatus = await fetch(`${f.url}/api/auth/status`); const publicBody = await publicStatus.json(); assert.equal(publicStatus.status, 200); assert.equal(publicBody.branding.brand_name, 'CPA')
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const cookie = login.headers.get('set-cookie').split(';')[0]
+    const updated = await fetch(`${f.url}/api/branding`, { method: 'PATCH', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ brand_name: 'Northstar CPA', page_description: '内部控制平面' }) }); assert.equal(updated.status, 200); const body = await updated.json(); assert.equal(body.brand_name, 'Northstar CPA'); assert.equal(body.page_description, '内部控制平面'); assert.equal(body.banner_title, '静候流量。')
+    const status = await fetch(`${f.url}/api/auth/status`, { headers: { cookie } }); assert.equal((await status.json()).branding.brand_name, 'Northstar CPA')
+    assert.equal(f.store.listAuditLogs()[0].action, 'branding.update')
   } finally { await closeFixture(f) }
 })

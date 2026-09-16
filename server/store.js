@@ -73,6 +73,17 @@ export class Store {
         webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
         webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS branding_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        brand_name TEXT NOT NULL,
+        brand_subtitle TEXT NOT NULL DEFAULT '',
+        banner_title TEXT NOT NULL,
+        banner_description TEXT NOT NULL,
+        page_title TEXT NOT NULL,
+        page_description TEXT NOT NULL,
+        copyright TEXT NOT NULL DEFAULT '',
+        icon TEXT NOT NULL DEFAULT ''
+      );
       CREATE TABLE IF NOT EXISTS operations (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
@@ -239,6 +250,18 @@ export class Store {
       VALUES(1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET refresh_interval_minutes=excluded.refresh_interval_minutes, webhook_enabled=excluded.webhook_enabled, webhook_url=excluded.webhook_url, alert_threshold_percent=excluded.alert_threshold_percent, webhook_signing_enabled=excluded.webhook_signing_enabled, webhook_signing_secret_ciphertext=excluded.webhook_signing_secret_ciphertext, webhook_url_ciphertext=excluded.webhook_url_ciphertext`).run(
       settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.webhook_url || '', settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, ciphertext, urlCiphertext)
     return this.getQuotaSettings()
+  }
+
+  getBranding() {
+    const row = this.db.prepare('SELECT brand_name, brand_subtitle, banner_title, banner_description, page_title, page_description, copyright, icon FROM branding_settings WHERE id=1').get()
+    if (!row) return null
+    return { brand_name: row.brand_name, brand_subtitle: row.brand_subtitle || '', banner_title: row.banner_title, banner_description: row.banner_description, page_title: row.page_title, page_description: row.page_description, copyright: row.copyright || '', icon: row.icon || '' }
+  }
+  saveBranding(settings) {
+    this.db.prepare(`INSERT INTO branding_settings(id, brand_name, brand_subtitle, banner_title, banner_description, page_title, page_description, copyright, icon)
+      VALUES(1,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET brand_name=excluded.brand_name, brand_subtitle=excluded.brand_subtitle, banner_title=excluded.banner_title, banner_description=excluded.banner_description, page_title=excluded.page_title, page_description=excluded.page_description, copyright=excluded.copyright, icon=excluded.icon`).run(
+      settings.brand_name, settings.brand_subtitle || '', settings.banner_title, settings.banner_description, settings.page_title, settings.page_description, settings.copyright || '', settings.icon || '')
+    return this.getBranding()
   }
 
   saveOperation(operation) {

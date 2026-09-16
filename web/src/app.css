@@ -189,6 +189,8 @@ a { color: inherit; }
 .version-row strong { display: block; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; }
 .version-row small { display: block; margin-top: 3px; color: var(--quiet); font-size: 9px; line-height: 1.4; }
 .version-row-actions { display: flex; align-items: center; gap: 7px; }
+.version-row-actions .version-uninstall { color: var(--red); border-color: rgb(189 91 76 / 42%); }
+.version-row-actions .version-uninstall:hover { color: #a84438; background: var(--red-soft); border-color: rgb(189 91 76 / 62%); }
 .version-state { color: var(--muted); font-size: 9px; font-weight: 700; white-space: nowrap; }
 .version-state.current, .version-state.ready { color: #087443; }
 .version-state.bad { color: var(--red); }

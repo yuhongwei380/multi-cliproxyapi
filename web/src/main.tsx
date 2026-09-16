@@ -4,7 +4,7 @@ import { api, AuditLog, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, Runt
 import './app.css'
 import './management-link.css'
 
-type Modal = 'create' | 'delete' | 'edit' | 'admin-settings' | null
+type Modal = 'create' | 'delete' | 'edit' | 'uninstall-version' | 'admin-settings' | null
 type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
@@ -50,6 +50,7 @@ function App() {
   const [modal, setModal] = useState<Modal>(null)
   const [deleteTarget, setDeleteTarget] = useState<Instance | null>(null)
   const [editTarget, setEditTarget] = useState<Instance | null>(null)
+  const [uninstallTarget, setUninstallTarget] = useState<VersionInstall | null>(null)
   const [challenge, setChallenge] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [activeModule, setActiveModule] = useState<Module>(() => moduleFromHash(typeof window === 'undefined' ? '' : window.location.hash))
@@ -199,6 +200,36 @@ function App() {
     }
   }
 
+  const beginUninstall = (version: VersionInstall) => {
+    setUninstallTarget(version)
+    setModal('uninstall-version')
+    setError('')
+  }
+
+  const installVersion = async (tag: string) => {
+    setBusy('version:install')
+    setError('')
+    try { await api.post('/versions/install', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本安装失败') } finally { setBusy(null) }
+  }
+
+  const upgradeVersion = async (tag: string) => {
+    setBusy('version:upgrade:' + tag)
+    setError('')
+    try { await api.post('/versions/upgrade', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败') } finally { setBusy(null) }
+  }
+
+  const recoverUpgrade = async () => {
+    setBusy('version:recover')
+    setError('')
+    try { await api.post('/upgrade/recover'); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '恢复失败') } finally { setBusy(null) }
+  }
+
+  const uninstallVersion = async (tag: string) => {
+    setBusy('version:uninstall:' + tag)
+    setError('')
+    try { await api.post('/versions/uninstall', { version: tag }); await load(); setModal(null); setUninstallTarget(null) } catch (cause) { setError(cause instanceof Error ? cause.message : '版本卸载失败') } finally { setBusy(null) }
+  }
+
   const saveQuotaSettings = (settings: QuotaSettings) => {
     setQuotaSettings(settings)
     setQuotaSettingsLoaded(true)
@@ -247,10 +278,10 @@ function App() {
       <main id={activeModule === 'overview' ? 'dashboard' : activeModule} className="dashboard-content">
         {error && <div className="alert" role="alert"><span>!</span>{error}<button aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
         {settingsNotice && <div className="success-toast" role="status"><span>✓</span>{settingsNotice}<button aria-label="关闭提示" onClick={() => setSettingsNotice('')}>×</button></div>}
-        {activeModule === 'overview' && <Overview instances={instances} quotas={quotas} versions={versions} upgradeState={upgradeState} loading={loading} busy={busy} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} onInstall={async tag => { setBusy('version:install'); setError(''); try { await api.post('/versions/install', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本安装失败') } finally { setBusy(null) } }} onUpgrade={async tag => { setBusy('version:upgrade:' + tag); setError(''); try { await api.post('/versions/upgrade', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败') } finally { setBusy(null) } }} onRecover={async () => { setBusy('version:recover'); setError(''); try { await api.post('/upgrade/recover'); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '恢复失败') } finally { setBusy(null) } }} onNavigate={navigate} />}
+        {activeModule === 'overview' && <Overview instances={instances} quotas={quotas} versions={versions} upgradeState={upgradeState} loading={loading} busy={busy} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} onNavigate={navigate} />}
         {activeModule === 'instances' && <InstanceManagement instances={instances} quotas={quotas} loading={loading} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} />}
         {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} periodOpen={quotaPeriodOpen} busy={busy} instanceBusy={instanceBusy} onTogglePeriod={() => { setQuotaPeriodOpen(open => !open); if (!quotaSettingsLoaded) void loadQuotaSettings() }} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} />}
-        {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={async tag => { setBusy('version:install'); setError(''); try { await api.post('/versions/install', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本安装失败') } finally { setBusy(null) } }} onUpgrade={async tag => { setBusy('version:upgrade:' + tag); setError(''); try { await api.post('/versions/upgrade', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败') } finally { setBusy(null) } }} onRecover={async () => { setBusy('version:recover'); setError(''); try { await api.post('/upgrade/recover'); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '恢复失败') } finally { setBusy(null) } }} /></section>}
+        {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
@@ -258,6 +289,7 @@ function App() {
     {modal === 'create' && <CreateDialog onClose={() => setModal(null)} onCreated={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'edit' && editTarget && <EditDialog instance={editTarget} onClose={() => setModal(null)} onSaved={() => { setModal(null); setEditTarget(null); void load() }} onError={setError} />}
     {modal === 'delete' && deleteTarget && <DeleteDialog instance={deleteTarget} challenge={challenge} onClose={() => setModal(null)} onDeleted={() => { setModal(null); void load() }} onError={setError} />}
+    {modal === 'uninstall-version' && uninstallTarget && <UninstallVersionDialog version={uninstallTarget} busy={busy === 'version:uninstall:' + uninstallTarget.tag} onClose={() => { if (!busy) { setModal(null); setUninstallTarget(null) } }} onConfirm={() => void uninstallVersion(uninstallTarget.tag)} />}
     {modal === 'admin-settings' && <AdminSettingsDialog onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('管理员密码已更新') }} />}
   </div>
 }
@@ -266,7 +298,7 @@ function NavigationLink({ module, activeModule, onNavigate, icon, ariaLabel, chi
   return <a className={'nav-item ' + (module === activeModule ? 'active' : '')} href={moduleHref(module)} aria-label={ariaLabel} aria-current={module === activeModule ? 'page' : undefined} onClick={event => { event.preventDefault(); onNavigate(module) }}><span className="nav-icon" aria-hidden="true">{icon}</span>{children}</a>
 }
 
-function Overview({ instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onNavigate }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onNavigate: (module: Module) => void }) {
+function Overview({ instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
   const running = instances.filter(instance => instance.status?.ready).length
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
@@ -292,7 +324,7 @@ function Overview({ instances, quotas, versions, upgradeState, loading, busy, in
       <section className="section-heading"><div><div className="eyebrow">INSTANCE SUMMARY</div><h2>实例概览</h2><p>每个实例独立运行，状态与 OAuth 配额在这里汇合。</p></div><button className="button ghost" onClick={onRefresh}>重新同步</button></section>
       {loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}
     </section>
-    {versions.length > 0 && <section className="overview-version-preview"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={onInstall} onUpgrade={onUpgrade} onRecover={onRecover} /></section>}
+    {versions.length > 0 && <section className="overview-version-preview"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={onInstall} onUpgrade={onUpgrade} onRecover={onRecover} onUninstall={onUninstall} /></section>}
   </>
 }
 
@@ -351,7 +383,7 @@ function AuditLogRow({ item }: { item: AuditLog }) {
 function formatLogTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
 function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误' } as Record<string, string>)[level] ?? level }
 function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
-function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'version.install': '安装版本', 'version.upgrade': '统一升级', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
+function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'version.install': '安装版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
 
 function Login({ onLoggedIn }: { onLoggedIn: (name: string) => void }) {
   const [username, setUsername] = useState('admin')
@@ -394,12 +426,12 @@ function LoadingState({ label }: { label: string }) {
   return <main className="loading-state" aria-live="polite"><span className="loading-spinner" />{label}</main>
 }
 
-function VersionPanel({ versions, instances, upgradeState, busy, onInstall, onUpgrade, onRecover }: { versions: VersionInstall[]; instances: Instance[]; upgradeState: UpgradeState; busy: string | null; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void }) {
+function VersionPanel({ versions, instances, upgradeState, busy, onInstall, onUpgrade, onRecover, onUninstall }: { versions: VersionInstall[]; instances: Instance[]; upgradeState: UpgradeState; busy: string | null; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void }) {
   const [tag, setTag] = useState('')
   const current = instances.length ? instances[0].version : ''
   const blocked = upgradeState.state === 'blocked'
   const locked = upgradeState.state !== 'idle' && upgradeState.state !== 'committed' && upgradeState.state !== 'rolled-back' && !blocked
-  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>统一版本</h2><p>先安装并校验版本，再一次性切换全部 CPA 实例。</p></div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空安装 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || locked}>{busy === 'version:install' ? '安装中…' : '安装版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未安装 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = version.tag === current; const upgradeBusy = busy === 'version:upgrade:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && !isCurrent && instances.length > 0 && <button className="button ghost" disabled={busy !== null || locked} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}</div></div> })}</div>}</section>
+  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>统一版本</h2><p>先安装并校验版本，再一次性切换全部 CPA 实例；升级完成后可清理旧版本缓存。</p></div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空安装 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || locked}>{busy === 'version:install' ? '安装中…' : '安装版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未安装 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = version.tag === current; const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && !isCurrent && instances.length > 0 && <button className="button ghost" disabled={busy !== null || locked} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || locked} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
 }
 
 function upgradeStateLabel(state: string) {
@@ -489,6 +521,10 @@ function DeleteDialog({ instance, challenge, onClose, onDeleted, onError }: { in
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   return <dialog open className="modal-backdrop"><div className="dialog danger-dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="danger-mark">!</div><div className="eyebrow">IRREVERSIBLE ACTION</div><h2>删除 {instance.name}？</h2><p>这会停止实例并清除它的配置、OAuth 认证数据、日志和注册信息。版本安装缓存和其他实例不会受影响。</p><label>输入总控管理员密码确认<PasswordInput aria-label="输入总控管理员密码确认删除" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button className="button ghost" onClick={onClose}>保留实例</button><button className="button danger" disabled={!challenge || !password || busy} onClick={async () => { setBusy(true); try { await api.post('/instances/' + instance.id + '/delete', { challenge_id: challenge, admin_password: password }); onDeleted() } catch (cause) { onError(cause instanceof Error ? cause.message : '删除失败') } finally { setBusy(false) } }}>{busy ? '删除中…' : '确认删除'}</button></div></div></dialog>
+}
+
+function UninstallVersionDialog({ version, busy, onClose, onConfirm }: { version: VersionInstall; busy: boolean; onClose: () => void; onConfirm: () => void }) {
+  return <dialog open className="modal-backdrop"><div className="dialog danger-dialog"><button className="dialog-close" disabled={busy} onClick={onClose} aria-label="关闭">×</button><div className="danger-mark">!</div><div className="eyebrow">VERSION CLEANUP</div><h2>卸载 {version.tag}？</h2><p>将删除该版本的安装缓存。当前运行版本不会受影响；如果之后需要回滚到 {version.tag}，需要重新安装。</p><div className="dialog-actions"><button className="button ghost" disabled={busy} onClick={onClose}>保留版本</button><button className="button danger" disabled={busy} onClick={onConfirm}>{busy ? '卸载中…' : '确认卸载'}</button></div></div></dialog>
 }
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {

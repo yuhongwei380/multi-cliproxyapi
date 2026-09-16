@@ -49,6 +49,7 @@ function auditTarget(request, pathname) {
   if (pathname === '/api/quota/settings') return { action: 'quota.settings.update', resource_type: 'quota-settings', resource_id: 'singleton' }
   if (pathname === '/api/versions/install') return { action: 'version.install', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/upgrade') return { action: 'version.upgrade', resource_type: 'version', resource_id: '' }
+  if (pathname === '/api/versions/uninstall') return { action: 'version.uninstall', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/upgrade/recover') return { action: 'version.recover', resource_type: 'upgrade', resource_id: 'singleton' }
   const match = pathname.match(/^\/api\/instances\/([^/]+)(?:\/([^/]+))?$/)
   if (!match) return null
@@ -58,7 +59,7 @@ function auditTarget(request, pathname) {
 }
 
 export class Controller {
-  constructor({ auth, instances, deleteService, quota, upgrade, installer, activator, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, activator, store, staticRoot, secureCookies, logger }) }
+  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, store, staticRoot, secureCookies, logger }) }
   token(request) { const cookies = parseCookies(request.headers.cookie || ''); return cookies[cookieName] || normalizeBearer(request.headers.authorization || '') }
   authenticated(request) { return this.auth.authenticate(this.token(request)) }
   audit(entry) { try { this.store.appendAuditLog?.(entry) } catch (error) { this.logger?.error?.(error) } }
@@ -109,6 +110,7 @@ export class Controller {
     if (route === '/quota/settings' && request.method === 'PATCH') { const body = await readJson(request); return writeJson(response, 200, this.quota.updateSettings(body)) }
     if (route === '/versions/install' && request.method === 'POST') { if (!this.installer) throw new Error('version installer unavailable'); const body = await readJson(request); const installed = await this.installer.install(body.version || ''); this.store.saveVersion(installed); const instances = this.store.listInstances(); if (!instances.length && this.activator) await this.activator.activateVersion(installed.tag); this.instances.setDefaultVersionIfEmpty(installed.tag); const { path: _path, ...publicVersion } = installed; return writeJson(response, 201, publicVersion) }
     if (route === '/versions/upgrade' && request.method === 'POST') { const body = await readJson(request); await this.upgrade.upgrade(body.version); return writeJson(response, 200, { status: 'upgraded', version: body.version }) }
+    if (route === '/versions/uninstall' && request.method === 'POST') { if (!this.versionService) throw new Error('version uninstaller unavailable'); const body = await readJson(request); await this.versionService.uninstall(body.version); return writeJson(response, 200, { status: 'uninstalled', version: body.version }) }
     if (route === '/upgrade/recover' && request.method === 'POST') { await this.upgrade.recover(); return writeJson(response, 200, { status: 'recovered' }) }
     if (route.startsWith('/instances/')) return await this.instanceRoute(request, response, url, route.slice('/instances/'.length))
     return writeJson(response, 404, { error: 'not found' })

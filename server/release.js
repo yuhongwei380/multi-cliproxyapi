@@ -168,6 +168,53 @@ export class Installer {
       const bytes = await this.source.download(asset); fs.writeFileSync(archive, bytes, { mode: 0o600, flag: 'wx' }); const checksum = crypto.createHash('sha256').update(bytes).digest('hex'); fs.mkdirSync(temporary, { recursive: false, mode: 0o700 }); await extractArchive(archive, temporary); walkNoSymlinks(temporary); normalizeVersionDir(temporary); fs.renameSync(temporary, destination); return { tag, asset: asset.name, path: destination, sha256: checksum, installed_at: this.clock().toISOString(), usable: true }
     } catch (error) { try { fs.rmSync(temporary, { recursive: true, force: true }) } catch {}; throw error } finally { try { fs.rmSync(archive, { force: true }) } catch {} }
   }
+  async uninstall(version) {
+    const tag = typeof version === 'string' ? version : version?.tag
+    if (!safeTag(tag)) throw Object.assign(new Error('invalid release tag'), { status: 400 })
+    const root = path.resolve(this.root)
+    const destination = path.resolve(root, tag)
+    if (destination === root || !destination.startsWith(`${root}${path.sep}`)) throw new ConflictError('version path is unsafe')
+    if (version && typeof version === 'object' && path.resolve(version.path || '') !== destination) throw new ConflictError('version install path is unsafe')
+
+    let rootInfo
+    try { rootInfo = fs.lstatSync(root) } catch (error) { if (error.code === 'ENOENT') throw new NotFoundError('version files not found'); throw error }
+    if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new ConflictError('version root is not a safe directory')
+
+    let info
+    try { info = fs.lstatSync(destination) } catch (error) { if (error.code === 'ENOENT') throw new NotFoundError('version files not found'); throw error }
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new ConflictError('version path is not a safe directory')
+
+    const pointer = path.join(root, 'current')
+    try {
+      const pointerInfo = fs.lstatSync(pointer)
+      if (pointerInfo.isSymbolicLink()) {
+        const activePath = path.resolve(path.dirname(pointer), fs.readlinkSync(pointer))
+        if (activePath === destination) throw new ConflictError('cannot uninstall the active CPA version')
+      } else throw new ConflictError('version current pointer is not a safe symlink')
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    await fsp.rm(destination, { recursive: true, force: false })
+  }
+}
+
+export class VersionService {
+  constructor({ store, instances, installer, clock = () => new Date() } = {}) { this.store = store; this.instances = instances; this.installer = installer; this.clock = clock }
+  async uninstall(tag) {
+    return this.instances.operations.run('global', async () => {
+      if (!safeTag(tag)) throw Object.assign(new Error('invalid release tag'), { status: 400 })
+      const installed = this.store.getVersion(tag)
+      let state
+      try { state = this.store.getUpgradeState() } catch (error) { if (error.code !== 'ERR_NOT_FOUND') throw error }
+      if (state && ![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(state.state)) throw new ConflictError(`upgrade state is ${state.state}; recover the upgrade first`)
+      if (this.store.listInstances().some(instance => instance.version === tag)) throw new ConflictError(`CPA version ${tag} is in use by an instance`)
+      if (this.instances.defaultVersion === tag) throw new ConflictError(`CPA version ${tag} is the default version`)
+      if (!this.installer) throw new Error('version installer unavailable')
+      await this.installer.uninstall(installed)
+      this.store.deleteVersion(tag)
+      return installed
+    })
+  }
 }
 
 export const UpgradeState = Object.freeze({ PREPARED: 'prepared', STOPPING_OLD: 'stopping-old', OLD_STOPPED: 'old-stopped', STARTING_NEW: 'starting-new', COMMITTED: 'committed', RESTORING_OLD: 'restoring-old', ROLLED_BACK: 'rolled-back', BLOCKED: 'blocked' })

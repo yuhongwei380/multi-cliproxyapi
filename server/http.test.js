@@ -8,13 +8,13 @@ import { Store } from './store.js'
 import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
 import { AuthService, InstanceService, DeleteService, QuotaService } from './services.js'
-import { UpgradeService } from './release.js'
+import { Installer, UpgradeService, VersionService } from './release.js'
 import { Controller, createHttpServer } from './http.js'
 import { instanceView } from './domain.js'
 
 async function freePort() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, server, url: `http://127.0.0.1:${server.address().port}` }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, server, url: `http://127.0.0.1:${server.address().port}` }
 }
 async function closeFixture(f) { f.server.closeAllConnections?.(); f.server.close(); f.store.close() }
 
@@ -31,6 +31,24 @@ test('HTTP API protects management routes and completes create/delete flow', asy
 })
 
 test('management.html aliases the embedded frontend shell with browser security headers', async () => { const f = await fixture(); try { const response = await fetch(`${f.url}/management.html`); assert.equal(response.status, 200); assert.match(await response.text(), /<div id="root"><\/div>/); assert.equal(response.headers.get('x-content-type-options'), 'nosniff'); assert.equal(response.headers.get('x-frame-options'), 'DENY'); assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/) } finally { await closeFixture(f) } })
+
+test('version uninstall API removes an old cache and records the audit action', async () => {
+  const f = await fixture(); try {
+    const versionsRoot = path.join(f.root, 'versions')
+    const oldDirectory = path.join(versionsRoot, 'v1')
+    fs.mkdirSync(oldDirectory, { recursive: true })
+    fs.writeFileSync(path.join(oldDirectory, 'cli-proxy-api'), 'binary-v1')
+    f.store.saveVersion({ tag: 'v1', path: oldDirectory, installed_at: new Date().toISOString(), usable: true })
+    f.instances.defaultVersion = 'v2'
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const cookie = login.headers.get('set-cookie').split(';')[0]
+    const removed = await fetch(`${f.url}/api/versions/uninstall`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ version: 'v1' }) })
+    assert.equal(removed.status, 200)
+    assert.deepEqual(await removed.json(), { status: 'uninstalled', version: 'v1' })
+    assert.equal(fs.existsSync(oldDirectory), false)
+    assert.throws(() => f.store.getVersion('v1'), /version not found/)
+    assert.equal(f.store.listAuditLogs()[0].action, 'version.uninstall')
+  } finally { await closeFixture(f) }
+})
 
 test('async request failures return JSON without terminating the controller', async () => {
   const f = await fixture(); try {

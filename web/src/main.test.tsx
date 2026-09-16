@@ -194,6 +194,32 @@ test('shows installed versions and submits a unified upgrade', async () => {
   await waitFor(() => expect(screen.queryByText('v1')).not.toBeInTheDocument())
 })
 
+test('confirms and submits uninstall for an old version while keeping the current version', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, directory: '/safe', desired_state: 'running', version: 'v2', revision: 2, status: { state: 'running', ready: true } }] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [{ tag: 'v2', asset: 'cpa-v2-linux-amd64.tar.gz', installed_at: '2030-01-01T00:00:00Z', usable: true }, { tag: 'v1', asset: 'cpa-v1-linux-amd64.tar.gz', installed_at: '2029-01-01T00:00:00Z', usable: true }] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+    .mockImplementationOnce(() => response({ status: 'uninstalled', version: 'v1' }) as any)
+    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, directory: '/safe', desired_state: 'running', version: 'v2', revision: 2, status: { state: 'running', ready: true } }] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [{ tag: 'v2', asset: 'cpa-v2-linux-amd64.tar.gz', installed_at: '2030-01-01T00:00:00Z', usable: true }] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByRole('button', { name: '卸载版本 v1' })
+  expect(screen.queryByRole('button', { name: '卸载版本 v2' })).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '卸载版本 v1' }))
+  expect(await screen.findByRole('heading', { name: '卸载 v1？' })).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '确认卸载' }))
+  await waitFor(() => expect(screen.queryByText('v1')).not.toBeInTheDocument())
+  expect(fetchMock.mock.calls[5][0]).toBe('/api/versions/uninstall')
+  expect((fetchMock.mock.calls[5][1] as RequestInit).method).toBe('POST')
+  expect(JSON.parse(String((fetchMock.mock.calls[5][1] as RequestInit).body))).toEqual({ version: 'v1' })
+})
+
 test('renders the source-style workbench shell around the dashboard', async () => {
   vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)

@@ -275,6 +275,10 @@ export class Store {
   toVersion(row) { return { tag: row.tag, asset: row.asset || '', path: row.install_path || '', sha256: row.sha256 || '', installed_at: row.installed_at, usable: Boolean(row.usable) } }
   getVersion(tag) { const row = this.db.prepare('SELECT * FROM versions WHERE tag=?').get(tag); if (!row) throw new NotFoundError('version not found'); return this.toVersion(row) }
   listVersions() { return this.db.prepare('SELECT * FROM versions ORDER BY installed_at DESC, tag').all().map(row => this.toVersion(row)) }
+  deleteVersion(tag) {
+    const result = this.db.prepare('DELETE FROM versions WHERE tag=?').run(tag)
+    if (Number(result.changes) !== 1) throw new NotFoundError('version not found')
+  }
 
   saveUpgradeState(state) {
     this.db.prepare(`INSERT INTO upgrade_state(id,state,old_version,new_version,original_running_json,original_desired_json,instance_stages_json,message,updated_at)

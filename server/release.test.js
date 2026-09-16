@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
 import { execFileSync } from 'node:child_process'
-import { GitHubSource, Installer, UpgradeService, UpgradeState } from './release.js'
+import { GitHubSource, Installer, UpgradeService, UpgradeState, VersionService } from './release.js'
 import { Store } from './store.js'
 import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
@@ -53,6 +53,37 @@ test('duplicate version installation reports conflict without downloading again'
     await assert.rejects(installer.install('v1'), error => error.status === 409 && /already installed/.test(error.message))
     assert.equal(downloads, 0)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('uninstall removes an unused version and keeps the default version', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-uninstall-'))
+  const versionsRoot = path.join(root, 'versions')
+  const store = new Store(path.join(root, 'control.db'))
+  const instances = new InstanceService({ store, runtime: new FakeRuntime(), units: new NoopUnitManager(), root, defaultVersion: 'v2', requireVersion: false })
+  const installer = new Installer({ source: {}, root: versionsRoot })
+  try {
+    for (const tag of ['v1', 'v2']) {
+      const directory = path.join(versionsRoot, tag)
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(path.join(directory, 'cli-proxy-api'), `binary-${tag}`)
+      store.saveVersion({ tag, path: directory, sha256: '', installed_at: new Date().toISOString(), usable: true })
+    }
+    const versions = new VersionService({ store, instances, installer })
+    await versions.uninstall('v1')
+    assert.equal(fs.existsSync(path.join(versionsRoot, 'v1')), false)
+    assert.throws(() => store.getVersion('v1'), /version not found/)
+    assert.equal(store.getVersion('v2').tag, 'v2')
+    await assert.rejects(() => versions.uninstall('v2'), /default version/)
+  } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('uninstall refuses versions still referenced by an instance', async () => {
+  const f = await upgradeFixture()
+  try {
+    const versions = new VersionService({ store: f.store, instances: f.instances, installer: new Installer({ source: {}, root: path.join(f.root, 'versions') }) })
+    await assert.rejects(() => versions.uninstall('v1'), /in use by an instance/)
+    assert.equal(fs.existsSync(path.join(f.root, 'versions', 'v1')), true)
+  } finally { f.close() }
 })
 
 test('blocked upgrades prevent ordinary start, restart and desired-state recovery', async () => {

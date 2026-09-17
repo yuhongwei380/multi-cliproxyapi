@@ -75,11 +75,11 @@ npm run package:linux
 - `release/install.sh`、`start.sh`、`stop.sh`、`uninstall.sh`：部署和生命周期脚本。
 
 构建过程会重新生成 `web/dist`，并清理打包 staging 和前端依赖目录。
-推送形如 `v26.9.2` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
+推送形如 `v26.9.3` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
 
 ## 版本规则
 
-应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.2` 表示 2026 年 9 月的第三个发布版本；同一个月内的修复和小改动递增最后一位，例如 `26.9.2`。Git tag 使用 `v` 前缀，例如 `v26.9.2`。
+应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.3` 表示 2026 年 9 月的第四个发布版本；同一个月内的修复和小改动递增最后一位，例如 `26.9.3`。Git tag 使用 `v` 前缀，例如 `v26.9.3`。
 
 这个规则比无语义的 `0.x` 更容易判断发布时间，同时仍符合 SemVer 的三个数字段，现有 npm、构建和发布工具可以继续使用。两位年份在 2099 年之后会产生歧义；如果项目需要长期维护，应在进入 2100 年前切换为 `YYYY.MM.PATCH`，当前阶段保留 `YY.MM.PATCH` 更简洁。
 

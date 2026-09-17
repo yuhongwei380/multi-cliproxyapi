@@ -799,3 +799,228 @@ body { background: var(--bg-secondary); }
   .quota-progress { height: 9px; }
 }
 
+/* Instance cards are the scan view: keep every OAuth account visible without
+   turning each quota window into a full-width feature block. */
+.instance-card .quota-details {
+  margin-top: 10px;
+  border-radius: 9px;
+  background: var(--bg-secondary);
+}
+.instance-card .quota-heading {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.instance-card .quota-row {
+  padding: 8px 10px 9px;
+}
+.instance-card .quota-row-head {
+  gap: 8px;
+}
+.instance-card .quota-row-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instance-card .quota-state {
+  flex: 0 0 auto;
+  font-size: 9px;
+}
+.instance-card .quota-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+}
+.instance-card .quota-window {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-primary);
+}
+.instance-card .quota-window-title {
+  display: -webkit-box;
+  overflow: hidden;
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.instance-card .quota-window-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+.instance-card .quota-window-meta strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 780;
+  letter-spacing: -.035em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.instance-card .quota-window-meta span {
+  min-width: 0;
+  flex: 1 1 100%;
+  overflow: hidden;
+  color: var(--quiet);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.instance-card .quota-progress {
+  height: 5px;
+}
+.instance-card .quota-message {
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.instance-card .quota-timestamp {
+  overflow: hidden;
+  margin-top: 5px;
+  font-size: 8px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shared account/weekly summary; full windows live in the modal. */
+.quota-summary { margin-top: 12px; border-top: 1px solid var(--line); }
+.quota-summary-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; }
+.quota-summary-heading > strong { font-size: 12px; font-weight: 650; }
+.quota-summary-heading .button { min-height: 40px; padding-inline: 10px; font-size: 12px; }
+.quota-summary-columns, .quota-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 12px; }
+.quota-summary-columns { padding: 4px 0; color: var(--muted); font-size: 11px; }
+.quota-summary-columns > :last-child { text-align: right; }
+.quota-summary-row { align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.quota-summary-account { min-width: 0; }
+.quota-summary-account > strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.quota-summary-account > small { display: block; margin-top: 2px; font-size: 11px; }
+.quota-summary-value { text-align: right; font-variant-numeric: tabular-nums; }
+.quota-summary-value > strong { font-size: 13px; }
+.quota-summary-value .quota-progress { height: 4px; margin-top: 4px; background: var(--bg-tertiary); }
+.quota-detail-dialog { width: min(760px, calc(100vw - 32px)); max-height: 85dvh; padding: 24px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--floating-surface); color: var(--ink); }
+.quota-detail-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.quota-detail-dialog header { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+.quota-detail-dialog h2 { margin: 0; font-size: 22px; }
+.quota-detail-dialog header p { margin: 4px 0 16px; color: var(--muted); font-size: 12px; }
+.quota-detail-dialog .button { min-height: 40px; }
+.quota-account-selector { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
+.quota-account-selector select { width: 100%; min-width: 0; height: 40px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-primary); color: var(--ink); font: inherit; }
+.quota-detail-dialog .quota-row-head { flex-wrap: wrap; }
+.quota-detail-dialog .quota-row-head strong { white-space: normal; overflow-wrap: anywhere; }
+.quota-detail-dialog .quota-values { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.quota-detail-dialog .quota-window-title { font-size: 13px; }
+.quota-detail-dialog .quota-window-meta { flex-wrap: wrap; }
+.quota-detail-dialog .quota-window-meta span { font-size: 11px; white-space: normal; }
+.quota-detail-dialog .quota-progress { height: 6px; background: var(--bg-tertiary); }
+.quota-account-selector select:focus-visible, .quota-detail-dialog button:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 2px; }
+.dashboard-content:has(.instances-module), .dashboard-content:has(.quotas-module) { width: 100%; padding-inline: 24px; }
+.instances-module, .quotas-module { padding-top: 24px; }
+.instances-module .module-heading, .quotas-module .module-heading { margin-bottom: 16px; }
+.instances-module .module-heading h1, .quotas-module .module-heading h1 { font-size: 28px; }
+.quota-instance-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.quotas-module .quota-overview-card > div { min-height: 64px; padding: 12px 16px; }
+.quotas-module .quota-overview-card strong { margin-top: 0; font-size: 22px; }
+.instances-module .runway { margin: 8px 0; }
+.instances-module .card-meta { padding: 8px 0; }
+.instances-module .card-status { margin-top: 4px; }
+.instances-module .card-actions { margin-top: 12px; }
+@media (max-width: 1200px) { .quota-instance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1201px) {
+  .quota-summary-heading { padding: 2px 0 4px; }
+  .quota-summary-columns { line-height: 16px; padding: 0 0 2px; }
+  .quota-summary-row, .instances-module .quota-summary-row { padding: 6px 0; }
+  .quota-summary-account > strong { line-height: 18px; }
+  .quota-summary-account > small { line-height: 14px; margin-top: 2px; }
+  .quota-summary-account > small.ok { display: block; }
+  .quota-summary-value > strong { font-size: 14px; }
+  .quota-summary-value .quota-progress { margin-top: 5px; }
+  .quota-instance-head .eyebrow { display: none; }
+  .quota-instance-head h2 { margin-top: 0; }
+  .instances-module .instance-card { padding: 18px 16px 16px; }
+  .instances-module .instance-title h3 { line-height: 1.1; }
+  .instances-module .instance-title p { margin-top: 3px; line-height: 1.35; }
+  .instances-module .runway { margin: 14px 0 12px; }
+  .instances-module .runway-line { display: flex; }
+  .instances-module .runway-labels { margin-top: 6px; }
+  .instances-module .card-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 11px 0; }
+  .instances-module .card-meta > div { display: block; }
+  .instances-module .card-meta strong { margin-top: 3px; font-size: 12px; }
+  .instances-module .card-status { min-height: 20px; margin-top: 9px; font-size: 10px; }
+  .instances-module .quota-summary { margin-top: 10px; }
+  .instances-module .quota-summary-row { padding: 6px 0; }
+  .instances-module .quota-summary-account > small { margin-top: 2px; font-size: 11px; }
+  .instances-module .quota-summary-account > small.ok { display: block; }
+  .instances-module { padding-top: 24px; }
+  .instances-module .module-heading { margin-bottom: 16px; }
+  .instances-module .module-heading .eyebrow { display: block; }
+  .instances-module .quota-summary-columns { padding: 0 0 2px; }
+  .instances-module .card-actions { margin-top: 14px; gap: 7px; row-gap: 6px; }
+  .instances-module .card-actions .button { min-height: 34px; padding-inline: 9px; font-size: 12px; }
+  .dashboard-content:has(.instances-module), .dashboard-content:has(.quotas-module) { padding-bottom: 32px; }
+}
+@media (max-width: 760px) {
+  .quota-instance-list { grid-template-columns: 1fr; }
+  .quota-detail-dialog { padding: 16px; }
+  .quota-detail-dialog .quota-values { grid-template-columns: 1fr; }
+}
+
+/* Instance actions stay at the top of the card as a single scan-friendly row. */
+.instance-card .card-actions {
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin: 10px 0 0;
+  overflow-x: auto;
+  padding: 2px 0 3px;
+  scrollbar-width: thin;
+}
+.instance-card .card-actions .button {
+  min-width: 0;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding-inline: 6px;
+  white-space: nowrap;
+}
+.instance-card .card-actions .button:first-child { min-width: 0; }
+.instance-card .card-actions .delete-instance { margin-left: auto; }
+@media (min-width: 1201px) {
+  .instances-module .instance-card .card-actions {
+    gap: 3px;
+    margin-top: 10px;
+  }
+  .instances-module .instance-card .card-actions .button {
+    min-height: 32px;
+    padding-inline: 4px;
+    font-size: 11px;
+  }
+}
+@media (min-width: 761px) and (max-width: 1200px) {
+  .instance-card .card-actions {
+    gap: 3px;
+  }
+  .instance-card .card-actions .button {
+    min-height: 32px;
+    padding-inline: 2px;
+    font-size: 10px;
+  }
+}

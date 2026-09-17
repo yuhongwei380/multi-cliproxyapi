@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from './main'
@@ -79,6 +79,7 @@ test('shows quota values returned by the child instance', async () => {
 
   render(<App />)
   expect(await screen.findByText('OAuth 配额（1 个账户）')).toBeInTheDocument()
+  await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(screen.getByText('3 / 10 requests')).toBeInTheDocument()
 })
 
@@ -91,8 +92,11 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
     .mockImplementationOnce(() => response({ state: 'idle' }) as any)
 
   render(<App />)
+  await screen.findByRole('button', { name: '额度详情' })
+  expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()
+  await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(await screen.findByText('周限额')).toBeInTheDocument()
-  expect(screen.getByText('31%')).toBeInTheDocument()
+  expect(within(screen.getByRole('dialog', { name: 'OAuth 额度详情' })).getByText('31%')).toBeInTheDocument()
   expect(screen.getByText('GPT-5.3-Codex-Spark 5 小时限额')).toBeInTheDocument()
   expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.getByRole('progressbar', { name: 'GPT-5.3-Codex-Spark 5 小时限额 剩余配额' })).toHaveAttribute('aria-valuenow', '100')
@@ -127,7 +131,7 @@ test('reports partial quota refresh failures while keeping successful instances 
   await user.click(screen.getByRole('link', { name: '配额观察' }))
   await user.click(screen.getByRole('button', { name: '手动查看配额' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('配额刷新完成：1 个实例成功，1 个实例失败')
-  expect(screen.getByText('32%')).toBeInTheDocument()
+  expect(screen.getByText('未提供周额度')).toBeInTheDocument()
   expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/instances/cpa_2/quotas' && init?.method === 'POST')).toBe(true)
 })
 

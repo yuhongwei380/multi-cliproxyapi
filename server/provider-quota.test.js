@@ -2,6 +2,16 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { HTTPClient } from './cpa.js'
+import { parseProviderQuota } from './provider-quota.js'
+
+test('Codex accepts a missing additional quota list', () => {
+  const values = parseProviderQuota('codex', {
+    rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 18000 } },
+    additional_rate_limits: null,
+  })
+  assert.equal(values.length, 1)
+  assert.equal(values[0].remaining, 75)
+})
 
 test('Codex uses the real CPA api-call contract and preserves exactly zero remaining', async () => {
   let request

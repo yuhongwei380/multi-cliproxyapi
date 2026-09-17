@@ -157,7 +157,9 @@ test('reports partial quota refresh failures while keeping successful instances 
   await user.click(screen.getByRole('link', { name: '配额观察' }))
   await user.click(screen.getByRole('button', { name: '手动查看配额' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('配额刷新完成：1 个实例成功，1 个实例失败')
-  expect(screen.getByText('未提供周额度')).toBeInTheDocument()
+  expect(screen.getByText('primary')).toBeInTheDocument()
+  expect(screen.getByText('32%')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '额度详情' })).not.toBeInTheDocument()
   expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/instances/cpa_2/quotas' && init?.method === 'POST')).toBe(true)
 })
 

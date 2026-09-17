@@ -575,6 +575,14 @@ body { background: var(--bg-secondary); }
 .quota-instance-card .quota-row { padding: 12px; }
 .quota-instance-card .quota-window-meta { flex-wrap: wrap; gap: 4px 8px; }
 .quota-instance-card .quota-window-meta span { overflow: visible; white-space: normal; }
+.quota-instance-card .quota-row-head { align-items: flex-start; }
+.quota-instance-card .quota-row-head strong { min-width: 0; overflow: visible; overflow-wrap: anywhere; line-height: 1.35; text-overflow: clip; white-space: normal; }
+.quota-instance-card .quota-row-head .quota-state { flex: 0 0 auto; margin-top: 2px; }
+.quota-instance-card .quota-values { gap: 14px; margin-top: 12px; }
+.quota-instance-card .quota-window-title { font-size: 13px; }
+.quota-instance-card .quota-window-meta strong { font-size: 20px; }
+.quota-instance-card .quota-window-meta span { font-size: 11px; }
+.quota-instance-card .quota-progress { height: 7px; }
 .quota-instance-head h2 { margin: 7px 0 3px; color: var(--ink); font-size: 21px; font-weight: 750; letter-spacing: -.04em; }
 .quota-instance-head p { margin: 0; color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
 .quota-instance-head .button { min-height: 37px; font-size: 13px; }

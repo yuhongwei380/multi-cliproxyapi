@@ -68,6 +68,7 @@ export type BrandingSettings = {
   page_description: string
   copyright: string
   icon: string
+  logo: string
 }
 
 export type RuntimeLog = { id: number; level: string; source: string; instance_id?: string; message: string; context?: Record<string, unknown>; created_at: string }

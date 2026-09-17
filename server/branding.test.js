@@ -29,3 +29,11 @@ test('branding validation rejects unsafe or oversized values', () => {
   assert.throws(() => normalizeBranding({ brand_name: 'x'.repeat(49) }), error => error.status === 400 && /too long/.test(error.message))
   assert.throws(() => normalizeBranding({ page_description: 'ok\nnot ok' }), error => error.status === 400 && /control characters/.test(error.message))
 })
+
+test('branding accepts real image data URLs and rejects spoofed logo content', () => {
+  const png = 'data:image/png;base64,iVBORw0KGgo='
+  assert.equal(normalizeBranding({ logo: png }).logo, png)
+  assert.equal(normalizeBranding({ logo: '' }).logo, '')
+  assert.throws(() => normalizeBranding({ logo: 'data:image/svg+xml;base64,PHN2Zy8+' }), error => error.status === 400 && /PNG/.test(error.message))
+  assert.throws(() => normalizeBranding({ logo: 'data:image/png;base64,ZmFrZQ==' }), error => error.status === 400 && /content does not match/.test(error.message))
+})

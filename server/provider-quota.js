@@ -53,7 +53,7 @@ export function parseProviderQuota(provider, payload) {
     }
     append('Codex', payload.rate_limit)
     append('代码审查', payload.code_review_rate_limit)
-    if (payload.additional_rate_limits !== undefined && !Array.isArray(payload.additional_rate_limits)) throw new Error('invalid additional quota limits')
+    if (payload.additional_rate_limits !== undefined && payload.additional_rate_limits !== null && !Array.isArray(payload.additional_rate_limits)) throw new Error('invalid additional quota limits')
     for (const limit of payload.additional_rate_limits || []) append(limit.limit_name || limit.metered_feature || '附加额度', limit.rate_limit)
   } else if (provider === 'claude') {
     const labels = { five_hour: '5 小时限额', seven_day: '周限额', seven_day_oauth_apps: 'OAuth 应用周限额', seven_day_opus: 'Opus 周限额', seven_day_sonnet: 'Sonnet 周限额', seven_day_cowork: 'Cowork 周限额', iguana_necktie: 'Iguana Necktie 周限额' }

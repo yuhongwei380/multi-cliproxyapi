@@ -1,5 +1,6 @@
 import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
 import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
 import './app.css'
@@ -171,6 +172,7 @@ function App() {
 
   const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => {
     if (instanceActionLock.current.has(instance.id)) return
+    if ((action === 'restart' || action === 'stop') && !window.confirm(`确认${action === 'restart' ? '重启' : '停止'}实例「${instance.name}」？这会中断当前请求。`)) return
     instanceActionLock.current.add(instance.id)
     setInstanceBusy(previous => ({ ...previous, [instance.id]: action }))
     setError('')
@@ -365,7 +367,7 @@ function QuotaObservation({ instances, quotas, settings, settingsLoaded, setting
   const successful = snapshots.filter(quota => quota.status === 'ok').length
   const stale = snapshots.filter(quota => quota.status === 'stale').length
   const accountCount = snapshots.filter(quota => quota.account_id !== '__discovery__').length
-  return <section className="module-pane quotas-module"><section className="section-heading module-heading"><div><div className="eyebrow">QUOTA OBSERVATION</div><h1>配额观察</h1><p>从子实例读取 OAuth 配额，按周期刷新并在低于阈值时通知。</p></div><div className="section-actions quota-toolbar"><button className="button primary" disabled={!!busy || settingsLoading} onClick={onRefreshAll}>手动查看配额</button><button className="button ghost" aria-expanded={periodOpen} onClick={onTogglePeriod}>配额周期</button></div></section><div className="quota-overview-card"><div><span>成功快照</span><strong>{successful}</strong></div><div><span>OAuth 账户</span><strong>{accountCount}</strong></div><div><span>已过期</span><strong className={stale ? 'warn-text' : ''}>{stale}</strong></div><div><span>自动获取</span><strong>{settings.refresh_interval_minutes}<small> 分钟</small></strong></div></div>{settingsError && <div className="settings-inline-error" role="status">{settingsError}</div>}{periodOpen && <QuotaSettingsPanel settings={settings} loading={settingsLoading} loaded={settingsLoaded} onSaved={onSettingsSaved} onError={onSettingsError} />}{instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="quota-instance-list">{instances.map(instance => { const instanceQuotas = quotas[instance.id] ?? []; const instanceAction = instanceBusy[instance.id]; return <article className="quota-instance-card" key={instance.id}><div className="quota-instance-head"><div><div className="eyebrow">INSTANCE QUOTA</div><h2>{instance.name}</h2><p>{instance.id} · 端口 {instance.port}</p></div><button className="button ghost" disabled={!!busy || !!instanceAction} onClick={() => onRefreshInstance(instance)}>{instanceAction ? '读取中…' : '手动查看'}</button></div>{instanceQuotas.length ? <QuotaDetails quotas={instanceQuotas} open /> : <div className="quota-empty-message">尚未采集配额；点击“手动查看”从子实例读取。</div>}</article> })}</div>}</section>
+  return <section className="module-pane quotas-module"><section className="section-heading module-heading"><div><div className="eyebrow">QUOTA OBSERVATION</div><h1>配额观察</h1><p>从子实例读取 OAuth 配额，按周期刷新并在低于阈值时通知。</p></div><div className="section-actions quota-toolbar"><button className="button primary" disabled={!!busy || settingsLoading} onClick={onRefreshAll}>手动查看配额</button><button className="button ghost" aria-expanded={periodOpen} onClick={onTogglePeriod}>配额周期</button></div></section><div className="quota-overview-card"><div><span>成功快照</span><strong>{successful}</strong></div><div><span>OAuth 账户</span><strong>{accountCount}</strong></div><div><span>已过期</span><strong className={stale ? 'warn-text' : ''}>{stale}</strong></div><div><span>自动获取</span><strong>{settings.refresh_interval_minutes}<small> 分钟</small></strong></div></div>{settingsError && <div className="settings-inline-error" role="status">{settingsError}</div>}{periodOpen && <QuotaSettingsPanel settings={settings} loading={settingsLoading} loaded={settingsLoaded} onSaved={onSettingsSaved} onError={onSettingsError} />}{instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="quota-instance-list">{instances.map(instance => { const instanceQuotas = quotas[instance.id] ?? []; const instanceAction = instanceBusy[instance.id]; return <article className="quota-instance-card" key={instance.id}><div className="quota-instance-head"><div><div className="eyebrow">INSTANCE QUOTA</div><h2>{instance.name}</h2><p>{instance.id} · 端口 {instance.port}</p></div><button className="button ghost" disabled={!!busy || !!instanceAction} onClick={() => onRefreshInstance(instance)}>{instanceAction ? '读取中…' : '手动查看'}</button></div>{instanceQuotas.length ? <QuotaDetailPanel quotas={instanceQuotas} /> : <div className="quota-empty-message">尚未采集配额；点击“手动查看”从子实例读取。</div>}</article> })}</div>}</section>
 }
 
 function QuotaSettingsPanel({ settings, loading, loaded, onSaved, onError }: { settings: QuotaSettings; loading: boolean; loaded: boolean; onSaved: (settings: QuotaSettings) => void; onError: (message: string) => void }) {
@@ -542,13 +544,61 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     const latest = quotas.reduce((value, q) => q.collected_at > value ? q.collected_at : value, '')
     return latest ? accountCount + ' 个账户 · ' + relativeTime(latest) : '无成功快照'
   }, [quotas])
-  return <article className={'instance-card ' + (running ? 'is-running' : '')}><div className="card-top"><div className="instance-title"><span className={'status-orb ' + (running ? 'live' : '')} /><div><h3>{instance.name}</h3><p>{instance.id} · 端口 {instance.port}</p></div></div><span className={'state-pill ' + (running ? 'live' : '')}>{running ? '运行中' : stateLabel(instance.status?.state)}</span></div><div className="runway"><div className="runway-line"><span className={'runway-node ' + (running ? 'active' : '')} /><span className="runway-track" /><span className={'runway-node ' + (instance.status?.ready ? 'active' : '')} /></div><div className="runway-labels"><span>期望 <b>{instance.desired_state === 'running' ? '运行' : '停止'}</b></span><span>实际 <b>{stateLabel(instance.status?.state)}</b></span></div></div><div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div><div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span>{managementUrl && <button type="button" className="button ghost management-link" onClick={() => window.open(managementUrl, '_blank', 'noopener,noreferrer')}>CPA 管理 ↗</button>}</div><QuotaDetails quotas={quotas} /><div className="card-actions"><button className="button primary" disabled={actionBusy} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启实例' : '启动实例'}</button><button className="button ghost" disabled={actionBusy || !running} onClick={() => onAction(instance, 'stop')}>停止</button><button className="button ghost" disabled={actionBusy} onClick={() => onAction(instance, 'quotas')}>刷新配额</button><button className="button ghost" disabled={actionBusy} onClick={() => onConfigure(instance)}>配置</button><button className="button ghost danger-outline" disabled={actionBusy} onClick={() => onDelete(instance)}>删除</button></div></article>
+  return <article className={'instance-card ' + (running ? 'is-running' : '')}><div className="card-top"><div className="instance-title"><span className={'status-orb ' + (running ? 'live' : '')} /><div><h3>{instance.name}</h3><p>{instance.id} · 端口 {instance.port}</p></div></div><div className="card-top-actions"><span className={'state-pill ' + (running ? 'live' : '')}>{running ? '运行中' : stateLabel(instance.status?.state)}</span><button type="button" className="button ghost card-refresh" disabled={actionBusy} onClick={() => onAction(instance, 'quotas')}>{busy === 'quotas' ? '读取中…' : '刷新'}</button></div></div><div className="card-actions" aria-label={`${instance.name} 操作`}><button type="button" className="button ghost" disabled={actionBusy} onClick={() => onConfigure(instance)}>配置</button><button type="button" className="button primary" disabled={actionBusy} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button><button type="button" className="button danger" disabled={actionBusy || !running} onClick={() => onAction(instance, 'stop')}>停止</button>{managementUrl && <button type="button" className="button primary management-link" onClick={() => window.open(managementUrl, '_blank', 'noopener,noreferrer')}>CPA 管理 ↗</button>}<button type="button" className="button danger delete-instance" disabled={actionBusy} onClick={() => onDelete(instance)}>删除</button></div><div className="runway"><div className="runway-line"><span className={'runway-node ' + (running ? 'active' : '')} /><span className="runway-track" /><span className={'runway-node ' + (instance.status?.ready ? 'active' : '')} /></div><div className="runway-labels"><span>期望 <b>{instance.desired_state === 'running' ? '运行' : '停止'}</b></span><span>实际 <b>{stateLabel(instance.status?.state)}</b></span></div></div><div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div><div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div><QuotaDetails quotas={quotas} /></article>
 }
 
-function QuotaDetails({ quotas, open }: { quotas: QuotaSnapshot[]; open?: boolean }) {
+function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
+  const [showDetails, setShowDetails] = useState(false)
+  const summary = useRef<HTMLElement>(null)
+  const closeDetails = () => { setShowDetails(false); queueMicrotask(() => summary.current?.querySelector('button')?.focus()) }
+  if (!quotas.length) return null
+  const accounts = quotas.filter(quota => quota.account_id !== '__discovery__')
+  return <section ref={summary} className="quota-summary">
+    <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong><button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button></div>
+    <div className="quota-summary-columns"><span>账户</span><span>周额度剩余</span></div>
+    {quotas.map(quota => {
+      const weekly = quota.values?.find(value => value.name === '周限额')
+      const percent = weekly ? quotaPercent(weekly) : null
+      const label = quota.account_id === '__discovery__' ? 'OAuth 账户' : quota.account_id
+      return <div className="quota-summary-row" key={quota.account_id}>
+        <div className="quota-summary-account"><strong title={label}>{label}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && weekly ? ' · 缓存' : ''}</small></div>
+        <div className="quota-summary-value"><strong>{weekly ? formatQuotaValue(weekly) : quota.status === 'empty' ? '—' : quota.status === 'failed' ? '查询失败' : '未提供周额度'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={`${label} 周额度剩余`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
+      </div>
+    })}
+    {showDetails && createPortal(<QuotaDetailDialog quotas={quotas} onClose={closeDetails} />, document.body)}
+  </section>
+}
+
+function QuotaDetailDialog({ quotas, onClose }: { quotas: QuotaSnapshot[]; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const accounts = quotas.filter(quota => quota.account_id !== '__discovery__')
+  const discovery = quotas.find(quota => quota.account_id === '__discovery__')
+  const defaultQuotas = accounts.length ? accounts.slice(0, 2) : discovery ? [discovery] : []
+  const [additionalAccountId, setAdditionalAccountId] = useState('')
+  const additional = accounts.find(quota => quota.account_id === additionalAccountId)
+  useEffect(() => {
+    const element = dialog.current!
+    const previousOverflow = document.body.style.overflow
+    element.showModal()
+    document.body.style.overflow = 'hidden'
+    return () => { element.close(); document.body.style.overflow = previousOverflow }
+  }, [])
+  return <dialog ref={dialog} className="quota-detail-dialog" aria-label="OAuth 额度详情" onCancel={onClose} onClick={event => { if (event.target === event.currentTarget) { const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose() } }}>
+    <header><div><h2>OAuth 额度详情</h2><p>查看各账户的全部额度窗口与重置时间</p></div><button type="button" className="button ghost" onClick={onClose} autoFocus>关闭</button></header>
+    {accounts.length > 2 && <label className="quota-account-selector">其他 OAuth 账户<select aria-label="选择其他 OAuth 账户" value={additionalAccountId} onChange={event => setAdditionalAccountId(event.target.value)}><option value="">选择要查看的账户</option>{accounts.slice(2).map(quota => <option key={quota.account_id} value={quota.account_id}>{`${quota.provider || 'OAuth'} · ${quota.account_id}`}</option>)}</select></label>}
+    {!!defaultQuotas.length && <QuotaDetailPanel quotas={defaultQuotas} />}
+    {additional && <div className="quota-detail-additional"><QuotaDetailPanel quotas={[additional]} /></div>}
+  </dialog>
+}
+
+function QuotaDetailPanel({ quotas }: { quotas: QuotaSnapshot[] }) {
+  return <div className="quota-detail-panel"><QuotaFullDetails quotas={quotas} />{quotas.map(quota => quota.message && !!quota.values?.length && <p className="quota-message" key={quota.account_id + '-message'}>{quota.message}</p>)}</div>
+}
+
+function QuotaFullDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   if (!quotas.length) return null
   const accountCount = quotas.filter(quota => quota.account_id !== '__discovery__').length
-  return <details className="quota-details" open={open}><summary>查看 OAuth 配额（{accountCount} 个账户）</summary><div className="quota-rows">{quotas.map(quota => <div className="quota-row" key={quota.account_id}><div className="quota-row-head"><strong>{quota.account_id === '__discovery__' ? 'OAuth 账户发现' : (quota.provider || 'OAuth') + ' · ' + quota.account_id}</strong><span className={'quota-state ' + quota.status}>{quotaStatusLabel(quota.status)}</span></div>{quota.values?.length ? <div className="quota-values">{quota.values.map((value, index) => <QuotaWindow key={value.name + '-' + index} value={value} />)}</div> : <p className="quota-message">{quota.message || '子实例未返回可展示的配额窗口。'}</p>}{validTimestamp(quota.collected_at) && <small className="quota-timestamp">最近成功采集于 {new Date(quota.collected_at).toLocaleString('zh-CN')}</small>}{validTimestamp(quota.attempted_at) && quota.status !== 'ok' && <small className="quota-timestamp">最近尝试于 {new Date(quota.attempted_at).toLocaleString('zh-CN')}</small>}</div>)}</div></details>
+  return <section className="quota-details"><div className="quota-heading">OAuth 配额（{accountCount} 个账户）</div><div className="quota-rows">{quotas.map(quota => { const accountLabel = quota.account_id === '__discovery__' ? 'OAuth 账户' : (quota.provider || 'OAuth') + ' · ' + quota.account_id; return <div className="quota-row" key={quota.account_id}><div className="quota-row-head"><strong title={accountLabel}>{accountLabel}</strong><span className={'quota-state ' + quota.status}>{quotaStatusLabel(quota.status)}</span></div>{quota.values?.length ? <div className="quota-values">{quota.values.map((value, index) => <QuotaWindow key={value.name + '-' + index} value={value} />)}</div> : <p className="quota-message">{quota.message || '子实例未返回可展示的配额窗口。'}</p>}{validTimestamp(quota.collected_at) && <small className="quota-timestamp">最近成功采集于 {new Date(quota.collected_at).toLocaleString('zh-CN')}</small>}{validTimestamp(quota.attempted_at) && quota.status !== 'ok' && <small className="quota-timestamp">最近尝试于 {new Date(quota.attempted_at).toLocaleString('zh-CN')}</small>}</div> })}</div></section>
 }
 
 function QuotaWindow({ value }: { value: QuotaValue }) {

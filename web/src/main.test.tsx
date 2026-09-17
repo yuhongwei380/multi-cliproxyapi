@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { App } from './main'
@@ -78,7 +78,8 @@ test('shows quota values returned by the child instance', async () => {
     .mockImplementationOnce(() => response({ state: 'idle' }) as any)
 
   render(<App />)
-  expect(await screen.findByText('查看 OAuth 配额（1 个账户）')).toBeInTheDocument()
+  expect(await screen.findByText('OAuth 配额（1 个账户）')).toBeInTheDocument()
+  await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(screen.getByText('3 / 10 requests')).toBeInTheDocument()
 })
 
@@ -91,12 +92,41 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
     .mockImplementationOnce(() => response({ state: 'idle' }) as any)
 
   render(<App />)
+  await screen.findByRole('button', { name: '额度详情' })
+  expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()
+  await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(await screen.findByText('周限额')).toBeInTheDocument()
-  expect(screen.getByText('31%')).toBeInTheDocument()
+  expect(within(screen.getByRole('dialog', { name: 'OAuth 额度详情' })).getByText('31%')).toBeInTheDocument()
   expect(screen.getByText('GPT-5.3-Codex-Spark 5 小时限额')).toBeInTheDocument()
   expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.getByRole('progressbar', { name: 'GPT-5.3-Codex-Spark 5 小时限额 剩余配额' })).toHaveAttribute('aria-valuenow', '100')
   expect(screen.getByText(/09\/19/)).toBeInTheDocument()
+})
+
+test('shows two OAuth accounts by default and reveals more accounts from a selector', async () => {
+  vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any)
+    .mockImplementationOnce(() => response({ items: [
+      { instance_id: 'cpa_1', account_id: 'oauth-1', provider: 'openai', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 80, total: 100, unit: '%' }] },
+      { instance_id: 'cpa_1', account_id: 'oauth-2', provider: 'openai', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 70, total: 100, unit: '%' }] },
+      { instance_id: 'cpa_1', account_id: 'oauth-3', provider: 'openai', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 60, total: 100, unit: '%' }] }
+    ] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(await screen.findByRole('button', { name: '额度详情' }))
+  const dialog = await screen.findByRole('dialog', { name: 'OAuth 额度详情' })
+  expect(within(dialog).getByText('OAuth 配额（2 个账户）')).toBeInTheDocument()
+  const defaultRows = within(dialog.querySelector('.quota-detail-panel .quota-rows') as HTMLElement)
+  expect(defaultRows.getByText('openai · oauth-1')).toBeInTheDocument()
+  expect(defaultRows.getByText('openai · oauth-2')).toBeInTheDocument()
+  expect(defaultRows.queryByText('openai · oauth-3')).not.toBeInTheDocument()
+
+  await user.selectOptions(within(dialog).getByRole('combobox', { name: '选择其他 OAuth 账户' }), 'oauth-3')
+  expect(within(dialog.querySelector('.quota-detail-additional .quota-rows') as HTMLElement).getByText('openai · oauth-3')).toBeInTheDocument()
 })
 
 test('reports partial quota refresh failures while keeping successful instances visible', async () => {
@@ -127,7 +157,9 @@ test('reports partial quota refresh failures while keeping successful instances 
   await user.click(screen.getByRole('link', { name: '配额观察' }))
   await user.click(screen.getByRole('button', { name: '手动查看配额' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('配额刷新完成：1 个实例成功，1 个实例失败')
+  expect(screen.getByText('primary')).toBeInTheDocument()
   expect(screen.getByText('32%')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '额度详情' })).not.toBeInTheDocument()
   expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/instances/cpa_2/quotas' && init?.method === 'POST')).toBe(true)
 })
 
@@ -141,7 +173,7 @@ test('distinguishes a successful zero-account discovery from no snapshot', async
 
   render(<App />)
   expect(await screen.findByText('0 个账户')).toBeInTheDocument()
-  expect(screen.getByText('查看 OAuth 配额（0 个账户）')).toBeInTheDocument()
+  expect(screen.getByText('OAuth 配额（0 个账户）')).toBeInTheDocument()
 })
 
 test('edits managed instance fields with the current revision', async () => {
@@ -372,9 +404,9 @@ test('separates the instance module and keeps a second create action discoverabl
   expect(await screen.findByRole('heading', { name: 'CLIProxyAPI 实例管理' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '+ 创建实例' })).toBeInTheDocument()
   const management = screen.getByRole('button', { name: /CPA 管理/ })
-  expect(management).toHaveClass('button', 'ghost')
-  expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger-outline')
-  expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' })
+  expect(management).toHaveClass('button', 'primary')
+  expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger')
+  expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' })
 })
 
 test('loads quota settings on demand and saves the refresh and DingTalk rules', async () => {
@@ -432,13 +464,19 @@ test('locks all instance actions synchronously while one restart request is pend
   const user = userEvent.setup()
   render(<App />)
   await screen.findByText('aaa')
-  const restartButtons = screen.getAllByRole('button', { name: '重启实例' })
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  const restartButtons = screen.getAllByRole('button', { name: '重启服务' })
+  await user.click(restartButtons[0])
+  await user.click(screen.getAllByRole('button', { name: /^停止$/ })[0])
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(fetchMock.mock.calls.some(([input]) => /\/cpa_1\/(restart|stop)$/.test(String(input)))).toBe(false)
+  confirm.mockReturnValue(true)
   await user.click(restartButtons[0])
   await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => input === '/api/instances/cpa_1/restart')).toBe(true))
   expect(screen.getByRole('button', { name: '处理中…' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: '重启实例' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '重启服务' })).toBeEnabled()
   expect(fetchMock.mock.calls.filter(([input]) => input === '/api/instances/cpa_2/restart')).toHaveLength(0)
   releaseRestart(response({ status: 'restarting' }))
-  await waitFor(() => expect(screen.getAllByRole('button', { name: '重启实例' })).toHaveLength(2))
+  await waitFor(() => expect(screen.getAllByRole('button', { name: '重启服务' })).toHaveLength(2))
 })
 

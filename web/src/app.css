@@ -555,9 +555,14 @@ body { background: var(--bg-secondary); }
 .settings-actions { margin-top: 22px; }
 .settings-actions .button { min-height: 40px; font-size: 13px; }
 .settings-inline-error { margin: 0 0 14px; padding: 10px 12px; border: 1px solid rgb(189 91 76 / 35%); border-radius: 8px; background: var(--red-soft); color: var(--red); font-size: 12px; }
-.quota-instance-list { display: grid; gap: 14px; }
-.quota-instance-card { padding: 23px 25px 21px; border: 1px solid var(--line); border-radius: 15px; background: var(--floating-surface); box-shadow: none; }
-.quota-instance-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.quota-instance-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.quota-instance-card { min-width: 0; padding: 18px 16px; border: 1px solid var(--line); border-radius: 15px; background: var(--floating-surface); box-shadow: none; }
+.quota-instance-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.quota-instance-head > div { min-width: 0; overflow-wrap: anywhere; }
+.quota-instance-head .button { flex-shrink: 0; }
+.quota-instance-card .quota-row { padding: 12px; }
+.quota-instance-card .quota-window-meta { flex-wrap: wrap; gap: 4px 8px; }
+.quota-instance-card .quota-window-meta span { overflow: visible; white-space: normal; }
 .quota-instance-head h2 { margin: 7px 0 3px; color: var(--ink); font-size: 21px; font-weight: 750; letter-spacing: -.04em; }
 .quota-instance-head p { margin: 0; color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
 .quota-instance-head .button { min-height: 37px; font-size: 13px; }
@@ -569,6 +574,13 @@ body { background: var(--bg-secondary); }
 .version-row strong { font-size: 13px; }
 .version-row small { font-size: 11px; }
 .version-state { font-size: 11px; }
+
+@media (max-width: 1200px) {
+  .quota-instance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 620px) {
+  .quota-instance-list { grid-template-columns: minmax(0, 1fr); }
+}
 
 @media (max-width: 760px) {
   .module-pane, .versions-module { padding-top: 31px; }
@@ -657,6 +669,10 @@ body { background: var(--bg-secondary); }
 .settings-block-heading .brand-logo { padding: 4px; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 13px; }
 .settings-grid label { min-width: 0; }
+.settings-dialog .settings-grid { display: grid; row-gap: 12px; margin-top: 14px; }
+.settings-dialog .settings-grid > label { margin: 0; gap: 6px; }
+.settings-dialog .logo-setting { margin-top: 14px; padding: 12px; }
+.settings-dialog .settings-block { margin-top: 18px; padding-top: 16px; }
 .settings-grid .settings-wide { grid-column: 1 / -1; }
 .settings-hint { margin: 3px 0 0 !important; color: var(--quiet) !important; font-size: 10px !important; }
 .logo-setting { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 21px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg-secondary); }
@@ -697,6 +713,7 @@ body { background: var(--bg-secondary); }
 }
 
 @media (max-width: 620px) {
+  .settings-dialog .settings-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-grid { display: block; }
   .settings-dialog { padding: 23px 20px; }
   .logo-setting { display: block; }

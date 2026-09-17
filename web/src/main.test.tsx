@@ -103,6 +103,32 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   expect(screen.getByText(/09\/19/)).toBeInTheDocument()
 })
 
+test('shows two OAuth accounts by default and reveals more accounts from a selector', async () => {
+  vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any)
+    .mockImplementationOnce(() => response({ items: [
+      { instance_id: 'cpa_1', account_id: 'oauth-1', provider: 'openai', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 80, total: 100, unit: '%' }] },
+      { instance_id: 'cpa_1', account_id: 'oauth-2', provider: 'openai', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 70, total: 100, unit: '%' }] },
+      { instance_id: 'cpa_1', account_id: 'oauth-3', provider: 'openai', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 60, total: 100, unit: '%' }] }
+    ] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(await screen.findByRole('button', { name: '额度详情' }))
+  const dialog = await screen.findByRole('dialog', { name: 'OAuth 额度详情' })
+  expect(within(dialog).getByText('OAuth 配额（2 个账户）')).toBeInTheDocument()
+  const defaultRows = within(dialog.querySelector('.quota-detail-panel .quota-rows') as HTMLElement)
+  expect(defaultRows.getByText('openai · oauth-1')).toBeInTheDocument()
+  expect(defaultRows.getByText('openai · oauth-2')).toBeInTheDocument()
+  expect(defaultRows.queryByText('openai · oauth-3')).not.toBeInTheDocument()
+
+  await user.selectOptions(within(dialog).getByRole('combobox', { name: '选择其他 OAuth 账户' }), 'oauth-3')
+  expect(within(dialog.querySelector('.quota-detail-additional .quota-rows') as HTMLElement).getByText('openai · oauth-3')).toBeInTheDocument()
+})
+
 test('reports partial quota refresh failures while keeping successful instances visible', async () => {
   const instances = [
     { id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } },

@@ -190,6 +190,8 @@ test('shows installed versions and submits a unified upgrade', async () => {
   const user = userEvent.setup()
   render(<App />)
   expect(await screen.findByText('v2')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '版本管理' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '下载版本' })).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: '统一升级' }))
   await waitFor(() => expect(screen.queryByText('v1')).not.toBeInTheDocument())
 })
@@ -277,6 +279,79 @@ test('opens administrator settings from the avatar and submits a password change
   expect((patchCall[1] as RequestInit).method).toBe('PATCH')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toEqual({ current_password: 'admin', new_password: 'new-password' })
   expect(screen.getByRole('status')).toHaveTextContent('管理员密码已更新')
+})
+
+test('loads and saves editable controller branding', async () => {
+  const branding = {
+    brand_name: 'Northstar CPA',
+    brand_subtitle: 'OPERATIONS CENTER',
+    banner_title: '让流量有序抵达。',
+    banner_description: '内部代理实例统一管理与健康观察。',
+    page_title: 'Northstar 控制台',
+    page_description: 'Northstar CPA 本地控制平面',
+    copyright: '© 2026 Northstar Labs',
+    icon: '✦'
+  }
+  const saved = { ...branding, brand_name: 'Northstar Platform', banner_title: '让流量稳定抵达。' }
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin', branding }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+  const user = userEvent.setup()
+  render(<App />)
+  expect(await screen.findByText(branding.banner_title)).toBeInTheDocument()
+  expect(screen.getByText(branding.brand_name)).toBeInTheDocument()
+  expect(screen.getByText(branding.copyright)).toBeInTheDocument()
+  expect(document.title).toBe(branding.page_title)
+  expect(document.querySelector('meta[name="description"]')).toHaveAttribute('content', branding.page_description)
+  await user.click(screen.getAllByRole('button', { name: '管理员设置' })[0])
+  expect(await screen.findByRole('heading', { name: '管理员设置' })).toBeInTheDocument()
+  expect(screen.getByLabelText('品牌名称')).toHaveValue(branding.brand_name)
+  await user.clear(screen.getByLabelText('品牌名称'))
+  await user.type(screen.getByLabelText('品牌名称'), saved.brand_name)
+  await user.clear(screen.getByLabelText('登录页横幅标题'))
+  await user.type(screen.getByLabelText('登录页横幅标题'), saved.banner_title)
+  fetchMock.mockImplementationOnce(() => response(saved) as any)
+  await user.click(screen.getByRole('button', { name: '保存品牌设置' }))
+  await waitFor(() => expect(screen.getByText(saved.banner_title)).toBeInTheDocument())
+  const patchCall = fetchMock.mock.calls[4]
+  expect(patchCall[0]).toBe('/api/branding')
+  expect((patchCall[1] as RequestInit).method).toBe('PATCH')
+  expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ brand_name: saved.brand_name, banner_title: saved.banner_title, icon: branding.icon })
+})
+
+test('uploads a logo and persists it with controller branding', async () => {
+  const saved = {
+    brand_name: 'CPA',
+    brand_subtitle: 'CONTROL CENTER',
+    banner_title: '静候流量。',
+    banner_description: 'CPA 总控 · 统一管理本机的 CLI Proxy API 实例。',
+    page_title: 'CLI Proxy API Management Center',
+    page_description: 'CPA 总控 · Local Control Plane',
+    copyright: '© 2026 Multi CLIProxyAPI',
+    icon: '',
+    logo: 'data:image/png;base64,iVBORw0KGgo='
+  }
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('静候流量。')
+  await user.click(screen.getAllByRole('button', { name: '管理员设置' })[0])
+  const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'logo.png', { type: 'image/png' })
+  await user.upload(screen.getByLabelText('上传品牌 Logo'), file)
+  await waitFor(() => expect(screen.getByRole('button', { name: '移除 Logo' })).toBeInTheDocument())
+  fetchMock.mockImplementationOnce(() => response(saved) as any)
+  await user.click(screen.getByRole('button', { name: '保存品牌设置' }))
+  await waitFor(() => expect(screen.queryByRole('heading', { name: '管理员设置' })).not.toBeInTheDocument())
+  const patchCall = fetchMock.mock.calls[4]
+  expect(patchCall[0]).toBe('/api/branding')
+  expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ logo: saved.logo })
+  expect(document.querySelector('link[rel="icon"]')).toHaveAttribute('href', saved.logo)
 })
 
 

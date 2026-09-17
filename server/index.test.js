@@ -15,6 +15,13 @@ test('controller defaults the first administrator password to admin and accepts 
   assert.equal(readConfig([], { MULTI_CPA_ADMIN_PASSWORD: 'custom-initial-password' }).adminPassword, 'custom-initial-password')
 })
 
+test('controller defaults to info logging and accepts a custom level and file', () => {
+  assert.equal(readConfig([], {}).logLevel, 'info')
+  assert.equal(readConfig([], { MULTI_CPA_LOG_LEVEL: 'DEBUG', MULTI_CPA_LOG_FILE: '/tmp/multi-cpa.log' }).logLevel, 'debug')
+  assert.equal(readConfig([], { MULTI_CPA_LOG_LEVEL: 'DEBUG', MULTI_CPA_LOG_FILE: '/tmp/multi-cpa.log' }).logFile, '/tmp/multi-cpa.log')
+  assert.throws(() => readConfig([], { MULTI_CPA_LOG_LEVEL: 'verbose' }), /debug, info, warn, error/)
+})
+
 test('relative data directories resolve before preparing absolute CPA executable paths', () => {
   assert.equal(readConfig(['--data-dir', './testdata'], {}).dataDir, path.resolve('testdata'))
   assert.equal(readConfig([], { MULTI_CPA_DATA_DIR: './testdata' }).dataDir, path.resolve('testdata'))

@@ -45,6 +45,7 @@ function logLimit(url) { const limit = Number(url.searchParams.get('limit') || 2
 function auditTarget(request, pathname) {
   if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method)) return null
   if (pathname === '/api/auth/password') return { action: 'auth.password.change', resource_type: 'administrator', resource_id: 'admin' }
+  if (pathname === '/api/branding') return { action: 'branding.update', resource_type: 'branding', resource_id: 'singleton' }
   if (pathname === '/api/instances') return { action: 'instance.create', resource_type: 'instance', resource_id: '' }
   if (pathname === '/api/quota/settings') return { action: 'quota.settings.update', resource_type: 'quota-settings', resource_id: 'singleton' }
   if (pathname === '/api/versions/install') return { action: 'version.install', resource_type: 'version', resource_id: '' }
@@ -59,7 +60,7 @@ function auditTarget(request, pathname) {
 }
 
 export class Controller {
-  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, store, staticRoot, secureCookies, logger }) }
+  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot, secureCookies, logger }) }
   token(request) { const cookies = parseCookies(request.headers.cookie || ''); return cookies[cookieName] || normalizeBearer(request.headers.authorization || '') }
   authenticated(request) { return this.auth.authenticate(this.token(request)) }
   audit(entry) { try { this.store.appendAuditLog?.(entry) } catch (error) { this.logger?.error?.(error) } }
@@ -95,7 +96,7 @@ export class Controller {
     try { const result = this.auth.login(body.username, body.password, request.socket?.remoteAddress || 'local'); const maxAge = Math.max(1, Math.floor((result.expires.getTime() - Date.now()) / 1000)); const cookie = `${cookieName}=${encodeURIComponent(result.token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${this.secureCookies ? '; Secure' : ''}`; this.audit({ actor, action: 'auth.login', resource_type: 'session', outcome: 'success', client_address: safeClientAddress(request) }); return writeJson(response, 200, { username: body.username, expires_at: result.expires.toISOString() }, { 'Set-Cookie': cookie }) } catch (error) { this.audit({ actor, action: 'auth.login', resource_type: 'session', outcome: 'failed', client_address: safeClientAddress(request), detail: error?.message || 'login failed' }); throw error }
   }
   logout(request, response) { let actor = 'unknown'; try { actor = this.authenticated(request) } catch {}; try { this.auth.logout(this.token(request)) } catch {}; this.audit({ actor, action: 'auth.logout', resource_type: 'session', outcome: 'success', client_address: safeClientAddress(request) }); const cookie = `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${this.secureCookies ? '; Secure' : ''}`; return writeJson(response, 200, { status: 'ok' }, { 'Set-Cookie': cookie }) }
-  authStatus(request, response) { try { return writeJson(response, 200, { authenticated: true, username: this.authenticated(request) }) } catch { return writeJson(response, 200, { authenticated: false }) } }
+  authStatus(request, response) { const branding = this.branding?.get?.(); try { return writeJson(response, 200, { authenticated: true, username: this.authenticated(request), ...(branding ? { branding } : {}) }) } catch { return writeJson(response, 200, { authenticated: false, ...(branding ? { branding } : {}) }) } }
   async routeApi(request, response, url) {
     const route = url.pathname.replace(/^\/api/, '')
     if (route === '/auth/password' && request.method === 'PATCH') { const body = await readJson(request); this.auth.changeAdminPassword(body.current_password, body.new_password); return writeJson(response, 200, { status: 'updated' }) }
@@ -106,6 +107,7 @@ export class Controller {
     if (route === '/operations' && request.method === 'GET') { const limit = Number(url.searchParams.get('limit') || 50); if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Object.assign(new Error('invalid limit'), { status: 400 }); return writeJson(response, 200, { items: this.store.listOperations(limit) }) }
     if (route === '/logs/runtime' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url)) })
     if (route === '/logs/audit' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listAuditLogs(logLimit(url)) })
+    if (route === '/branding' && request.method === 'PATCH') { if (!this.branding) throw new Error('branding service unavailable'); const body = await readJson(request, 512 * 1024); return writeJson(response, 200, this.branding.update(body)) }
     if (route === '/quota/settings' && request.method === 'GET') return writeJson(response, 200, this.quota.getSettings())
     if (route === '/quota/settings' && request.method === 'PATCH') { const body = await readJson(request); return writeJson(response, 200, this.quota.updateSettings(body)) }
     if (route === '/versions/install' && request.method === 'POST') { if (!this.installer) throw new Error('version installer unavailable'); const body = await readJson(request); const installed = await this.installer.install(body.version || ''); this.store.saveVersion(installed); const instances = this.store.listInstances(); if (!instances.length && this.activator) await this.activator.activateVersion(installed.tag); this.instances.setDefaultVersionIfEmpty(installed.tag); const { path: _path, ...publicVersion } = installed; return writeJson(response, 201, publicVersion) }

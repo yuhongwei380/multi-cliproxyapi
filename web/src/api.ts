@@ -59,6 +59,18 @@ export type UpgradeState = {
   updated_at?: string
 }
 
+export type BrandingSettings = {
+  brand_name: string
+  brand_subtitle: string
+  banner_title: string
+  banner_description: string
+  page_title: string
+  page_description: string
+  copyright: string
+  icon: string
+  logo: string
+}
+
 export type RuntimeLog = { id: number; level: string; source: string; instance_id?: string; message: string; context?: Record<string, unknown>; created_at: string }
 export type AuditLog = { id: number; actor: string; action: string; resource_type?: string; resource_id?: string; outcome: string; client_address?: string; detail?: string; created_at: string }
 

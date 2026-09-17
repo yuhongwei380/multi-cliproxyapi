@@ -73,6 +73,18 @@ export class Store {
         webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
         webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS branding_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        brand_name TEXT NOT NULL,
+        brand_subtitle TEXT NOT NULL DEFAULT '',
+        banner_title TEXT NOT NULL,
+        banner_description TEXT NOT NULL,
+        page_title TEXT NOT NULL,
+        page_description TEXT NOT NULL,
+        copyright TEXT NOT NULL DEFAULT '',
+        icon TEXT NOT NULL DEFAULT '',
+        logo TEXT NOT NULL DEFAULT ''
+      );
       CREATE TABLE IF NOT EXISTS operations (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
@@ -139,6 +151,8 @@ export class Store {
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
     if (!quotaColumns.has('webhook_url_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_url_ciphertext TEXT NOT NULL DEFAULT ''")
+    const brandingColumns = new Set(this.db.prepare('PRAGMA table_info(branding_settings)').all().map(row => row.name))
+    if (!brandingColumns.has('logo')) this.db.exec("ALTER TABLE branding_settings ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
     this.db.prepare('INSERT OR IGNORE INTO quota_settings(id, refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext) VALUES(1, 360, 0, \'\', 20, 0, \'\', \'\')').run()
     if (file !== ':memory:') {
       const info = fs.lstatSync(file)
@@ -239,6 +253,18 @@ export class Store {
       VALUES(1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET refresh_interval_minutes=excluded.refresh_interval_minutes, webhook_enabled=excluded.webhook_enabled, webhook_url=excluded.webhook_url, alert_threshold_percent=excluded.alert_threshold_percent, webhook_signing_enabled=excluded.webhook_signing_enabled, webhook_signing_secret_ciphertext=excluded.webhook_signing_secret_ciphertext, webhook_url_ciphertext=excluded.webhook_url_ciphertext`).run(
       settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.webhook_url || '', settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, ciphertext, urlCiphertext)
     return this.getQuotaSettings()
+  }
+
+  getBranding() {
+    const row = this.db.prepare('SELECT brand_name, brand_subtitle, banner_title, banner_description, page_title, page_description, copyright, icon, logo FROM branding_settings WHERE id=1').get()
+    if (!row) return null
+    return { brand_name: row.brand_name, brand_subtitle: row.brand_subtitle || '', banner_title: row.banner_title, banner_description: row.banner_description, page_title: row.page_title, page_description: row.page_description, copyright: row.copyright || '', icon: row.icon || '', logo: row.logo || '' }
+  }
+  saveBranding(settings) {
+    this.db.prepare(`INSERT INTO branding_settings(id, brand_name, brand_subtitle, banner_title, banner_description, page_title, page_description, copyright, icon, logo)
+      VALUES(1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET brand_name=excluded.brand_name, brand_subtitle=excluded.brand_subtitle, banner_title=excluded.banner_title, banner_description=excluded.banner_description, page_title=excluded.page_title, page_description=excluded.page_description, copyright=excluded.copyright, icon=excluded.icon, logo=excluded.logo`).run(
+      settings.brand_name, settings.brand_subtitle || '', settings.banner_title, settings.banner_description, settings.page_title, settings.page_description, settings.copyright || '', settings.icon || '', settings.logo || '')
+    return this.getBranding()
   }
 
   saveOperation(operation) {

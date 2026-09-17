@@ -78,7 +78,7 @@ test('shows quota values returned by the child instance', async () => {
     .mockImplementationOnce(() => response({ state: 'idle' }) as any)
 
   render(<App />)
-  expect(await screen.findByText('查看 OAuth 配额（1 个账户）')).toBeInTheDocument()
+  expect(await screen.findByText('OAuth 配额（1 个账户）')).toBeInTheDocument()
   expect(screen.getByText('3 / 10 requests')).toBeInTheDocument()
 })
 
@@ -141,7 +141,7 @@ test('distinguishes a successful zero-account discovery from no snapshot', async
 
   render(<App />)
   expect(await screen.findByText('0 个账户')).toBeInTheDocument()
-  expect(screen.getByText('查看 OAuth 配额（0 个账户）')).toBeInTheDocument()
+  expect(screen.getByText('OAuth 配额（0 个账户）')).toBeInTheDocument()
 })
 
 test('edits managed instance fields with the current revision', async () => {
@@ -372,9 +372,9 @@ test('separates the instance module and keeps a second create action discoverabl
   expect(await screen.findByRole('heading', { name: 'CLIProxyAPI 实例管理' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '+ 创建实例' })).toBeInTheDocument()
   const management = screen.getByRole('button', { name: /CPA 管理/ })
-  expect(management).toHaveClass('button', 'ghost')
-  expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger-outline')
-  expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' })
+  expect(management).toHaveClass('button', 'primary')
+  expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger')
+  expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' })
 })
 
 test('loads quota settings on demand and saves the refresh and DingTalk rules', async () => {
@@ -432,13 +432,19 @@ test('locks all instance actions synchronously while one restart request is pend
   const user = userEvent.setup()
   render(<App />)
   await screen.findByText('aaa')
-  const restartButtons = screen.getAllByRole('button', { name: '重启实例' })
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  const restartButtons = screen.getAllByRole('button', { name: '重启服务' })
+  await user.click(restartButtons[0])
+  await user.click(screen.getAllByRole('button', { name: /^停止$/ })[0])
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(fetchMock.mock.calls.some(([input]) => /\/cpa_1\/(restart|stop)$/.test(String(input)))).toBe(false)
+  confirm.mockReturnValue(true)
   await user.click(restartButtons[0])
   await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => input === '/api/instances/cpa_1/restart')).toBe(true))
   expect(screen.getByRole('button', { name: '处理中…' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: '重启实例' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '重启服务' })).toBeEnabled()
   expect(fetchMock.mock.calls.filter(([input]) => input === '/api/instances/cpa_2/restart')).toHaveLength(0)
   releaseRestart(response({ status: 'restarting' }))
-  await waitFor(() => expect(screen.getAllByRole('button', { name: '重启实例' })).toHaveLength(2))
+  await waitFor(() => expect(screen.getAllByRole('button', { name: '重启服务' })).toHaveLength(2))
 })
 

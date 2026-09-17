@@ -399,7 +399,16 @@ body { background: var(--bg-secondary); }
 .section-heading { align-items: flex-start; margin: 0 0 18px; }
 .section-heading h2 { margin-top: 8px; font-size: 27px; font-weight: 750; letter-spacing: -.06em; }
 .section-heading p { margin-top: 5px; color: var(--muted); font-size: 12px; }
-.instance-list { gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.instance-list { gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; }
+.instance-card { min-width: 0; }
+.instance-card .card-top { flex-wrap: wrap; }
+.instance-card .instance-title, .instance-card .instance-title > div { min-width: 0; }
+.instance-card .card-actions .button { min-width: 0; padding-inline: 9px; }
+.instance-card .card-actions .delete-instance { margin-left: auto; }
+.instance-card .management-link { color: #fff; }
+.instance-card .quota-row { padding: 12px; }
+.instance-card .quota-window-meta { flex-wrap: wrap; }
+.quota-heading { padding: 10px 12px; font-size: 12px; font-weight: 650; }
 .instance-card { padding: 22px 24px 19px; border-color: var(--line); border-radius: 15px; background: var(--floating-surface); box-shadow: none; }
 .instance-card:hover { border-color: var(--line-hover); box-shadow: var(--shadow); transform: none; }
 .instance-card.is-running { border-left: 3px solid var(--green); padding-left: 22px; }
@@ -513,7 +522,10 @@ body { background: var(--bg-secondary); }
 .combined-metrics strong { display: block; margin-top: 8px; color: var(--ink); font-size: 27px; font-weight: 760; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
 .combined-metrics strong small, .quota-overview-card strong small { color: var(--muted); font-size: 13px; font-weight: 550; letter-spacing: 0; }
 .combined-metrics em { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; font-style: normal; }
-.instance-card { padding: 25px 27px 21px; }
+.instance-card { padding: 18px 16px; }
+.instance-card .quota-row-head { flex-wrap: wrap; }
+.instance-card .quota-row-head strong { white-space: normal; overflow-wrap: anywhere; }
+.instance-card .card-meta strong { overflow-wrap: anywhere; }
 .instance-title h3 { font-size: 20px; }
 .instance-title p { font-size: 12px; }
 .state-pill { padding: 5px 10px; font-size: 12px; }
@@ -576,6 +588,7 @@ body { background: var(--bg-secondary); }
 .version-state { font-size: 11px; }
 
 @media (max-width: 1200px) {
+  .instance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quota-instance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {

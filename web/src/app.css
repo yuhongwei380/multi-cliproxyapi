@@ -399,7 +399,7 @@ body { background: var(--bg-secondary); }
 .section-heading { align-items: flex-start; margin: 0 0 18px; }
 .section-heading h2 { margin-top: 8px; font-size: 27px; font-weight: 750; letter-spacing: -.06em; }
 .section-heading p { margin-top: 5px; color: var(--muted); font-size: 12px; }
-.instance-list { gap: 14px; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; }
+.instance-list { gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
 .instance-card { min-width: 0; }
 .instance-card .card-top { flex-wrap: wrap; }
 .instance-card .instance-title, .instance-card .instance-title > div { min-width: 0; }

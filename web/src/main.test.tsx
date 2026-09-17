@@ -374,7 +374,7 @@ test('separates the instance module and keeps a second create action discoverabl
   const management = screen.getByRole('button', { name: /CPA 管理/ })
   expect(management).toHaveClass('button', 'primary')
   expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger')
-  expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' })
+  expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' })
 })
 
 test('loads quota settings on demand and saves the refresh and DingTalk rules', async () => {

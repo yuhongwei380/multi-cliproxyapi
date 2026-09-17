@@ -1060,11 +1060,35 @@ body { background: var(--bg-secondary); }
 .quota-detail-dialog .quota-rows {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 18px;
+  gap: 12px 16px;
+  border-top: 0;
+  background: transparent;
 }
 .quota-detail-dialog .quota-row {
   min-width: 0;
-  padding: 18px 0;
+  padding: 16px 17px 17px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+.quota-detail-dialog .quota-row-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px 12px;
+}
+.quota-detail-dialog .quota-row-head strong {
+  min-width: 0;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+  text-overflow: clip;
+  white-space: normal;
+}
+.quota-detail-dialog .quota-row-head .quota-state {
+  justify-self: end;
+  margin-top: 2px;
 }
 .quota-detail-dialog .quota-values {
   gap: 16px;

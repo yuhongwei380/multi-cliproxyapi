@@ -227,6 +227,25 @@ test('Linux installer accepts regular tar entries and rejects symlinks', { skip:
   }
 })
 
+test('unified upgrade refuses a locked child before touching any instance', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    await f.instances.setLocked(f.second.id, true)
+    const before = f.store.listInstances()
+    let stops = 0
+    const stop = f.runtime.stop.bind(f.runtime)
+    f.runtime.stop = async item => { stops++; return stop(item) }
+    await assert.rejects(f.upgrade.upgrade('v2'), { status: 409 })
+    assert.equal(stops, 0)
+    assert.deepEqual(f.store.listInstances(), before)
+    assert.throws(() => f.store.getUpgradeState(), /upgrade state not found/)
+    await f.instances.setLocked(f.second.id, false)
+    await f.upgrade.upgrade('v2')
+    assert.ok(f.store.listInstances().every(item => item.version === 'v2'))
+  } finally { f.close() }
+})
+
 test('unified upgrade stops old instances, preserves stopped intent, and starts one new version', async () => {
   const f = await upgradeFixture()
   try {

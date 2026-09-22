@@ -224,6 +224,7 @@ export class UpgradeService {
   persist(state) { state.updated_at = this.clock().toISOString(); this.store.saveUpgradeState(state) }
   async upgrade(newVersion) {
     return this.instances.operations.run('global', async () => {
+      for (const instance of this.store.listInstances()) this.instances.assertUnlocked(instance)
       if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable'); let oldState = null
       try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
       const instances = this.store.listInstances(); if (!instances.length || instances.every(item => item.version === newVersion)) return

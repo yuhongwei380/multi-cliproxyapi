@@ -444,6 +444,31 @@ test('loads quota settings on demand and saves the refresh and DingTalk rules', 
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ refresh_interval_minutes: 120, webhook_enabled: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret: 'ding-secret' })
 })
 
+test('instance lock disables disruptive actions and unlock restores them', async () => {
+  let locked = false
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'protected', port: 8317, locked, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any
+    if (path.endsWith('/lock')) locked = true
+    if (path.endsWith('/unlock')) locked = false
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(await screen.findByRole('button', { name: '锁定实例' }))
+  await screen.findByRole('button', { name: '解锁实例' })
+  for (const name of ['重启服务', '停止', '配置', '删除']) expect(screen.getByRole('button', { name })).toBeDisabled()
+  expect(screen.getByText('已锁定')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '解锁实例' }))
+  await screen.findByRole('button', { name: '锁定实例' })
+  expect(screen.getByRole('button', { name: '重启服务' })).toBeEnabled()
+  expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/unlock'))).toBe(true)
+})
+
 test('locks all instance actions synchronously while one restart request is pending', async () => {
   let releaseRestart: (value: unknown) => void = () => undefined
   const restartResponse = new Promise(resolve => { releaseRestart = resolve })

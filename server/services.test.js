@@ -11,6 +11,27 @@ import { AuthService, InstanceService, DeleteService, QuotaService, DingTalkNoti
 import { StaticClient } from './cpa.js'
 import { instanceBinaryPath } from './instance-binary.js'
 
+test('persistent instance lock rejects mutations until unlocked', async () => {
+  const f = fixture()
+  try {
+    const item = await f.instances.create({ name: 'protected', port: await port() })
+    await f.instances.start(item.id)
+    const locked = await f.instances.setLocked(item.id, true)
+    const reopened = new Store(path.join(f.root, 'control.db'))
+    try { assert.equal(reopened.getInstance(item.id).locked, true) } finally { reopened.close() }
+    for (const action of ['stop', 'restart']) await assert.rejects(f.instances[action](item.id), { status: 409 })
+    await assert.rejects(f.instances.update(item.id, { name: 'changed' }), { status: 409 })
+    const deletion = new DeleteService({ store: f.store, instances: f.instances, runtime: f.runtime })
+    assert.throws(() => deletion.preview(item.id), { status: 409 })
+    assert.deepEqual(f.store.getInstance(item.id), locked)
+    assert.equal((await f.runtime.status(item)).state, 'running')
+    await f.instances.setLocked(item.id, false)
+    await f.instances.restart(item.id)
+    await f.instances.stop(item.id)
+    assert.equal((await f.runtime.status(item)).state, 'stopped')
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 // Keep the helper dependency-free and deterministic by reserving an OS port briefly.
 import net from 'node:net'
 async function port() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }

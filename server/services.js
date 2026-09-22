@@ -110,6 +110,19 @@ export class InstanceService {
   runtimeLog(level, instance, message, context = {}) {
     try { this.store.appendRuntimeLog?.({ level, source: 'instance', instance_id: instance?.id || '', message, context, created_at: this.clock().toISOString() }) } catch {}
   }
+  assertUnlocked(instance) {
+    if (instance.locked) throw new ConflictError(`实例「${instance.name}」已锁定，请先解锁`)
+  }
+  async setLocked(instanceId, locked) {
+    return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
+      this.assertUpgradeIdle()
+      const current = this.store.getInstance(instanceId)
+      if (current.locked === locked) return current
+      const next = { ...current, locked, revision: current.revision + 1, updated_at: this.clock().toISOString() }
+      this.store.updateInstance(next, current.revision)
+      return next
+    }))
+  }
   async prepareBinary(instance) { return prepareInstanceBinary(instance, this.binaryByVersion) }
   async withInstanceLock(instanceId, fn) { return this.locks.run(instanceId, fn) }
   assertUpgradeIdle() {
@@ -132,7 +145,7 @@ export class InstanceService {
       if (this.requireVersion) { const installed = this.store.getVersion(version); if (!installed.usable) throw new Error(`CPA version ${version} is not usable`) }
       if (!this.secrets) throw new Error('secret store is unavailable')
       const instanceId = id('cpa'); const directory = path.join(this.root, 'instances', instanceId); const timestamp = this.clock().toISOString()
-      const instance = { id: instanceId, name: input.name, port: input.port, directory, desired_state: DesiredState.STOPPED, version, revision: 1, created_at: timestamp, updated_at: timestamp, management_secret_ciphertext: this.secrets.encrypt(childPassword.secret) }
+      const instance = { id: instanceId, name: input.name, port: input.port, directory, desired_state: DesiredState.STOPPED, locked: false, version, revision: 1, created_at: timestamp, updated_at: timestamp, management_secret_ciphertext: this.secrets.encrypt(childPassword.secret) }
       try {
         ensureDirectory(directory); ensureDirectory(path.join(directory, 'auths')); ensureDirectory(path.join(directory, 'logs'))
         this.writeInitialConfig(instance, childPassword.secret)
@@ -253,6 +266,7 @@ export class InstanceService {
     return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
       if (kind !== 'stop') this.assertUpgradeIdle()
       let instance = this.store.getInstance(instanceId)
+      if (['stop', 'restart'].includes(kind)) this.assertUnlocked(instance)
       if (desired && kind !== 'stop') { const next = { ...instance, desired_state: desired, revision: instance.revision + 1, updated_at: this.clock().toISOString() }; this.store.updateInstance(next, instance.revision); instance = next }
       const operation = { id: id('op'), kind, instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }
       this.store.saveOperation(operation)
@@ -298,7 +312,7 @@ export class InstanceService {
   async update(instanceId, input) {
     return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
       this.assertUpgradeIdle()
-      const current = this.store.getInstance(instanceId); const expected = input.expected_revision || current.revision; if (expected !== current.revision) throw new ConflictError('instance revision conflict'); const next = { ...current }
+      const current = this.store.getInstance(instanceId); this.assertUnlocked(current); const expected = input.expected_revision || current.revision; if (expected !== current.revision) throw new ConflictError('instance revision conflict'); const next = { ...current }
       await this.prepareBinary(current)
       const passwordProvided = Object.prototype.hasOwnProperty.call(input, 'management_password') && input.management_password !== undefined && input.management_password !== null && input.management_password !== ''
       if (Object.prototype.hasOwnProperty.call(input, 'management_password') && input.management_password !== undefined && input.management_password !== null && typeof input.management_password !== 'string') throw ErrInvalidInstance('management password must be a string')
@@ -374,12 +388,12 @@ export class InstanceService {
 
 export class DeleteService {
   constructor({ store, runtime, units, instances, auth, clock = () => new Date(), challengeTtlMs = 10 * 60 * 1000 } = {}) { this.store = store; this.runtime = runtime; this.units = units; this.instances = instances; this.auth = auth; this.clock = clock; this.challengeTtlMs = challengeTtlMs; this.running = new Set() }
-  preview(instanceId) { const instance = this.store.getInstance(instanceId); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
+  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
   async confirm(instanceId, challengeId, password) {
     if (!this.auth) throw new Error('authentication service unavailable'); this.auth.verifyAdminPassword(password); if (this.running.has(instanceId)) throw new Error('delete already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
-        const instance = this.store.getInstance(instanceId); this.store.consumeDeleteChallenge(challengeId, instanceId, instance.revision, this.clock().toISOString()); const operation = { id: id('op'), kind: 'delete', instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }; this.store.saveOperation(operation)
+        const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); this.store.consumeDeleteChallenge(challengeId, instanceId, instance.revision, this.clock().toISOString()); const operation = { id: id('op'), kind: 'delete', instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }; this.store.saveOperation(operation)
         try { await this.remove(instance); operation.state = 'succeeded'; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation) }
         catch (error) { operation.state = 'failed'; operation.message = error.message; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation); throw error }
       }))

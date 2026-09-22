@@ -19,6 +19,28 @@ async function fixture() {
 }
 async function closeFixture(f) { f.server.closeAllConnections?.(); f.server.close(); f.store.close() }
 
+test('lock API rejects direct mutations and records lock audit events', async () => {
+  const f = await fixture()
+  try {
+    const item = await f.instances.create({ name: 'locked-http', port: await freePort() })
+    const base = `${f.url}/api/instances/${item.id}`
+    assert.equal((await fetch(`${base}/lock`, { method: 'POST' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    const locked = await fetch(`${base}/lock`, { method: 'POST', headers })
+    assert.equal(locked.status, 200)
+    assert.equal((await locked.json()).locked, true)
+    for (const action of ['restart', 'stop', 'delete-challenge']) assert.equal((await fetch(`${base}/${action}`, { method: 'POST', headers })).status, 409)
+    assert.equal((await fetch(base, { method: 'PATCH', headers, body: JSON.stringify({ name: 'changed' }) })).status, 409)
+    const unlocked = await fetch(`${base}/unlock`, { method: 'POST', headers })
+    assert.equal((await unlocked.json()).locked, false)
+    const logs = await fetch(`${f.url}/api/logs/audit`, { headers })
+    const entries = (await logs.json()).items
+    assert.ok(entries.some(entry => entry.action === 'instance.lock' && entry.outcome === 'success'))
+    assert.ok(entries.some(entry => entry.action === 'instance.unlock' && entry.outcome === 'success'))
+  } finally { await closeFixture(f) }
+})
+
 test('HTTP API protects management routes and completes create/delete flow', async () => {
   const f = await fixture(); try {
     const health = await fetch(`${f.url}/health`); assert.equal(health.status, 200); assert.equal((await health.json()).status, 'ok')

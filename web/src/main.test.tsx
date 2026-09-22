@@ -8,7 +8,7 @@ function response(body: unknown, status = 200) { return Promise.resolve({ ok: st
 beforeEach(() => { vi.restoreAllMocks(); window.location.hash = '' })
 afterEach(() => { cleanup() })
 
-test('requires login before showing the instance runway', async () => {
+test('requires login before showing instance cards', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: false }) as any)
     .mockImplementationOnce(() => response({ username: 'admin', expires_at: '2030-01-01T00:00:00Z' }) as any)

@@ -168,6 +168,7 @@ a { color: inherit; }
 .version-heading { display: block; }
 .version-heading h2 { margin: 5px 0 3px; color: var(--ink); font-size: 17px; font-weight: 650; letter-spacing: -.025em; }
 .version-heading p { margin: 0; color: var(--muted); font-size: 11px; }
+.version-heading .version-lock-hint { margin-top: 6px; color: var(--amber); font-size: 11px; font-weight: 650; }
 .version-install { display: flex; gap: 7px; margin-top: 14px; }
 .version-install input { width: 100%; min-width: 0; height: 36px; flex: 1; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); outline: none; background: var(--bg-secondary); color: var(--ink); font-size: 11px; }
 .version-install input:focus { border-color: var(--primary-color); box-shadow: 0 0 0 3px rgb(139 134 128 / 18%); }

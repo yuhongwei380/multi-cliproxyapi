@@ -228,6 +228,39 @@ test('shows installed versions and submits a unified upgrade', async () => {
   await waitFor(() => expect(screen.queryByText('v1')).not.toBeInTheDocument())
 })
 
+test('unified upgrade stays available for unlocked instances when some children are locked', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'open', port: 8317, locked: false, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }, { id: 'cpa_2', name: 'protected', port: 8318, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [{ tag: 'v2', asset: 'cpa-v2-linux-amd64.tar.gz', installed_at: '2030-01-01T00:00:00Z', usable: true }, { tag: 'v1', asset: 'cpa-v1-linux-amd64.tar.gz', installed_at: '2029-01-01T00:00:00Z', usable: true }] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  render(<App />)
+  const upgrade = await screen.findByRole('button', { name: '统一升级' })
+  expect(upgrade).toBeEnabled()
+  expect(screen.getByText('本次只会升级未锁定实例，已锁定实例保持不变。')).toBeInTheDocument()
+})
+
+test('unified upgrade is disabled when every child is locked', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }, { id: 'cpa_2', name: 'two', port: 8318, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [{ tag: 'v2', asset: 'cpa-v2-linux-amd64.tar.gz', installed_at: '2030-01-01T00:00:00Z', usable: true }, { tag: 'v1', asset: 'cpa-v1-linux-amd64.tar.gz', installed_at: '2029-01-01T00:00:00Z', usable: true }] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  render(<App />)
+  const upgrade = await screen.findByRole('button', { name: '统一升级' })
+  expect(upgrade).toBeDisabled()
+  expect(upgrade).toHaveAttribute('title', '所有实例均已锁定，请先解锁至少一个实例')
+  expect(screen.getByText('所有实例均已锁定，无法统一升级。请先解锁至少一个实例。')).toBeInTheDocument()
+})
+
 test('confirms and submits uninstall for an old version while keeping the current version', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)

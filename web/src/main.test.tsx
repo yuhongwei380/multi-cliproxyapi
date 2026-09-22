@@ -464,9 +464,14 @@ test('instance lock disables disruptive actions and unlock restores them', async
   for (const name of ['重启服务', '停止', '配置', '删除']) expect(screen.getByRole('button', { name })).toBeDisabled()
   expect(screen.getByText('已锁定')).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: '解锁实例' }))
+  const unlockPassword = await screen.findByLabelText('输入总控管理员密码确认解锁')
+  await user.type(unlockPassword, 'administrator-password')
+  await user.click(screen.getByRole('button', { name: '确认解锁' }))
   await screen.findByRole('button', { name: '锁定实例' })
   expect(screen.getByRole('button', { name: '重启服务' })).toBeEnabled()
-  expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/unlock'))).toBe(true)
+  const unlockCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/unlock'))
+  expect(unlockCall).toBeTruthy()
+  expect(JSON.parse(String((unlockCall?.[1] as RequestInit).body))).toEqual({ admin_password: 'administrator-password' })
 })
 
 test('locks all instance actions synchronously while one restart request is pending', async () => {

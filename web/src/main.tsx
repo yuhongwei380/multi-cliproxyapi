@@ -6,7 +6,7 @@ import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot
 import './app.css'
 import './management-link.css'
 
-type Modal = 'create' | 'delete' | 'edit' | 'uninstall-version' | 'admin-settings' | null
+type Modal = 'create' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
 type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
@@ -68,6 +68,7 @@ function App() {
   const [instanceBusy, setInstanceBusy] = useState<Record<string, string>>({})
   const [modal, setModal] = useState<Modal>(null)
   const [deleteTarget, setDeleteTarget] = useState<Instance | null>(null)
+  const [unlockTarget, setUnlockTarget] = useState<Instance | null>(null)
   const [editTarget, setEditTarget] = useState<Instance | null>(null)
   const [uninstallTarget, setUninstallTarget] = useState<VersionInstall | null>(null)
   const [challenge, setChallenge] = useState<string | null>(null)
@@ -170,9 +171,16 @@ function App() {
     if (window.location.hash !== href) window.location.hash = href
   }
 
+  const beginUnlock = (instance: Instance) => {
+    setUnlockTarget(instance)
+    setModal('unlock')
+    setError('')
+  }
+
   const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => {
     if (instanceActionLock.current.has(instance.id)) return
     if (instance.locked && (action === 'restart' || action === 'stop')) return
+    if (action === 'unlock') { beginUnlock(instance); return }
     if ((action === 'restart' || action === 'stop') && !window.confirm(`确认${action === 'restart' ? '重启' : '停止'}实例「${instance.name}」？这会中断当前请求。`)) return
     instanceActionLock.current.add(instance.id)
     setInstanceBusy(previous => ({ ...previous, [instance.id]: action }))
@@ -320,6 +328,7 @@ function App() {
     {modal === 'create' && <CreateDialog onClose={() => setModal(null)} onCreated={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'edit' && editTarget && <EditDialog instance={editTarget} onClose={() => setModal(null)} onSaved={() => { setModal(null); setEditTarget(null); void load() }} onError={setError} />}
     {modal === 'delete' && deleteTarget && <DeleteDialog instance={deleteTarget} challenge={challenge} onClose={() => setModal(null)} onDeleted={() => { setModal(null); void load() }} onError={setError} />}
+    {modal === 'unlock' && unlockTarget && <UnlockDialog instance={unlockTarget} onClose={() => { setModal(null); setUnlockTarget(null) }} onUnlocked={() => { setModal(null); setUnlockTarget(null); void load() }} onError={setError} />}
     {modal === 'uninstall-version' && uninstallTarget && <UninstallVersionDialog version={uninstallTarget} busy={busy === 'version:uninstall:' + uninstallTarget.tag} onClose={() => { if (!busy) { setModal(null); setUninstallTarget(null) } }} onConfirm={() => void uninstallVersion(uninstallTarget.tag)} />}
     {modal === 'admin-settings' && <AdminSettingsDialog branding={branding} onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('管理员密码已更新') }} onBrandingSaved={saveBranding} />}
   </div>
@@ -662,6 +671,12 @@ function DeleteDialog({ instance, challenge, onClose, onDeleted, onError }: { in
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   return <dialog open className="modal-backdrop"><div className="dialog danger-dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="danger-mark">!</div><div className="eyebrow">IRREVERSIBLE ACTION</div><h2>删除 {instance.name}？</h2><p>这会停止实例并清除它的配置、OAuth 认证数据、日志和注册信息。版本安装缓存和其他实例不会受影响。</p><label>输入总控管理员密码确认<PasswordInput aria-label="输入总控管理员密码确认删除" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button className="button ghost" onClick={onClose}>保留实例</button><button className="button danger" disabled={!challenge || !password || busy} onClick={async () => { setBusy(true); try { await api.post('/instances/' + instance.id + '/delete', { challenge_id: challenge, admin_password: password }); onDeleted() } catch (cause) { onError(cause instanceof Error ? cause.message : '删除失败') } finally { setBusy(false) } }}>{busy ? '删除中…' : '确认删除'}</button></div></div></dialog>
+}
+
+function UnlockDialog({ instance, onClose, onUnlocked, onError }: { instance: Instance; onClose: () => void; onUnlocked: () => void; onError: (error: string) => void }) {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  return <dialog open className="modal-backdrop"><div className="dialog security-dialog"><button className="dialog-close" disabled={busy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true">⌁</div><div className="eyebrow">UNLOCK INSTANCE</div><h2>解锁 {instance.name}</h2><p>解锁会恢复该子实例的配置、停止、重启和删除操作。请输入总控管理员密码确认。</p><form onSubmit={async event => { event.preventDefault(); setBusy(true); try { await api.post('/instances/' + instance.id + '/unlock', { admin_password: password }); onUnlocked() } catch (cause) { onError(cause instanceof Error ? cause.message : '解锁失败') } finally { setBusy(false) } }}><label>总控管理员密码<PasswordInput aria-label="输入总控管理员密码确认解锁" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button type="button" className="button ghost" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={!password || busy}>{busy ? '解锁中…' : '确认解锁'}</button></div></form></div></dialog>
 }
 
 function UninstallVersionDialog({ version, busy, onClose, onConfirm }: { version: VersionInstall; busy: boolean; onClose: () => void; onConfirm: () => void }) {

@@ -405,6 +405,8 @@ test('separates the instance module and keeps a second create action discoverabl
   expect(screen.getByRole('button', { name: '+ 创建实例' })).toBeInTheDocument()
   const management = screen.getByRole('button', { name: /CPA 管理/ })
   expect(management).toHaveClass('button', 'primary')
+  expect(Array.from(document.querySelectorAll('.instance-card .card-top-actions button')).map(button => button.textContent)).toEqual(['锁定实例', 'CPA 管理 ↗', '刷新'])
+  expect(screen.getByText('实例 ID cpa_1')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger')
   expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' })
 })

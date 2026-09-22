@@ -556,7 +556,32 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     const latest = quotas.reduce((value, q) => q.collected_at > value ? q.collected_at : value, '')
     return latest ? accountCount + ' 个账户 · ' + relativeTime(latest) : '无成功快照'
   }, [quotas])
-  return <article className={'instance-card ' + (running ? 'is-running' : '')}><div className="card-top"><div className="instance-title"><span className={'status-orb ' + (running ? 'live' : '')} /><div className="instance-title-copy"><h3>{instance.name}{instance.locked && <span className="state-pill">已锁定</span>}</h3><p className="instance-endpoint"><span className="instance-port">端口 {instance.port}</span><span className="instance-id">· {instance.id}</span></p></div></div><div className="card-top-actions"><span className={'state-pill ' + (actualState === 'running' ? 'live' : '')}>{stateLabel(actualState)}</span><button type="button" className="button ghost card-refresh" disabled={actionBusy} onClick={() => onAction(instance, 'quotas')}>{busy === 'quotas' ? '读取中…' : '刷新'}</button></div></div><div className="card-actions" aria-label={`${instance.name} 操作`}><button type="button" className="button ghost" disabled={actionBusy} onClick={() => onAction(instance, instance.locked ? 'unlock' : 'lock')}>{instance.locked ? '解锁实例' : '锁定实例'}</button><button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onConfigure(instance)}>配置</button><button type="button" className="button primary" disabled={actionBusy || (running && instance.locked)} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button><button type="button" className="button danger" disabled={actionBusy || !running || instance.locked} onClick={() => onAction(instance, 'stop')}>停止</button>{managementUrl && <button type="button" className="button primary management-link" onClick={() => window.open(managementUrl, '_blank', 'noopener,noreferrer')}>CPA 管理 ↗</button>}<button type="button" className="button danger delete-instance" disabled={actionBusy || instance.locked} onClick={() => onDelete(instance)}>删除</button></div><div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div><div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div><div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div><QuotaDetails quotas={quotas} /></article>
+  return <article className={'instance-card ' + (running ? 'is-running' : '')}>
+    <div className="card-top">
+      <div className="instance-title">
+        <span className={'status-orb ' + (running ? 'live' : '')} />
+        <div className="instance-title-copy">
+          <h3>{instance.name}{instance.locked && <span className="state-pill">已锁定</span>}</h3>
+          <p className="instance-endpoint"><span className="instance-port">端口 {instance.port}</span><span className="instance-id">实例 ID {instance.id}</span></p>
+        </div>
+      </div>
+      <div className="card-top-actions" aria-label={`${instance.name} 快捷操作`}>
+        <button type="button" className="button ghost card-lock" disabled={actionBusy} onClick={() => onAction(instance, instance.locked ? 'unlock' : 'lock')}>{instance.locked ? '解锁实例' : '锁定实例'}</button>
+        {managementUrl && <button type="button" className="button primary management-link" onClick={() => window.open(managementUrl, '_blank', 'noopener,noreferrer')}>CPA 管理 ↗</button>}
+        <button type="button" className="button ghost card-refresh" disabled={actionBusy} onClick={() => onAction(instance, 'quotas')}>{busy === 'quotas' ? '读取中…' : '刷新'}</button>
+      </div>
+    </div>
+    <div className="card-actions" aria-label={`${instance.name} 操作`}>
+      <button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onConfigure(instance)}>配置</button>
+      <button type="button" className="button primary" disabled={actionBusy || (running && instance.locked)} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button>
+      <button type="button" className="button danger" disabled={actionBusy || !running || instance.locked} onClick={() => onAction(instance, 'stop')}>停止</button>
+      <button type="button" className="button danger delete-instance" disabled={actionBusy || instance.locked} onClick={() => onDelete(instance)}>删除</button>
+    </div>
+    <div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div>
+    <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
+    <div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>
+    <QuotaDetails quotas={quotas} />
+  </article>
 }
 
 function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {

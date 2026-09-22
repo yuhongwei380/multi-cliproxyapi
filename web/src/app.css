@@ -1235,3 +1235,81 @@ body { background: var(--bg-secondary); }
 .instances-module .card-status {
   margin-top: 11px;
 }
+
+/* Keep the card identity prominent while giving its controls one clear action rail. */
+.instances-module .instance-card {
+  padding-top: 30px;
+  padding-bottom: 28px;
+}
+.instances-module .card-top {
+  gap: 16px;
+}
+.instances-module .instance-endpoint {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 8px;
+  font-family: inherit;
+  line-height: 1.2;
+}
+.instances-module .instance-port,
+.instances-module .instance-id {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: clamp(16px, 1vw, 18px);
+  font-weight: 650;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+}
+.instances-module .instance-port {
+  color: var(--primary-active);
+}
+.instances-module .instance-id {
+  color: var(--muted);
+}
+.instances-module .card-top-actions {
+  gap: 7px;
+}
+.instances-module .card-top-actions .button {
+  min-height: 36px;
+  padding-inline: 10px;
+}
+.instances-module .card-top-actions .management-link {
+  color: #fff;
+}
+.instances-module .instance-card .card-actions {
+  gap: 7px;
+  margin-top: 20px;
+}
+.instances-module .current-state {
+  margin-top: 20px;
+  margin-bottom: 18px;
+}
+.instances-module .card-meta {
+  padding-top: 15px;
+  padding-bottom: 15px;
+}
+.instances-module .card-status {
+  min-height: 23px;
+  margin-top: 13px;
+}
+
+@media (max-width: 760px) {
+  .instances-module .card-top {
+    flex-wrap: wrap;
+  }
+  .instances-module .card-top-actions {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+  .instances-module .card-top-actions .button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 7px;
+  }
+}

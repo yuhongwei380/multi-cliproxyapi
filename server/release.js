@@ -268,7 +268,7 @@ export class UpgradeService {
     return this.instances.operations.run('global', async () => {
     let state; try { state = this.store.getUpgradeState() } catch (error) { if (error.code === 'ERR_NOT_FOUND') return; throw error }
     if ([UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(state.state)) { this.store.clearUpgradeState(); return }
-    const recordedIds = new Set(Object.keys(state.instance_stages || state.original_desired || {})); const instances = this.store.listInstances().filter(instance => !recordedIds.size || recordedIds.has(instance.id)); await this.rollback(state, instances, new Error('upgrade interrupted; recovered to old version'))
+    const recordedStageIds = Object.keys(state.instance_stages || {}); const recordedIds = new Set(recordedStageIds.length ? recordedStageIds : Object.keys(state.original_desired || {})); const instances = this.store.listInstances().filter(instance => !recordedIds.size || recordedIds.has(instance.id)); await this.rollback(state, instances, new Error('upgrade interrupted; recovered to old version'))
     })
   }
 }

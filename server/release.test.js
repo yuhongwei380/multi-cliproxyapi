@@ -332,3 +332,20 @@ test('recovering an interrupted upgrade restores the old version and desired sta
     assert.equal((await f.instances.status(f.second.id)).state, 'stopped')
   } finally { f.close() }
 })
+
+test('recovering a partial upgrade leaves locked children untouched', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    const first = f.store.getInstance(f.first.id)
+    f.store.updateInstance({ ...first, version: 'v2', revision: first.revision + 1 }, first.revision)
+    await f.instances.setLocked(f.second.id, true)
+    const stoppedSecond = await f.instances.status(f.second.id)
+    f.store.saveUpgradeState({ id: 'singleton', state: UpgradeState.STARTING_NEW, old_version: 'v1', new_version: 'v2', original_running: [f.first.id], original_desired: { [f.first.id]: 'running' }, instance_stages: {}, message: '', updated_at: new Date().toISOString() })
+    await f.upgrade.recover()
+    assert.equal(f.store.getInstance(f.first.id).version, 'v1')
+    assert.equal(f.store.getInstance(f.second.id).version, 'v1')
+    assert.equal(f.store.getInstance(f.second.id).locked, true)
+    assert.deepEqual(await f.instances.status(f.second.id), stoppedSecond)
+  } finally { f.close() }
+})

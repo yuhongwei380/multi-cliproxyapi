@@ -227,6 +227,40 @@ test('Linux installer accepts regular tar entries and rejects symlinks', { skip:
   }
 })
 
+test('unified upgrade skips locked children and refuses when all children are locked', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    await f.instances.setLocked(f.second.id, true)
+    let stops = 0
+    const stop = f.runtime.stop.bind(f.runtime)
+    f.runtime.stop = async item => { stops++; return stop(item) }
+    await f.upgrade.upgrade('v2')
+    assert.equal(stops, 1)
+    assert.equal(f.store.getInstance(f.first.id).version, 'v2')
+    assert.equal(f.store.getInstance(f.second.id).version, 'v1')
+    assert.equal(f.store.getInstance(f.second.id).locked, true)
+    assert.equal(f.instances.defaultVersion, 'v2')
+    assert.throws(() => f.store.getUpgradeState(), /upgrade state not found/)
+  } finally { f.close() }
+})
+
+test('unified upgrade refuses when every child is locked before touching any instance', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.setLocked(f.first.id, true)
+    await f.instances.setLocked(f.second.id, true)
+    const before = f.store.listInstances()
+    let stops = 0
+    const stop = f.runtime.stop.bind(f.runtime)
+    f.runtime.stop = async item => { stops++; return stop(item) }
+    await assert.rejects(f.upgrade.upgrade('v2'), error => error.status === 409 && /all instances are locked/.test(error.message))
+    assert.equal(stops, 0)
+    assert.deepEqual(f.store.listInstances(), before)
+    assert.throws(() => f.store.getUpgradeState(), /upgrade state not found/)
+  } finally { f.close() }
+})
+
 test('unified upgrade stops old instances, preserves stopped intent, and starts one new version', async () => {
   const f = await upgradeFixture()
   try {
@@ -296,5 +330,22 @@ test('recovering an interrupted upgrade restores the old version and desired sta
     assert.ok(f.store.listInstances().every(item => item.version === 'v1'))
     assert.equal((await f.instances.status(f.first.id)).state, 'running')
     assert.equal((await f.instances.status(f.second.id)).state, 'stopped')
+  } finally { f.close() }
+})
+
+test('recovering a partial upgrade leaves locked children untouched', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    const first = f.store.getInstance(f.first.id)
+    f.store.updateInstance({ ...first, version: 'v2', revision: first.revision + 1 }, first.revision)
+    await f.instances.setLocked(f.second.id, true)
+    const stoppedSecond = await f.instances.status(f.second.id)
+    f.store.saveUpgradeState({ id: 'singleton', state: UpgradeState.STARTING_NEW, old_version: 'v1', new_version: 'v2', original_running: [f.first.id], original_desired: { [f.first.id]: 'running' }, instance_stages: {}, message: '', updated_at: new Date().toISOString() })
+    await f.upgrade.recover()
+    assert.equal(f.store.getInstance(f.first.id).version, 'v1')
+    assert.equal(f.store.getInstance(f.second.id).version, 'v1')
+    assert.equal(f.store.getInstance(f.second.id).locked, true)
+    assert.deepEqual(await f.instances.status(f.second.id), stoppedSecond)
   } finally { f.close() }
 })

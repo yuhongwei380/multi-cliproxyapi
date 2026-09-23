@@ -1,4 +1,4 @@
-import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
+import { InputHTMLAttributes, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
@@ -6,7 +6,7 @@ import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot
 import './app.css'
 import './management-link.css'
 
-type Modal = 'create' | 'delete' | 'edit' | 'uninstall-version' | 'admin-settings' | null
+type Modal = 'create' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
 type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
@@ -68,6 +68,7 @@ function App() {
   const [instanceBusy, setInstanceBusy] = useState<Record<string, string>>({})
   const [modal, setModal] = useState<Modal>(null)
   const [deleteTarget, setDeleteTarget] = useState<Instance | null>(null)
+  const [unlockTarget, setUnlockTarget] = useState<Instance | null>(null)
   const [editTarget, setEditTarget] = useState<Instance | null>(null)
   const [uninstallTarget, setUninstallTarget] = useState<VersionInstall | null>(null)
   const [challenge, setChallenge] = useState<string | null>(null)
@@ -170,8 +171,16 @@ function App() {
     if (window.location.hash !== href) window.location.hash = href
   }
 
-  const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => {
+  const beginUnlock = (instance: Instance) => {
+    setUnlockTarget(instance)
+    setModal('unlock')
+    setError('')
+  }
+
+  const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => {
     if (instanceActionLock.current.has(instance.id)) return
+    if (instance.locked && (action === 'restart' || action === 'stop')) return
+    if (action === 'unlock') { beginUnlock(instance); return }
     if ((action === 'restart' || action === 'stop') && !window.confirm(`确认${action === 'restart' ? '重启' : '停止'}实例「${instance.name}」？这会中断当前请求。`)) return
     instanceActionLock.current.add(instance.id)
     setInstanceBusy(previous => ({ ...previous, [instance.id]: action }))
@@ -319,6 +328,7 @@ function App() {
     {modal === 'create' && <CreateDialog onClose={() => setModal(null)} onCreated={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'edit' && editTarget && <EditDialog instance={editTarget} onClose={() => setModal(null)} onSaved={() => { setModal(null); setEditTarget(null); void load() }} onError={setError} />}
     {modal === 'delete' && deleteTarget && <DeleteDialog instance={deleteTarget} challenge={challenge} onClose={() => setModal(null)} onDeleted={() => { setModal(null); void load() }} onError={setError} />}
+    {modal === 'unlock' && unlockTarget && <UnlockDialog instance={unlockTarget} onClose={() => { setModal(null); setUnlockTarget(null) }} onUnlocked={() => { setModal(null); setUnlockTarget(null); void load() }} onError={setError} />}
     {modal === 'uninstall-version' && uninstallTarget && <UninstallVersionDialog version={uninstallTarget} busy={busy === 'version:uninstall:' + uninstallTarget.tag} onClose={() => { if (!busy) { setModal(null); setUninstallTarget(null) } }} onConfirm={() => void uninstallVersion(uninstallTarget.tag)} />}
     {modal === 'admin-settings' && <AdminSettingsDialog branding={branding} onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('管理员密码已更新') }} onBrandingSaved={saveBranding} />}
   </div>
@@ -328,7 +338,7 @@ function NavigationLink({ module, activeModule, onNavigate, icon, ariaLabel, chi
   return <a className={'nav-item ' + (module === activeModule ? 'active' : '')} href={moduleHref(module)} aria-label={ariaLabel} aria-current={module === activeModule ? 'page' : undefined} onClick={event => { event.preventDefault(); onNavigate(module) }}><span className="nav-icon" aria-hidden="true">{icon}</span>{children}</a>
 }
 
-function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
+function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
   const running = instances.filter(instance => instance.status?.ready).length
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
@@ -358,7 +368,7 @@ function Overview({ branding, instances, quotas, versions, upgradeState, loading
   </>
 }
 
-function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   return <section className="module-pane instances-module"><section className="section-heading module-heading"><div><div className="eyebrow">CLIPROXYAPI INSTANCES</div><h1>CLIProxyAPI 实例管理</h1><p>创建、停止、重启和配置独立的 CLIProxyAPI 子实例。</p></div><div className="section-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><button className="button ghost" onClick={onRefresh}>重新同步</button></div></section>{loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}</section>
 }
 
@@ -413,15 +423,219 @@ function AuditLogRow({ item }: { item: AuditLog }) {
 function formatLogTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
 function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误' } as Record<string, string>)[level] ?? level }
 function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
-function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
+function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
+
+const LOGIN_COPY = {
+  zh: {
+    language: '界面语言',
+    languageChinese: '中文',
+    languageEnglish: 'English',
+    controlCenter: '总控',
+    lead: '登录以查看实例健康度与 OAuth 配额。',
+    address: '当前地址',
+    addressHint: '总控服务使用当前页面地址建立连接',
+    currentPageAddress: '当前页面地址',
+    defaultPageDescription: 'CPA 总控 · Local Control Plane',
+    username: '用户名',
+    password: '管理员密码',
+    passwordPlaceholder: '请输入管理员密码',
+    verifying: '验证中…',
+    signIn: '进入总控',
+    security: '仅限局域网访问 · 会话由总控服务保护',
+    loginFailed: '登录失败'
+  },
+  en: {
+    language: 'Interface language',
+    languageChinese: '中文',
+    languageEnglish: 'English',
+    controlCenter: 'Control Center',
+    lead: 'Sign in to view instance health and OAuth quotas.',
+    address: 'Current address',
+    addressHint: 'The control service connects using this page address.',
+    currentPageAddress: 'Current page address',
+    defaultPageDescription: 'CPA Management · Local Control Plane',
+    username: 'Username',
+    password: 'Administrator password',
+    passwordPlaceholder: 'Enter the administrator password',
+    verifying: 'Signing in…',
+    signIn: 'Open control center',
+    security: 'Local network access only · Session protected by the control service',
+    loginFailed: 'Sign in failed'
+  }
+} as const
+
+const LOGIN_LANGUAGE_OPTIONS = [
+  { value: 'zh', label: LOGIN_COPY.zh.languageChinese },
+  { value: 'en', label: LOGIN_COPY.en.languageEnglish }
+] as const
 
 function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedIn: (name: string) => void }) {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const currentAddress = typeof window !== 'undefined' ? window.location.origin : '当前页面地址'
-  return <main className="login-wrap"><section className="login-brand" aria-hidden="true"><div className="brand-wordmark"><span>{branding.brand_name}</span></div><div className="brand-signature"><BrandIcon branding={branding} variant="dark" /><span>{branding.brand_name}</span></div></section><section className="login-stage"><div className="login-panel"><div className="login-logo"><BrandIcon branding={branding} variant="large" /></div><div className="login-heading"><div className="eyebrow">{branding.brand_subtitle || 'MANAGEMENT CENTER'}</div><h1 aria-label={`${branding.brand_name} 总控`}>{branding.page_title}</h1><p>{branding.page_description}</p></div><div className="language-row"><span>中文</span><span aria-hidden="true">⌄</span></div><p className="lead">登录以查看实例健康度与 OAuth 配额。</p><div className="address-card"><span>当前地址</span><strong>{currentAddress}</strong><small>总控服务使用当前页面地址建立连接</small></div><form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); try { const result = await api.post('/auth/login', { username, password }); onLoggedIn(result.username) } catch (cause) { setError(cause instanceof Error ? cause.message : '登录失败') } finally { setBusy(false) } }}><label>用户名<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label><label>管理员密码<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入管理员密码" /></label>{error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy}>{busy ? '验证中…' : '进入总控'}</button></form><p className="login-security">仅限局域网访问 · 会话由总控服务保护</p></div><div className="login-note">{branding.copyright && <span>{branding.copyright}</span>}<span>v{APP_VERSION}</span></div></section></main>
+  const [language, setLanguage] = useState<keyof typeof LOGIN_COPY>('zh')
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
+  const [activeLanguageIndex, setActiveLanguageIndex] = useState(0)
+  const languagePickerRef = useRef<HTMLDivElement>(null)
+  const languageTriggerRef = useRef<HTMLButtonElement>(null)
+  const languageOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const copy = LOGIN_COPY[language]
+  const currentAddress = typeof window !== 'undefined' ? window.location.origin : copy.currentPageAddress
+  const pageDescription = language === 'en' && branding.page_description === DEFAULT_BRANDING.page_description
+    ? copy.defaultPageDescription
+    : branding.page_description
+
+  useEffect(() => {
+    if (languageMenuOpen) languageOptionRefs.current[activeLanguageIndex]?.focus()
+  }, [languageMenuOpen, activeLanguageIndex])
+
+  useEffect(() => {
+    if (!languageMenuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!languagePickerRef.current?.contains(event.target as Node)) setLanguageMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [languageMenuOpen])
+
+  const toggleLanguageMenu = () => {
+    if (!languageMenuOpen) {
+      const selectedIndex = LOGIN_LANGUAGE_OPTIONS.findIndex(option => option.value === language)
+      setActiveLanguageIndex(selectedIndex)
+    }
+    setLanguageMenuOpen(open => !open)
+  }
+
+  const chooseLanguage = (value: keyof typeof LOGIN_COPY) => {
+    setLanguage(value)
+    setLanguageMenuOpen(false)
+    languageTriggerRef.current?.focus()
+  }
+
+  const handleLanguageMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const lastIndex = LOGIN_LANGUAGE_OPTIONS.length - 1
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowDown') nextIndex = (activeLanguageIndex + 1) % LOGIN_LANGUAGE_OPTIONS.length
+    if (event.key === 'ArrowUp') nextIndex = (activeLanguageIndex - 1 + LOGIN_LANGUAGE_OPTIONS.length) % LOGIN_LANGUAGE_OPTIONS.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = lastIndex
+    if (nextIndex !== null) {
+      event.preventDefault()
+      setActiveLanguageIndex(nextIndex)
+      languageOptionRefs.current[nextIndex]?.focus()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setLanguageMenuOpen(false)
+      languageTriggerRef.current?.focus()
+    }
+  }
+
+  return <main className="login-wrap" lang={language === 'en' ? 'en' : 'zh-CN'}>
+    <section className="login-brand" aria-hidden="true">
+      <div className="brand-wordmark"><span>{branding.brand_name}</span></div>
+    </section>
+    <section className="login-stage">
+      <div className="login-panel">
+        <div className="login-logo"><BrandIcon branding={branding} variant="large" /></div>
+        <div className="login-heading">
+          <div className="eyebrow">{branding.brand_subtitle || 'MANAGEMENT CENTER'}</div>
+          <h1 aria-label={`${branding.brand_name} ${copy.controlCenter}`}>{branding.page_title}</h1>
+          <p>{pageDescription}</p>
+        </div>
+        <div
+          className="language-picker"
+          ref={languagePickerRef}
+          onBlur={event => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setLanguageMenuOpen(false)
+          }}
+        >
+          <button
+            ref={languageTriggerRef}
+            type="button"
+            className="language-trigger"
+            aria-label={`${copy.language}: ${LOGIN_LANGUAGE_OPTIONS.find(option => option.value === language)?.label}`}
+            aria-haspopup="menu"
+            aria-expanded={languageMenuOpen}
+            aria-controls="login-language-menu"
+            onClick={toggleLanguageMenu}
+            onKeyDown={event => {
+              if (!languageMenuOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                event.preventDefault()
+                const selectedIndex = LOGIN_LANGUAGE_OPTIONS.findIndex(option => option.value === language)
+                setActiveLanguageIndex(selectedIndex)
+                setLanguageMenuOpen(true)
+              }
+            }}
+            onFocus={() => {
+              if (languageMenuOpen) setLanguageMenuOpen(false)
+            }}
+          >
+            <span>{LOGIN_LANGUAGE_OPTIONS.find(option => option.value === language)?.label}</span>
+            <svg className={`language-chevron${languageMenuOpen ? ' is-open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4.5 6 3.5 3.5L11.5 6" />
+            </svg>
+          </button>
+          {languageMenuOpen && <div
+            className="language-menu"
+            id="login-language-menu"
+            role="menu"
+            aria-label={copy.language}
+            onKeyDown={handleLanguageMenuKeyDown}
+          >
+            {LOGIN_LANGUAGE_OPTIONS.map((option, index) => <button
+              key={option.value}
+              ref={element => { languageOptionRefs.current[index] = element }}
+              type="button"
+              className="language-option"
+              role="menuitemradio"
+              aria-checked={language === option.value}
+              tabIndex={activeLanguageIndex === index ? 0 : -1}
+              data-active={activeLanguageIndex === index}
+              onFocus={() => setActiveLanguageIndex(index)}
+              onClick={() => chooseLanguage(option.value)}
+            >
+              <span>{option.label}</span>
+              <svg className="language-option-check" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m3.5 8.25 2.75 2.5 6-5.5" />
+              </svg>
+            </button>)}
+          </div>}
+        </div>
+        <p className="lead">{copy.lead}</p>
+        <div className="address-card">
+          <span>{copy.address}</span>
+          <strong>{currentAddress}</strong>
+          <small>{copy.addressHint}</small>
+        </div>
+        <form onSubmit={async event => {
+          event.preventDefault()
+          setBusy(true)
+          setError('')
+          try {
+            const result = await api.post('/auth/login', { username, password })
+            onLoggedIn(result.username)
+          } catch (cause) {
+            setError(cause instanceof Error && cause.message ? cause.message : copy.loginFailed)
+          } finally {
+            setBusy(false)
+          }
+        }}>
+          <label>{copy.username}<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label>
+          <label>{copy.password}<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required placeholder={copy.passwordPlaceholder} /></label>
+          {error && <p className="form-error">{error}</p>}
+          <button className="button primary wide" disabled={busy}>{busy ? copy.verifying : copy.signIn}</button>
+        </form>
+        <p className="login-security">{copy.security}</p>
+        <footer className="login-note">
+          {branding.copyright && <span>{branding.copyright}</span>}
+          <span>v{APP_VERSION}</span>
+        </footer>
+      </div>
+    </section>
+  </main>
 }
 
 function AdminSettingsDialog({ branding, onClose, onSaved, onBrandingSaved }: { branding: BrandingSettings; onClose: () => void; onSaved: () => void; onBrandingSaved: (settings: BrandingSettings) => void }) {
@@ -518,18 +732,25 @@ function LoadingState({ label }: { label: string }) {
 
 function VersionPanel({ versions, instances, upgradeState, busy, onInstall, onUpgrade, onRecover, onUninstall }: { versions: VersionInstall[]; instances: Instance[]; upgradeState: UpgradeState; busy: string | null; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void }) {
   const [tag, setTag] = useState('')
-  const current = instances.length ? instances[0].version : ''
+  const current = instances.find(instance => !instance.locked)?.version || (instances.length ? instances[0].version : '')
   const blocked = upgradeState.state === 'blocked'
-  const locked = upgradeState.state !== 'idle' && upgradeState.state !== 'committed' && upgradeState.state !== 'rolled-back' && !blocked
-  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>版本管理</h2><p>下载并校验版本，再一次性切换全部 CPA 实例；升级完成后可清理旧版本缓存。</p></div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空下载 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || locked}>{busy === 'version:install' ? '下载中…' : '下载版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未下载 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = version.tag === current; const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && !isCurrent && instances.length > 0 && <button className="button ghost" disabled={busy !== null || locked} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || locked} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
+  const upgradeInProgress = upgradeState.state !== 'idle' && upgradeState.state !== 'committed' && upgradeState.state !== 'rolled-back' && !blocked
+  const lockedCount = instances.filter(instance => instance.locked).length
+  const allInstancesLocked = instances.length > 0 && lockedCount === instances.length
+  const partiallyLocked = lockedCount > 0 && !allInstancesLocked
+  const upgradeDisabled = busy !== null || upgradeInProgress || allInstancesLocked
+  const upgradeTitle = allInstancesLocked ? '所有实例均已锁定，请先解锁至少一个实例' : partiallyLocked ? '仅升级未锁定实例，已锁定实例保持不变' : undefined
+  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>版本管理</h2><p>下载并校验版本，再切换未锁定的 CPA 实例；已锁定实例保持不变，升级完成后可清理旧版本缓存。</p>{allInstancesLocked && <p className="version-lock-hint" role="status">所有实例均已锁定，无法统一升级。请先解锁至少一个实例。</p>}{partiallyLocked && <p className="version-lock-hint" role="status">本次只会升级未锁定实例，已锁定实例保持不变。</p>}</div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空下载 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || upgradeInProgress}>{busy === 'version:install' ? '下载中…' : '下载版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未下载 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = version.tag === current; const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && !isCurrent && instances.length > 0 && <button className="button ghost" disabled={upgradeDisabled} title={upgradeTitle} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || upgradeInProgress} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
 }
 
 function upgradeStateLabel(state: string) {
   return ({ prepared: '准备中', 'stopping-old': '停止旧版本', 'old-stopped': '旧版本已停止', 'starting-new': '启动新版本', committed: '已完成', 'restoring-old': '正在回滚', 'rolled-back': '已回滚', blocked: '回滚受阻' } as Record<string, string>)[state] ?? state
 }
 
-function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   const running = instance.status?.ready
+  const actualState = instance.status?.state ?? 'unknown'
+  const actualActive = ['running', 'starting', 'stopping'].includes(actualState)
   const busy = instanceBusy[instance.id] || null
   const actionBusy = Boolean(busy)
   const thisActionBusy = actionBusy
@@ -544,7 +765,32 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     const latest = quotas.reduce((value, q) => q.collected_at > value ? q.collected_at : value, '')
     return latest ? accountCount + ' 个账户 · ' + relativeTime(latest) : '无成功快照'
   }, [quotas])
-  return <article className={'instance-card ' + (running ? 'is-running' : '')}><div className="card-top"><div className="instance-title"><span className={'status-orb ' + (running ? 'live' : '')} /><div><h3>{instance.name}</h3><p>{instance.id} · 端口 {instance.port}</p></div></div><div className="card-top-actions"><span className={'state-pill ' + (running ? 'live' : '')}>{running ? '运行中' : stateLabel(instance.status?.state)}</span><button type="button" className="button ghost card-refresh" disabled={actionBusy} onClick={() => onAction(instance, 'quotas')}>{busy === 'quotas' ? '读取中…' : '刷新'}</button></div></div><div className="card-actions" aria-label={`${instance.name} 操作`}><button type="button" className="button ghost" disabled={actionBusy} onClick={() => onConfigure(instance)}>配置</button><button type="button" className="button primary" disabled={actionBusy} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button><button type="button" className="button danger" disabled={actionBusy || !running} onClick={() => onAction(instance, 'stop')}>停止</button>{managementUrl && <button type="button" className="button primary management-link" onClick={() => window.open(managementUrl, '_blank', 'noopener,noreferrer')}>CPA 管理 ↗</button>}<button type="button" className="button danger delete-instance" disabled={actionBusy} onClick={() => onDelete(instance)}>删除</button></div><div className="runway"><div className="runway-line"><span className={'runway-node ' + (running ? 'active' : '')} /><span className="runway-track" /><span className={'runway-node ' + (instance.status?.ready ? 'active' : '')} /></div><div className="runway-labels"><span>期望 <b>{instance.desired_state === 'running' ? '运行' : '停止'}</b></span><span>实际 <b>{stateLabel(instance.status?.state)}</b></span></div></div><div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div><div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div><QuotaDetails quotas={quotas} /></article>
+  return <article className={'instance-card ' + (running ? 'is-running' : '')}>
+    <div className="card-top">
+      <div className="instance-title">
+        <span className={'status-orb ' + (running ? 'live' : '')} />
+        <div className="instance-title-copy">
+          <h3>{instance.name}{instance.locked && <span className="state-pill">已锁定</span>}</h3>
+          <p className="instance-endpoint"><span className="instance-port">端口 {instance.port}</span><span className="instance-id">实例 ID {instance.id}</span></p>
+        </div>
+      </div>
+      <div className="card-top-actions" aria-label={`${instance.name} 快捷操作`}>
+        <button type="button" className="button ghost card-lock" disabled={actionBusy} onClick={() => onAction(instance, instance.locked ? 'unlock' : 'lock')}>{instance.locked ? '解锁实例' : '锁定实例'}</button>
+        {managementUrl && <button type="button" className="button primary management-link" onClick={() => window.open(managementUrl, '_blank', 'noopener,noreferrer')}>CPA 管理 ↗</button>}
+        <button type="button" className="button ghost card-refresh" disabled={actionBusy} onClick={() => onAction(instance, 'quotas')}>{busy === 'quotas' ? '读取中…' : '刷新'}</button>
+      </div>
+    </div>
+    <div className="card-actions" aria-label={`${instance.name} 操作`}>
+      <button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onConfigure(instance)}>配置</button>
+      <button type="button" className="button primary" disabled={actionBusy || (running && instance.locked)} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button>
+      <button type="button" className="button danger" disabled={actionBusy || !running || instance.locked} onClick={() => onAction(instance, 'stop')}>停止</button>
+      <button type="button" className="button danger delete-instance" disabled={actionBusy || instance.locked} onClick={() => onDelete(instance)}>删除</button>
+    </div>
+    <div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div>
+    <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
+    <div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>
+    <QuotaDetails quotas={quotas} />
+  </article>
 }
 
 function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
@@ -659,6 +905,12 @@ function DeleteDialog({ instance, challenge, onClose, onDeleted, onError }: { in
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   return <dialog open className="modal-backdrop"><div className="dialog danger-dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="danger-mark">!</div><div className="eyebrow">IRREVERSIBLE ACTION</div><h2>删除 {instance.name}？</h2><p>这会停止实例并清除它的配置、OAuth 认证数据、日志和注册信息。版本安装缓存和其他实例不会受影响。</p><label>输入总控管理员密码确认<PasswordInput aria-label="输入总控管理员密码确认删除" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button className="button ghost" onClick={onClose}>保留实例</button><button className="button danger" disabled={!challenge || !password || busy} onClick={async () => { setBusy(true); try { await api.post('/instances/' + instance.id + '/delete', { challenge_id: challenge, admin_password: password }); onDeleted() } catch (cause) { onError(cause instanceof Error ? cause.message : '删除失败') } finally { setBusy(false) } }}>{busy ? '删除中…' : '确认删除'}</button></div></div></dialog>
+}
+
+function UnlockDialog({ instance, onClose, onUnlocked, onError }: { instance: Instance; onClose: () => void; onUnlocked: () => void; onError: (error: string) => void }) {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  return <dialog open className="modal-backdrop"><div className="dialog security-dialog"><button className="dialog-close" disabled={busy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true">⌁</div><div className="eyebrow">UNLOCK INSTANCE</div><h2>解锁 {instance.name}</h2><p>解锁会恢复该子实例的配置、停止、重启和删除操作。请输入总控管理员密码确认。</p><form onSubmit={async event => { event.preventDefault(); setBusy(true); try { await api.post('/instances/' + instance.id + '/unlock', { admin_password: password }); onUnlocked() } catch (cause) { onError(cause instanceof Error ? cause.message : '解锁失败') } finally { setBusy(false) } }}><label>总控管理员密码<PasswordInput aria-label="输入总控管理员密码确认解锁" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button type="button" className="button ghost" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={!password || busy}>{busy ? '解锁中…' : '确认解锁'}</button></div></form></div></dialog>
 }
 
 function UninstallVersionDialog({ version, busy, onClose, onConfirm }: { version: VersionInstall; busy: boolean; onClose: () => void; onConfirm: () => void }) {

@@ -147,6 +147,8 @@ export class Store {
     `)
     // Existing installations were created before Webhook signing was added.
     // Add the columns explicitly so an upgrade keeps the current settings row.
+    const instanceColumns = new Set(this.db.prepare('PRAGMA table_info(instances)').all().map(row => row.name))
+    if (!instanceColumns.has('locked')) this.db.exec('ALTER TABLE instances ADD COLUMN locked INTEGER NOT NULL DEFAULT 0')
     const quotaColumns = new Set(this.db.prepare('PRAGMA table_info(quota_settings)').all().map(row => row.name))
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
@@ -187,7 +189,7 @@ export class Store {
     return {
       id: row.id, name: row.name, port: Number(row.port), directory: row.directory,
       management_secret_ciphertext: row.management_secret_ciphertext,
-      desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
+      locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
       created_at: row.created_at, updated_at: row.updated_at
     }
   }
@@ -207,8 +209,8 @@ export class Store {
   }
   listInstances() { return this.db.prepare('SELECT * FROM instances ORDER BY created_at, id').all().map(row => this.toInstance(row)) }
   updateInstance(instance, expectedRevision) {
-    const result = this.db.prepare(`UPDATE instances SET name=?,port=?,directory=?,management_secret_ciphertext=?,desired_state=?,version=?,revision=?,created_at=?,updated_at=? WHERE id=? AND revision=?`).run(
-      instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at, instance.id, expectedRevision)
+    const result = this.db.prepare(`UPDATE instances SET locked=?,name=?,port=?,directory=?,management_secret_ciphertext=?,desired_state=?,version=?,revision=?,created_at=?,updated_at=? WHERE id=? AND revision=?`).run(
+      instance.locked ? 1 : 0, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at, instance.id, expectedRevision)
     if (Number(result.changes) !== 1) {
       const exists = this.db.prepare('SELECT 1 FROM instances WHERE id=?').get(instance.id)
       if (!exists) throw new NotFoundError('instance not found')

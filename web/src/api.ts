@@ -13,6 +13,7 @@ export type Instance = {
   id: string
   name: string
   port: number
+  locked?: boolean
   desired_state: string
   version: string
 	revision: number

@@ -4,6 +4,8 @@ Multi CLIProxyAPI Controller 是一个运行在 Linux amd64 上的总控服务�
 
 项目提供管理 Web 页面和 HTTP API。管理员默认账号是 `admin`，首次密码也是 `admin`；登录后请立即修改密码。
 
+实例卡片支持“锁定实例 / 解锁实例”，锁定状态在总控重启后保留。锁定后禁止重启、停止、修改配置和删除；统一升级时只处理未锁定实例，已锁定实例保持不变；如果所有实例都已锁定，统一升级会拒绝执行，请先解锁至少一个实例。查看状态、刷新配额和启动已停止实例仍可使用。对应接口为 `POST /api/instances/:id/lock` 和 `POST /api/instances/:id/unlock`，两者都需要管理员登录；锁定无需额外密码，解锁必须在请求体中提供总控管理员密码 `admin_password`。两种操作都会记录到审计日志。
+
 ## 生产部署
 
 发布脚本仅支持系统服务模式。安装、启动、停止和卸载均使用 `sudo bash 对应脚本.sh`（root 用户可直接执行）。
@@ -75,11 +77,11 @@ npm run package:linux
 - `release/install.sh`、`start.sh`、`stop.sh`、`uninstall.sh`：部署和生命周期脚本。
 
 构建过程会重新生成 `web/dist`，并清理打包 staging 和前端依赖目录。
-推送形如 `v26.9.3` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
+推送形如 `v26.9.4` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
 
 ## 版本规则
 
-应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.3` 表示 2026 年 9 月的第四个发布版本；同一个月内的修复和小改动递增最后一位，例如 `26.9.3`。Git tag 使用 `v` 前缀，例如 `v26.9.3`。
+应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.4` 表示 2026 年 9 月的第五个发布版本；同一个月内的修复和小改动递增最后一位，例如 `26.9.4`。Git tag 使用 `v` 前缀，例如 `v26.9.4`。
 
 这个规则比无语义的 `0.x` 更容易判断发布时间，同时仍符合 SemVer 的三个数字段，现有 npm、构建和发布工具可以继续使用。两位年份在 2099 年之后会产生歧义；如果项目需要长期维护，应在进入 2100 年前切换为 `YYYY.MM.PATCH`，当前阶段保留 `YY.MM.PATCH` 更简洁。
 

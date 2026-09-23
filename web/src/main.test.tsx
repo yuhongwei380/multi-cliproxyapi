@@ -8,7 +8,7 @@ function response(body: unknown, status = 200) { return Promise.resolve({ ok: st
 beforeEach(() => { vi.restoreAllMocks(); window.location.hash = '' })
 afterEach(() => { cleanup() })
 
-test('requires login before showing the instance runway', async () => {
+test('requires login before showing instance cards', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: false }) as any)
     .mockImplementationOnce(() => response({ username: 'admin', expires_at: '2030-01-01T00:00:00Z' }) as any)
@@ -228,6 +228,39 @@ test('shows installed versions and submits a unified upgrade', async () => {
   await waitFor(() => expect(screen.queryByText('v1')).not.toBeInTheDocument())
 })
 
+test('unified upgrade stays available for unlocked instances when some children are locked', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'open', port: 8317, locked: false, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }, { id: 'cpa_2', name: 'protected', port: 8318, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [{ tag: 'v2', asset: 'cpa-v2-linux-amd64.tar.gz', installed_at: '2030-01-01T00:00:00Z', usable: true }, { tag: 'v1', asset: 'cpa-v1-linux-amd64.tar.gz', installed_at: '2029-01-01T00:00:00Z', usable: true }] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  render(<App />)
+  const upgrade = await screen.findByRole('button', { name: '统一升级' })
+  expect(upgrade).toBeEnabled()
+  expect(screen.getByText('本次只会升级未锁定实例，已锁定实例保持不变。')).toBeInTheDocument()
+})
+
+test('unified upgrade is disabled when every child is locked', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }, { id: 'cpa_2', name: 'two', port: 8318, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [{ tag: 'v2', asset: 'cpa-v2-linux-amd64.tar.gz', installed_at: '2030-01-01T00:00:00Z', usable: true }, { tag: 'v1', asset: 'cpa-v1-linux-amd64.tar.gz', installed_at: '2029-01-01T00:00:00Z', usable: true }] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  render(<App />)
+  const upgrade = await screen.findByRole('button', { name: '统一升级' })
+  expect(upgrade).toBeDisabled()
+  expect(upgrade).toHaveAttribute('title', '所有实例均已锁定，请先解锁至少一个实例')
+  expect(screen.getByText('所有实例均已锁定，无法统一升级。请先解锁至少一个实例。')).toBeInTheDocument()
+})
+
 test('confirms and submits uninstall for an old version while keeping the current version', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
@@ -405,6 +438,8 @@ test('separates the instance module and keeps a second create action discoverabl
   expect(screen.getByRole('button', { name: '+ 创建实例' })).toBeInTheDocument()
   const management = screen.getByRole('button', { name: /CPA 管理/ })
   expect(management).toHaveClass('button', 'primary')
+  expect(Array.from(document.querySelectorAll('.instance-card .card-top-actions button')).map(button => button.textContent)).toEqual(['锁定实例', 'CPA 管理 ↗', '刷新'])
+  expect(screen.getByText('实例 ID cpa_1')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '删除' })).toHaveClass('danger')
   expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' })
 })
@@ -442,6 +477,36 @@ test('loads quota settings on demand and saves the refresh and DingTalk rules', 
   expect(patchCall[0]).toBe('/api/quota/settings')
   expect((patchCall[1] as RequestInit).method).toBe('PATCH')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ refresh_interval_minutes: 120, webhook_enabled: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret: 'ding-secret' })
+})
+
+test('instance lock disables disruptive actions and unlock restores them', async () => {
+  let locked = false
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'protected', port: 8317, locked, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any
+    if (path.endsWith('/lock')) locked = true
+    if (path.endsWith('/unlock')) locked = false
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(await screen.findByRole('button', { name: '锁定实例' }))
+  await screen.findByRole('button', { name: '解锁实例' })
+  for (const name of ['重启服务', '停止', '配置', '删除']) expect(screen.getByRole('button', { name })).toBeDisabled()
+  expect(screen.getByText('已锁定')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '解锁实例' }))
+  const unlockPassword = await screen.findByLabelText('输入总控管理员密码确认解锁')
+  await user.type(unlockPassword, 'administrator-password')
+  await user.click(screen.getByRole('button', { name: '确认解锁' }))
+  await screen.findByRole('button', { name: '锁定实例' })
+  expect(screen.getByRole('button', { name: '重启服务' })).toBeEnabled()
+  const unlockCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/unlock'))
+  expect(unlockCall).toBeTruthy()
+  expect(JSON.parse(String((unlockCall?.[1] as RequestInit).body))).toEqual({ admin_password: 'administrator-password' })
 })
 
 test('locks all instance actions synchronously while one restart request is pending', async () => {

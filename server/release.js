@@ -224,9 +224,12 @@ export class UpgradeService {
   persist(state) { state.updated_at = this.clock().toISOString(); this.store.saveUpgradeState(state) }
   async upgrade(newVersion) {
     return this.instances.operations.run('global', async () => {
-      if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable'); let oldState = null
+      if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable')
+      const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked)
+      if (allInstances.length && !instances.length) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
+      let oldState = null
       try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
-      const instances = this.store.listInstances(); if (!instances.length || instances.every(item => item.version === newVersion)) return
+      if (!instances.length || instances.every(item => item.version === newVersion)) return
       const oldVersion = instances[0].version; if (instances.some(item => item.version !== oldVersion)) throw new Error('instances are already running mixed versions')
       // Complete network-dependent preparation before disrupting any process.
       // Keep the old version ready too, so rollback needs no network access.
@@ -265,7 +268,7 @@ export class UpgradeService {
     return this.instances.operations.run('global', async () => {
     let state; try { state = this.store.getUpgradeState() } catch (error) { if (error.code === 'ERR_NOT_FOUND') return; throw error }
     if ([UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(state.state)) { this.store.clearUpgradeState(); return }
-    const instances = this.store.listInstances(); await this.rollback(state, instances, new Error('upgrade interrupted; recovered to old version'))
+    const recordedStageIds = Object.keys(state.instance_stages || {}); const recordedIds = new Set(recordedStageIds.length ? recordedStageIds : Object.keys(state.original_desired || {})); const instances = this.store.listInstances().filter(instance => !recordedIds.size || recordedIds.has(instance.id)); await this.rollback(state, instances, new Error('upgrade interrupted; recovered to old version'))
     })
   }
 }

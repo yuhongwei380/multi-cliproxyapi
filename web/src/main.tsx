@@ -1,4 +1,4 @@
-import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
+import { InputHTMLAttributes, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
@@ -464,17 +464,75 @@ const LOGIN_COPY = {
   }
 } as const
 
+const LOGIN_LANGUAGE_OPTIONS = [
+  { value: 'zh', label: LOGIN_COPY.zh.languageChinese },
+  { value: 'en', label: LOGIN_COPY.en.languageEnglish }
+] as const
+
 function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedIn: (name: string) => void }) {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [language, setLanguage] = useState<keyof typeof LOGIN_COPY>('zh')
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
+  const [activeLanguageIndex, setActiveLanguageIndex] = useState(0)
+  const languagePickerRef = useRef<HTMLDivElement>(null)
+  const languageTriggerRef = useRef<HTMLButtonElement>(null)
+  const languageOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
   const copy = LOGIN_COPY[language]
   const currentAddress = typeof window !== 'undefined' ? window.location.origin : copy.currentPageAddress
   const pageDescription = language === 'en' && branding.page_description === DEFAULT_BRANDING.page_description
     ? copy.defaultPageDescription
     : branding.page_description
+
+  useEffect(() => {
+    if (languageMenuOpen) languageOptionRefs.current[activeLanguageIndex]?.focus()
+  }, [languageMenuOpen, activeLanguageIndex])
+
+  useEffect(() => {
+    if (!languageMenuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!languagePickerRef.current?.contains(event.target as Node)) setLanguageMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [languageMenuOpen])
+
+  const toggleLanguageMenu = () => {
+    if (!languageMenuOpen) {
+      const selectedIndex = LOGIN_LANGUAGE_OPTIONS.findIndex(option => option.value === language)
+      setActiveLanguageIndex(selectedIndex)
+    }
+    setLanguageMenuOpen(open => !open)
+  }
+
+  const chooseLanguage = (value: keyof typeof LOGIN_COPY) => {
+    setLanguage(value)
+    setLanguageMenuOpen(false)
+    languageTriggerRef.current?.focus()
+  }
+
+  const handleLanguageMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const lastIndex = LOGIN_LANGUAGE_OPTIONS.length - 1
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowDown') nextIndex = (activeLanguageIndex + 1) % LOGIN_LANGUAGE_OPTIONS.length
+    if (event.key === 'ArrowUp') nextIndex = (activeLanguageIndex - 1 + LOGIN_LANGUAGE_OPTIONS.length) % LOGIN_LANGUAGE_OPTIONS.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = lastIndex
+    if (nextIndex !== null) {
+      event.preventDefault()
+      setActiveLanguageIndex(nextIndex)
+      languageOptionRefs.current[nextIndex]?.focus()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setLanguageMenuOpen(false)
+      languageTriggerRef.current?.focus()
+    }
+  }
+
   return <main className="login-wrap" lang={language === 'en' ? 'en' : 'zh-CN'}>
     <section className="login-brand" aria-hidden="true">
       <div className="brand-wordmark"><span>{branding.brand_name}</span></div>
@@ -487,12 +545,64 @@ function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedI
           <h1 aria-label={`${branding.brand_name} ${copy.controlCenter}`}>{branding.page_title}</h1>
           <p>{pageDescription}</p>
         </div>
-        <div className="language-select">
-          <select aria-label={copy.language} value={language} onChange={event => setLanguage(event.target.value as keyof typeof LOGIN_COPY)}>
-            <option value="zh">{copy.languageChinese}</option>
-            <option value="en">{copy.languageEnglish}</option>
-          </select>
-          <span className="language-chevron" aria-hidden="true">⌄</span>
+        <div
+          className="language-picker"
+          ref={languagePickerRef}
+          onBlur={event => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setLanguageMenuOpen(false)
+          }}
+        >
+          <button
+            ref={languageTriggerRef}
+            type="button"
+            className="language-trigger"
+            aria-label={`${copy.language}: ${LOGIN_LANGUAGE_OPTIONS.find(option => option.value === language)?.label}`}
+            aria-haspopup="menu"
+            aria-expanded={languageMenuOpen}
+            aria-controls="login-language-menu"
+            onClick={toggleLanguageMenu}
+            onKeyDown={event => {
+              if (!languageMenuOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+                event.preventDefault()
+                const selectedIndex = LOGIN_LANGUAGE_OPTIONS.findIndex(option => option.value === language)
+                setActiveLanguageIndex(selectedIndex)
+                setLanguageMenuOpen(true)
+              }
+            }}
+            onFocus={() => {
+              if (languageMenuOpen) setLanguageMenuOpen(false)
+            }}
+          >
+            <span>{LOGIN_LANGUAGE_OPTIONS.find(option => option.value === language)?.label}</span>
+            <svg className={`language-chevron${languageMenuOpen ? ' is-open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4.5 6 3.5 3.5L11.5 6" />
+            </svg>
+          </button>
+          {languageMenuOpen && <div
+            className="language-menu"
+            id="login-language-menu"
+            role="menu"
+            aria-label={copy.language}
+            onKeyDown={handleLanguageMenuKeyDown}
+          >
+            {LOGIN_LANGUAGE_OPTIONS.map((option, index) => <button
+              key={option.value}
+              ref={element => { languageOptionRefs.current[index] = element }}
+              type="button"
+              className="language-option"
+              role="menuitemradio"
+              aria-checked={language === option.value}
+              tabIndex={activeLanguageIndex === index ? 0 : -1}
+              data-active={activeLanguageIndex === index}
+              onFocus={() => setActiveLanguageIndex(index)}
+              onClick={() => chooseLanguage(option.value)}
+            >
+              <span>{option.label}</span>
+              <svg className="language-option-check" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m3.5 8.25 2.75 2.5 6-5.5" />
+              </svg>
+            </button>)}
+          </div>}
         </div>
         <p className="lead">{copy.lead}</p>
         <div className="address-card">

@@ -447,12 +447,21 @@ body { background: var(--bg-secondary); }
 .login-heading .eyebrow { color: var(--quiet); font-size: 9px; }
 .login-panel h1 { margin: 7px 0 3px; font-size: 24px; font-weight: 750; letter-spacing: -.055em; line-height: 1.18; overflow-wrap: anywhere; text-wrap: balance; }
 .login-heading p { margin: 0; color: var(--muted); font-size: 11px; }
-.language-select { position: relative; width: 92px; height: 36px; margin: 18px auto 17px; }
-.language-select select { appearance: none; width: 100%; height: 100%; padding: 0 30px 0 12px; border: 1px solid var(--line); border-radius: 8px; outline: none; background: var(--floating-surface); box-shadow: 0 1px 3px rgb(20 30 50 / 8%); color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
-.language-select select:hover { border-color: var(--line-hover); }
-.language-select select:focus-visible { border-color: var(--primary-active); outline: 2px solid var(--primary-active); outline-offset: 2px; }
-.language-select option { background: var(--floating-surface); color: var(--ink); }
-.language-chevron { position: absolute; top: 50%; right: 11px; color: var(--muted); font-size: 14px; line-height: 1; pointer-events: none; transform: translateY(-50%); }
+.language-picker { position: relative; z-index: 3; width: 92px; height: 36px; margin: 18px auto 17px; }
+.language-trigger { display: flex; width: 100%; height: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 0 11px 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--floating-surface); box-shadow: 0 1px 3px rgb(20 30 50 / 8%); color: var(--muted); font-size: 12px; font-weight: 550; text-align: left; transition: border-color .14s var(--ease-out), background-color .14s var(--ease-out), box-shadow .14s var(--ease-out); }
+.language-trigger:hover, .language-trigger[aria-expanded="true"] { border-color: var(--line-hover); background: var(--bg-secondary); }
+.language-trigger:focus-visible { outline: 2px solid var(--hero-line); outline-offset: 2px; }
+.language-chevron { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; transition: transform .16s var(--ease-out); }
+.language-chevron.is-open { transform: rotate(180deg); }
+.language-menu { position: absolute; z-index: 6; top: calc(100% + 7px); left: 50%; display: grid; width: 100%; gap: 2px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--floating-surface); box-shadow: 0 8px 20px rgb(36 35 33 / 12%), 0 1px 3px rgb(36 35 33 / 8%); transform-origin: top center; animation: language-menu-enter .15s var(--ease-out) both; }
+.language-option { display: flex; width: 100%; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; text-align: left; transition: background-color .14s var(--ease-out), color .14s var(--ease-out); }
+.language-option:hover, .language-option[data-active="true"] { background: var(--bg-secondary); color: var(--ink); }
+.language-option[aria-checked="true"] { background: var(--blue-soft); color: var(--blue-dark); font-weight: 650; }
+.language-option:focus-visible { outline: 2px solid var(--hero-line); outline-offset: -2px; }
+.language-option-check { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; opacity: 0; }
+.language-option[aria-checked="true"] .language-option-check { opacity: 1; }
+@keyframes language-menu-enter { from { opacity: 0; transform: translate(-50%, -3px) scale(.98); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .language-chevron, .language-trigger, .language-option { transition: none; } .language-menu { animation: none; } }
 .login-panel .lead { margin: 0 0 16px; text-align: center; font-size: 11px; }
 .address-card { margin: 0 0 15px; padding: 12px 13px; border: 1px dashed var(--line-strong); border-radius: 9px; background: var(--bg-secondary); }
 .address-card span, .address-card small { display: block; color: var(--quiet); font-size: 10px; }

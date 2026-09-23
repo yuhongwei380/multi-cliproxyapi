@@ -447,21 +447,24 @@ body { background: var(--bg-secondary); }
 .login-heading .eyebrow { color: var(--quiet); font-size: 9px; }
 .login-panel h1 { margin: 7px 0 3px; font-size: 24px; font-weight: 750; letter-spacing: -.055em; line-height: 1.18; overflow-wrap: anywhere; text-wrap: balance; }
 .login-heading p { margin: 0; color: var(--muted); font-size: 11px; }
-.language-picker { position: relative; z-index: 3; width: 92px; height: 36px; margin: 18px auto 17px; }
-.language-trigger { display: flex; width: 100%; height: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 0 11px 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--floating-surface); box-shadow: 0 1px 3px rgb(20 30 50 / 8%); color: var(--muted); font-size: 12px; font-weight: 550; text-align: left; transition: border-color .14s var(--ease-out), background-color .14s var(--ease-out), box-shadow .14s var(--ease-out); }
-.language-trigger:hover, .language-trigger[aria-expanded="true"] { border-color: var(--line-hover); background: var(--bg-secondary); }
-.language-trigger:focus-visible { outline: 2px solid var(--hero-line); outline-offset: 2px; }
-.language-chevron { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; transition: transform .16s var(--ease-out); }
-.language-chevron.is-open { transform: rotate(180deg); }
-.language-menu { position: absolute; z-index: 6; top: calc(100% + 7px); left: 50%; display: grid; width: 100%; gap: 2px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--floating-surface); box-shadow: 0 8px 20px rgb(36 35 33 / 12%), 0 1px 3px rgb(36 35 33 / 8%); transform-origin: top center; animation: language-menu-enter .15s var(--ease-out) both; }
-.language-option { display: flex; width: 100%; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; text-align: left; transition: background-color .14s var(--ease-out), color .14s var(--ease-out); }
-.language-option:hover, .language-option[data-active="true"] { background: var(--bg-secondary); color: var(--ink); }
-.language-option[aria-checked="true"] { background: var(--blue-soft); color: var(--blue-dark); font-weight: 650; }
-.language-option:focus-visible { outline: 2px solid var(--hero-line); outline-offset: -2px; }
-.language-option-check { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; opacity: 0; }
-.language-option[aria-checked="true"] .language-option-check { opacity: 1; }
-@keyframes language-menu-enter { from { opacity: 0; transform: translate(-50%, -3px) scale(.98); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
-@media (prefers-reduced-motion: reduce) { .language-chevron, .language-trigger, .language-option { transition: none; } .language-menu { animation: none; } }
+.dropdown-picker { position: relative; min-width: 0; }
+.language-picker { z-index: 3; width: 92px; height: 36px; margin: 18px auto 17px; }
+.dropdown-trigger { display: flex; width: 100%; min-width: 0; height: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 0 11px 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--floating-surface); box-shadow: 0 1px 3px rgb(20 30 50 / 8%); color: var(--muted); font-family: inherit; font-size: 12px; font-weight: 550; text-align: left; cursor: pointer; transition: border-color .14s var(--ease-out), background-color .14s var(--ease-out), box-shadow .14s var(--ease-out); }
+.dropdown-trigger:hover, .dropdown-trigger[aria-expanded="true"] { border-color: var(--line-hover); background: var(--bg-secondary); }
+.dropdown-trigger:focus-visible { outline: 2px solid var(--hero-line); outline-offset: 2px; }
+.dropdown-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropdown-chevron { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; transition: transform .16s var(--ease-out); }
+.dropdown-chevron.is-open { transform: rotate(180deg); }
+.dropdown-menu { position: absolute; z-index: 6; top: calc(100% + 7px); left: 0; display: grid; width: 100%; max-height: min(280px, 50vh); gap: 2px; padding: 5px; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--floating-surface); box-shadow: 0 8px 20px rgb(36 35 33 / 12%), 0 1px 3px rgb(36 35 33 / 8%); transform-origin: top left; animation: dropdown-menu-enter .15s var(--ease-out) both; }
+.dropdown-option { display: flex; width: 100%; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-family: inherit; font-size: 12px; font-weight: 500; text-align: left; cursor: pointer; transition: background-color .14s var(--ease-out), color .14s var(--ease-out); }
+.dropdown-option:hover, .dropdown-option[data-active="true"] { background: var(--bg-secondary); color: var(--ink); }
+.dropdown-option[aria-selected="true"] { background: var(--blue-soft); color: var(--blue-dark); font-weight: 650; }
+.dropdown-option:focus-visible { outline: 2px solid var(--hero-line); outline-offset: -2px; }
+.dropdown-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropdown-option-check { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; opacity: 0; }
+.dropdown-option[aria-selected="true"] .dropdown-option-check { opacity: 1; }
+@keyframes dropdown-menu-enter { from { opacity: 0; transform: translateY(-3px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .dropdown-chevron, .dropdown-trigger, .dropdown-option { transition: none; } .dropdown-menu { animation: none; } }
 .login-panel .lead { margin: 0 0 16px; text-align: center; font-size: 11px; }
 .address-card { margin: 0 0 15px; padding: 12px 13px; border: 1px dashed var(--line-strong); border-radius: 9px; background: var(--bg-secondary); }
 .address-card span, .address-card small { display: block; color: var(--quiet); font-size: 10px; }
@@ -753,10 +756,12 @@ body { background: var(--bg-secondary); }
 .log-summary strong { display: block; margin-top: 9px; color: var(--ink); font-size: 24px; font-weight: 760; font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
 .log-workbench { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--floating-surface); }
 .log-toolbar { display: flex; align-items: flex-end; gap: 12px; padding: 15px 16px; border-bottom: 1px solid var(--line); background: var(--bg-primary); }
-.log-toolbar label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.log-toolbar label, .log-filter-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .log-toolbar .log-search { width: min(420px, 48vw); }
-.log-toolbar input, .log-toolbar select { height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--bg-secondary); color: var(--ink); font: inherit; font-size: 13px; }
-.log-toolbar input:focus, .log-toolbar select:focus { border-color: var(--primary-active); box-shadow: 0 0 0 3px rgb(143 139 133 / 14%); }
+.log-toolbar input { height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--bg-secondary); color: var(--ink); font: inherit; font-size: 13px; }
+.log-toolbar input:focus { border-color: var(--primary-active); box-shadow: 0 0 0 3px rgb(143 139 133 / 14%); }
+.log-filter-dropdown { width: 132px; height: 38px; }
+.log-filter-dropdown .dropdown-menu { min-width: 100%; }
 .log-result-count { margin: 0 0 10px auto; color: var(--quiet); font-size: 11px; font-variant-numeric: tabular-nums; }
 .log-table-wrap { max-height: calc(100vh - 365px); min-height: 280px; overflow: auto; }
 .log-table { width: 100%; border-collapse: collapse; color: var(--ink); font-size: 12px; }
@@ -937,7 +942,7 @@ body { background: var(--bg-secondary); }
 .quota-detail-dialog header p { margin: 4px 0 16px; color: var(--muted); font-size: 12px; }
 .quota-detail-dialog .button { min-height: 40px; }
 .quota-account-selector { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
-.quota-account-selector select { width: 100%; min-width: 0; height: 40px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-primary); color: var(--ink); font: inherit; }
+.quota-account-dropdown { width: 100%; height: 40px; }
 .quota-detail-dialog .quota-row-head { flex-wrap: wrap; }
 .quota-detail-dialog .quota-row-head strong { white-space: normal; overflow-wrap: anywhere; }
 .quota-detail-dialog .quota-values { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
@@ -945,7 +950,7 @@ body { background: var(--bg-secondary); }
 .quota-detail-dialog .quota-window-meta { flex-wrap: wrap; }
 .quota-detail-dialog .quota-window-meta span { font-size: 11px; white-space: normal; }
 .quota-detail-dialog .quota-progress { height: 6px; background: var(--bg-tertiary); }
-.quota-account-selector select:focus-visible, .quota-detail-dialog button:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 2px; }
+.quota-detail-dialog button:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 2px; }
 .dashboard-content:has(.instances-module), .dashboard-content:has(.quotas-module) { width: 100%; padding-inline: 24px; }
 .instances-module, .quotas-module { padding-top: 24px; }
 .instances-module .module-heading, .quotas-module .module-heading { margin-bottom: 16px; }
@@ -1055,9 +1060,8 @@ body { background: var(--bg-secondary); }
   max-width: 560px;
   margin-bottom: 18px;
 }
-.quota-detail-dialog .quota-account-selector select {
+.quota-detail-dialog .quota-account-dropdown {
   height: 44px;
-  padding-inline: 12px;
 }
 .quota-detail-dialog .quota-detail-panel {
   min-width: 0;

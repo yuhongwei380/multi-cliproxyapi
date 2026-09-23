@@ -55,6 +55,129 @@ function moduleHref(module: Module) {
   return module === 'overview' ? '#dashboard' : '#' + module
 }
 
+type DropdownOption = { value: string; label: string }
+
+function Dropdown({ id, label, options, value, onChange, placeholder, className = '' }: {
+  id: string
+  label: string
+  options: readonly DropdownOption[]
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const selectedIndex = options.findIndex(option => option.value === value)
+  const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : placeholder
+  const listboxId = `${id}-listbox`
+
+  useEffect(() => {
+    if (open) optionRefs.current[activeIndex]?.focus()
+  }, [open, activeIndex])
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [open])
+
+  const toggle = () => {
+    if (!open) setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
+    setOpen(current => !current)
+  }
+
+  const choose = (option: DropdownOption) => {
+    onChange(option.value)
+    setOpen(false)
+    triggerRef.current?.focus()
+  }
+
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const lastIndex = options.length - 1
+    let nextIndex: number | null = null
+    if (event.key === 'ArrowDown') nextIndex = (activeIndex + 1) % options.length
+    if (event.key === 'ArrowUp') nextIndex = (activeIndex - 1 + options.length) % options.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = lastIndex
+    if (nextIndex !== null) {
+      event.preventDefault()
+      setActiveIndex(nextIndex)
+      optionRefs.current[nextIndex]?.focus()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+  }
+
+  return <div
+    className={`dropdown-picker ${className}`.trim()}
+    ref={pickerRef}
+    onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
+    }}
+  >
+    <button
+      ref={triggerRef}
+      type="button"
+      className="dropdown-trigger"
+      role="combobox"
+      aria-label={`${label}${selectedLabel ? `: ${selectedLabel}` : ''}`}
+      aria-haspopup="listbox"
+      aria-expanded={open}
+      aria-controls={listboxId}
+      onClick={toggle}
+      onKeyDown={event => {
+        if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End')) {
+          event.preventDefault()
+          const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : selectedIndex >= 0 ? selectedIndex : 0
+          setActiveIndex(index)
+          setOpen(true)
+        }
+      }}
+    >
+      <span className="dropdown-value">{selectedLabel || placeholder || '\u00a0'}</span>
+      <svg className={`dropdown-chevron${open ? ' is-open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
+        <path d="m4.5 6 3.5 3.5L11.5 6" />
+      </svg>
+    </button>
+    {open && <div
+      className="dropdown-menu"
+      id={listboxId}
+      role="listbox"
+      aria-label={label}
+      onKeyDown={handleMenuKeyDown}
+    >
+      {options.map((option, index) => <button
+        key={option.value}
+        ref={element => { optionRefs.current[index] = element }}
+        type="button"
+        className="dropdown-option"
+        role="option"
+        aria-selected={value === option.value}
+        tabIndex={activeIndex === index ? 0 : -1}
+        data-active={activeIndex === index}
+        onFocus={() => setActiveIndex(index)}
+        onClick={() => choose(option)}
+      >
+        <span>{option.label}</span>
+        <svg className="dropdown-option-check" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m3.5 8.25 2.75 2.5 6-5.5" />
+        </svg>
+      </button>)}
+    </div>}
+  </div>
+}
+
 function App() {
   const [user, setUser] = useState<string | null>(null)
   const [branding, setBranding] = useState<BrandingSettings>(DEFAULT_BRANDING)
@@ -404,9 +527,15 @@ function LogPage({ kind, instances }: { kind: 'runtime' | 'audit'; instances: In
   })
   const runtime = kind === 'runtime'
   const problemCount = items.filter(item => runtime ? (item as RuntimeLog).level === 'error' : (item as AuditLog).outcome === 'failed').length
+  const stateOptions: DropdownOption[] = [
+    { value: 'all', label: '全部' },
+    ...(runtime
+      ? [{ value: 'info', label: '信息' }, { value: 'warn', label: '警告' }, { value: 'error', label: '错误' }]
+      : [{ value: 'success', label: '成功' }, { value: 'failed', label: '失败' }])
+  ]
   return <section className="module-pane logs-module"><section className="section-heading module-heading"><div><div className="eyebrow">{runtime ? 'RUNTIME TIMELINE' : 'AUDIT TRAIL'}</div><h1>{runtime ? '运行日志' : '审计日志'}</h1><p>{runtime ? '追踪总控、实例生命周期和后台任务的运行事件。' : '记录管理员登录、配置变更与实例操作的执行结果。'}</p></div><div className="section-actions"><button className="button ghost" disabled={loading} onClick={refresh}>{loading ? '刷新中…' : '刷新日志'}</button></div></section>
     <div className="log-summary" aria-label="日志摘要"><div><span>当前记录</span><strong>{items.length}</strong></div><div><span>{runtime ? '错误事件' : '失败操作'}</span><strong className={problemCount ? 'warn-text' : ''}>{problemCount}</strong></div><div><span>展示范围</span><strong>最近 500</strong></div></div>
-    <div className="log-workbench"><div className="log-toolbar"><label className="log-search">搜索日志<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={runtime ? '消息、来源或实例 ID' : '操作者、动作或资源 ID'} /></label><label>状态<select value={stateFilter} onChange={event => setStateFilter(event.target.value)}><option value="all">全部</option>{runtime ? <><option value="info">信息</option><option value="warn">警告</option><option value="error">错误</option></> : <><option value="success">成功</option><option value="failed">失败</option></>}</select></label><span className="log-result-count">显示 {filtered.length} 条</span></div>
+    <div className="log-workbench"><div className="log-toolbar"><label className="log-search">搜索日志<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={runtime ? '消息、来源或实例 ID' : '操作者、动作或资源 ID'} /></label><div className="log-filter-field"><span>状态</span><Dropdown id={`log-${kind}-state`} label="状态" className="log-filter-dropdown" options={stateOptions} value={stateFilter} onChange={setStateFilter} /></div><span className="log-result-count">显示 {filtered.length} 条</span></div>
       {error ? <div className="settings-inline-error" role="alert">{error}</div> : loading && !items.length ? <div className="log-empty">正在读取日志…</div> : !filtered.length ? <div className="log-empty">没有符合当前筛选条件的日志。</div> : <div className="log-table-wrap"><table className="log-table"><thead><tr><th>时间</th><th>状态</th>{runtime ? <><th>来源</th><th>实例</th><th>消息</th></> : <><th>操作者</th><th>动作</th><th>资源</th><th>来源地址</th><th>详情</th></>}</tr></thead><tbody>{filtered.map(item => runtime ? <RuntimeLogRow key={item.id} item={item as RuntimeLog} instanceNames={instanceNames} /> : <AuditLogRow key={item.id} item={item as AuditLog} />)}</tbody></table></div>}
     </div>
   </section>
@@ -475,63 +604,11 @@ function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedI
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [language, setLanguage] = useState<keyof typeof LOGIN_COPY>('zh')
-  const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
-  const [activeLanguageIndex, setActiveLanguageIndex] = useState(0)
-  const languagePickerRef = useRef<HTMLDivElement>(null)
-  const languageTriggerRef = useRef<HTMLButtonElement>(null)
-  const languageOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
   const copy = LOGIN_COPY[language]
   const currentAddress = typeof window !== 'undefined' ? window.location.origin : copy.currentPageAddress
   const pageDescription = language === 'en' && branding.page_description === DEFAULT_BRANDING.page_description
     ? copy.defaultPageDescription
     : branding.page_description
-
-  useEffect(() => {
-    if (languageMenuOpen) languageOptionRefs.current[activeLanguageIndex]?.focus()
-  }, [languageMenuOpen, activeLanguageIndex])
-
-  useEffect(() => {
-    if (!languageMenuOpen) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!languagePickerRef.current?.contains(event.target as Node)) setLanguageMenuOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
-  }, [languageMenuOpen])
-
-  const toggleLanguageMenu = () => {
-    if (!languageMenuOpen) {
-      const selectedIndex = LOGIN_LANGUAGE_OPTIONS.findIndex(option => option.value === language)
-      setActiveLanguageIndex(selectedIndex)
-    }
-    setLanguageMenuOpen(open => !open)
-  }
-
-  const chooseLanguage = (value: keyof typeof LOGIN_COPY) => {
-    setLanguage(value)
-    setLanguageMenuOpen(false)
-    languageTriggerRef.current?.focus()
-  }
-
-  const handleLanguageMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const lastIndex = LOGIN_LANGUAGE_OPTIONS.length - 1
-    let nextIndex: number | null = null
-    if (event.key === 'ArrowDown') nextIndex = (activeLanguageIndex + 1) % LOGIN_LANGUAGE_OPTIONS.length
-    if (event.key === 'ArrowUp') nextIndex = (activeLanguageIndex - 1 + LOGIN_LANGUAGE_OPTIONS.length) % LOGIN_LANGUAGE_OPTIONS.length
-    if (event.key === 'Home') nextIndex = 0
-    if (event.key === 'End') nextIndex = lastIndex
-    if (nextIndex !== null) {
-      event.preventDefault()
-      setActiveLanguageIndex(nextIndex)
-      languageOptionRefs.current[nextIndex]?.focus()
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setLanguageMenuOpen(false)
-      languageTriggerRef.current?.focus()
-    }
-  }
 
   return <main className="login-wrap" lang={language === 'en' ? 'en' : 'zh-CN'}>
     <section className="login-brand" aria-hidden="true">
@@ -545,65 +622,14 @@ function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedI
           <h1 aria-label={`${branding.brand_name} ${copy.controlCenter}`}>{branding.page_title}</h1>
           <p>{pageDescription}</p>
         </div>
-        <div
+        <Dropdown
+          id="login-language"
+          label={copy.language}
           className="language-picker"
-          ref={languagePickerRef}
-          onBlur={event => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setLanguageMenuOpen(false)
-          }}
-        >
-          <button
-            ref={languageTriggerRef}
-            type="button"
-            className="language-trigger"
-            aria-label={`${copy.language}: ${LOGIN_LANGUAGE_OPTIONS.find(option => option.value === language)?.label}`}
-            aria-haspopup="menu"
-            aria-expanded={languageMenuOpen}
-            aria-controls="login-language-menu"
-            onClick={toggleLanguageMenu}
-            onKeyDown={event => {
-              if (!languageMenuOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-                event.preventDefault()
-                const selectedIndex = LOGIN_LANGUAGE_OPTIONS.findIndex(option => option.value === language)
-                setActiveLanguageIndex(selectedIndex)
-                setLanguageMenuOpen(true)
-              }
-            }}
-            onFocus={() => {
-              if (languageMenuOpen) setLanguageMenuOpen(false)
-            }}
-          >
-            <span>{LOGIN_LANGUAGE_OPTIONS.find(option => option.value === language)?.label}</span>
-            <svg className={`language-chevron${languageMenuOpen ? ' is-open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
-              <path d="m4.5 6 3.5 3.5L11.5 6" />
-            </svg>
-          </button>
-          {languageMenuOpen && <div
-            className="language-menu"
-            id="login-language-menu"
-            role="menu"
-            aria-label={copy.language}
-            onKeyDown={handleLanguageMenuKeyDown}
-          >
-            {LOGIN_LANGUAGE_OPTIONS.map((option, index) => <button
-              key={option.value}
-              ref={element => { languageOptionRefs.current[index] = element }}
-              type="button"
-              className="language-option"
-              role="menuitemradio"
-              aria-checked={language === option.value}
-              tabIndex={activeLanguageIndex === index ? 0 : -1}
-              data-active={activeLanguageIndex === index}
-              onFocus={() => setActiveLanguageIndex(index)}
-              onClick={() => chooseLanguage(option.value)}
-            >
-              <span>{option.label}</span>
-              <svg className="language-option-check" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="m3.5 8.25 2.75 2.5 6-5.5" />
-              </svg>
-            </button>)}
-          </div>}
-        </div>
+          options={LOGIN_LANGUAGE_OPTIONS}
+          value={language}
+          onChange={value => setLanguage(value as keyof typeof LOGIN_COPY)}
+        />
         <p className="lead">{copy.lead}</p>
         <div className="address-card">
           <span>{copy.address}</span>
@@ -831,7 +857,15 @@ function QuotaDetailDialog({ quotas, onClose }: { quotas: QuotaSnapshot[]; onClo
   }, [])
   return <dialog ref={dialog} className="quota-detail-dialog" aria-label="OAuth 额度详情" onCancel={onClose} onClick={event => { if (event.target === event.currentTarget) { const rect = event.currentTarget.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose() } }}>
     <header><div><h2>OAuth 额度详情</h2><p>查看各账户的全部额度窗口与重置时间</p></div><button type="button" className="button ghost" onClick={onClose} autoFocus>关闭</button></header>
-    {accounts.length > 2 && <label className="quota-account-selector">其他 OAuth 账户<select aria-label="选择其他 OAuth 账户" value={additionalAccountId} onChange={event => setAdditionalAccountId(event.target.value)}><option value="">选择要查看的账户</option>{accounts.slice(2).map(quota => <option key={quota.account_id} value={quota.account_id}>{`${quota.provider || 'OAuth'} · ${quota.account_id}`}</option>)}</select></label>}
+    {accounts.length > 2 && <label className="quota-account-selector">其他 OAuth 账户<Dropdown
+      id="quota-additional-account"
+      label="选择其他 OAuth 账户"
+      className="quota-account-dropdown"
+      placeholder="选择要查看的账户"
+      options={[{ value: '', label: '选择要查看的账户' }, ...accounts.slice(2).map(quota => ({ value: quota.account_id, label: `${quota.provider || 'OAuth'} · ${quota.account_id}` }))]}
+      value={additionalAccountId}
+      onChange={setAdditionalAccountId}
+    /></label>}
     {!!defaultQuotas.length && <QuotaDetailPanel quotas={defaultQuotas} />}
     {additional && <div className="quota-detail-additional"><QuotaDetailPanel quotas={[additional]} /></div>}
   </dialog>

@@ -425,13 +425,107 @@ function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警
 function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
 function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
 
+const LOGIN_COPY = {
+  zh: {
+    language: '界面语言',
+    languageChinese: '中文',
+    languageEnglish: 'English',
+    controlCenter: '总控',
+    lead: '登录以查看实例健康度与 OAuth 配额。',
+    address: '当前地址',
+    addressHint: '总控服务使用当前页面地址建立连接',
+    currentPageAddress: '当前页面地址',
+    defaultPageDescription: 'CPA 总控 · Local Control Plane',
+    username: '用户名',
+    password: '管理员密码',
+    passwordPlaceholder: '请输入管理员密码',
+    verifying: '验证中…',
+    signIn: '进入总控',
+    security: '仅限局域网访问 · 会话由总控服务保护',
+    loginFailed: '登录失败'
+  },
+  en: {
+    language: 'Interface language',
+    languageChinese: '中文',
+    languageEnglish: 'English',
+    controlCenter: 'Control Center',
+    lead: 'Sign in to view instance health and OAuth quotas.',
+    address: 'Current address',
+    addressHint: 'The control service connects using this page address.',
+    currentPageAddress: 'Current page address',
+    defaultPageDescription: 'CPA Management · Local Control Plane',
+    username: 'Username',
+    password: 'Administrator password',
+    passwordPlaceholder: 'Enter the administrator password',
+    verifying: 'Signing in…',
+    signIn: 'Open control center',
+    security: 'Local network access only · Session protected by the control service',
+    loginFailed: 'Sign in failed'
+  }
+} as const
+
 function Login({ branding, onLoggedIn }: { branding: BrandingSettings; onLoggedIn: (name: string) => void }) {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const currentAddress = typeof window !== 'undefined' ? window.location.origin : '当前页面地址'
-  return <main className="login-wrap"><section className="login-brand" aria-hidden="true"><div className="brand-wordmark"><span>{branding.brand_name}</span></div><div className="brand-signature"><BrandIcon branding={branding} variant="dark" /><span>{branding.brand_name}</span></div></section><section className="login-stage"><div className="login-panel"><div className="login-logo"><BrandIcon branding={branding} variant="large" /></div><div className="login-heading"><div className="eyebrow">{branding.brand_subtitle || 'MANAGEMENT CENTER'}</div><h1 aria-label={`${branding.brand_name} 总控`}>{branding.page_title}</h1><p>{branding.page_description}</p></div><div className="language-row"><span>中文</span><span aria-hidden="true">⌄</span></div><p className="lead">登录以查看实例健康度与 OAuth 配额。</p><div className="address-card"><span>当前地址</span><strong>{currentAddress}</strong><small>总控服务使用当前页面地址建立连接</small></div><form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); try { const result = await api.post('/auth/login', { username, password }); onLoggedIn(result.username) } catch (cause) { setError(cause instanceof Error ? cause.message : '登录失败') } finally { setBusy(false) } }}><label>用户名<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label><label>管理员密码<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入管理员密码" /></label>{error && <p className="form-error">{error}</p>}<button className="button primary wide" disabled={busy}>{busy ? '验证中…' : '进入总控'}</button></form><p className="login-security">仅限局域网访问 · 会话由总控服务保护</p></div><div className="login-note">{branding.copyright && <span>{branding.copyright}</span>}<span>v{APP_VERSION}</span></div></section></main>
+  const [language, setLanguage] = useState<keyof typeof LOGIN_COPY>('zh')
+  const copy = LOGIN_COPY[language]
+  const currentAddress = typeof window !== 'undefined' ? window.location.origin : copy.currentPageAddress
+  const pageDescription = language === 'en' && branding.page_description === DEFAULT_BRANDING.page_description
+    ? copy.defaultPageDescription
+    : branding.page_description
+  return <main className="login-wrap" lang={language === 'en' ? 'en' : 'zh-CN'}>
+    <section className="login-brand" aria-hidden="true">
+      <div className="brand-wordmark"><span>{branding.brand_name}</span></div>
+    </section>
+    <section className="login-stage">
+      <div className="login-panel">
+        <div className="login-logo"><BrandIcon branding={branding} variant="large" /></div>
+        <div className="login-heading">
+          <div className="eyebrow">{branding.brand_subtitle || 'MANAGEMENT CENTER'}</div>
+          <h1 aria-label={`${branding.brand_name} ${copy.controlCenter}`}>{branding.page_title}</h1>
+          <p>{pageDescription}</p>
+        </div>
+        <div className="language-select">
+          <select aria-label={copy.language} value={language} onChange={event => setLanguage(event.target.value as keyof typeof LOGIN_COPY)}>
+            <option value="zh">{copy.languageChinese}</option>
+            <option value="en">{copy.languageEnglish}</option>
+          </select>
+          <span className="language-chevron" aria-hidden="true">⌄</span>
+        </div>
+        <p className="lead">{copy.lead}</p>
+        <div className="address-card">
+          <span>{copy.address}</span>
+          <strong>{currentAddress}</strong>
+          <small>{copy.addressHint}</small>
+        </div>
+        <form onSubmit={async event => {
+          event.preventDefault()
+          setBusy(true)
+          setError('')
+          try {
+            const result = await api.post('/auth/login', { username, password })
+            onLoggedIn(result.username)
+          } catch (cause) {
+            setError(cause instanceof Error && cause.message ? cause.message : copy.loginFailed)
+          } finally {
+            setBusy(false)
+          }
+        }}>
+          <label>{copy.username}<input value={username} onChange={event => setUsername(event.target.value)} autoComplete="username" required /></label>
+          <label>{copy.password}<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" required placeholder={copy.passwordPlaceholder} /></label>
+          {error && <p className="form-error">{error}</p>}
+          <button className="button primary wide" disabled={busy}>{busy ? copy.verifying : copy.signIn}</button>
+        </form>
+        <p className="login-security">{copy.security}</p>
+        <footer className="login-note">
+          {branding.copyright && <span>{branding.copyright}</span>}
+          <span>v{APP_VERSION}</span>
+        </footer>
+      </div>
+    </section>
+  </main>
 }
 
 function AdminSettingsDialog({ branding, onClose, onSaved, onBrandingSaved }: { branding: BrandingSettings; onClose: () => void; onSaved: () => void; onBrandingSaved: (settings: BrandingSettings) => void }) {

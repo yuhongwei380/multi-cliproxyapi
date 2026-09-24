@@ -383,7 +383,9 @@ export class InstanceService {
     })
   }
   decryptManagementSecret(instance) { if (!this.secrets) throw new Error('secret store unavailable'); return this.secrets.decrypt(instance.management_secret_ciphertext) }
-  setDefaultVersionIfEmpty(version) { if (!this.defaultVersion && !this.store.listInstances().length) this.defaultVersion = version }
+  setDefaultVersionIfNoInstances(version) {
+    if (version && !this.store.listInstances().length) this.defaultVersion = version
+  }
 }
 
 export class DeleteService {

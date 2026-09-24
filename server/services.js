@@ -139,8 +139,7 @@ export class InstanceService {
       const childPassword = managementPassword(input?.management_password)
       const existing = this.store.listInstances(); if (this.maxInstances > 0 && existing.length >= this.maxInstances) throw new ConflictError(`maximum of ${this.maxInstances} instances reached`)
       if (existing.some(item => item.name.toLowerCase() === input.name.toLowerCase() || item.port === input.port)) throw new ConflictError()
-      let version = input.version || existing[0]?.version || this.defaultVersion || ''
-      if (existing.some(item => item.version !== version)) throw new ConflictError(`all CPA instances must use version ${existing[0].version}`)
+      const version = input.version || this.defaultVersion || this.store.listVersions().find(item => item.usable)?.tag || existing[0]?.version || ''
       if (this.requireVersion && !version) throw new Error('no usable CPA version is installed')
       if (this.requireVersion) { const installed = this.store.getVersion(version); if (!installed.usable) throw new Error(`CPA version ${version} is not usable`) }
       if (!this.secrets) throw new Error('secret store is unavailable')
@@ -383,8 +382,8 @@ export class InstanceService {
     })
   }
   decryptManagementSecret(instance) { if (!this.secrets) throw new Error('secret store unavailable'); return this.secrets.decrypt(instance.management_secret_ciphertext) }
-  setDefaultVersionIfNoInstances(version) {
-    if (version && !this.store.listInstances().length) this.defaultVersion = version
+  setDefaultVersionAfterInstall(version) {
+    if (version) this.defaultVersion = version
   }
 }
 

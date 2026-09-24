@@ -230,16 +230,16 @@ export class UpgradeService {
       let oldState = null
       try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
       if (!instances.length || instances.every(item => item.version === newVersion)) return
-      const oldVersion = instances[0].version; if (instances.some(item => item.version !== oldVersion)) throw new Error('instances are already running mixed versions')
+      const oldVersion = instances[0].version
       // Complete network-dependent preparation before disrupting any process.
       // Keep the old version ready too, so rollback needs no network access.
       if (this.prepareVersion) {
-        await this.prepareVersion(oldVersion)
+        for (const version of new Set(instances.map(item => item.version))) await this.prepareVersion(version)
         await this.prepareVersion(newVersion)
       }
       const state = { id: 'singleton', state: UpgradeState.PREPARED, old_version: oldVersion, new_version: newVersion, original_running: [], original_desired: {}, instance_stages: {}, message: '', updated_at: this.clock().toISOString() }
       try {
-        for (const instance of instances) { state.original_desired[instance.id] = instance.desired_state; const status = await this.runtime.status(instance); if (status.state === ObservedState.UNKNOWN) throw new Error(`inspect ${instance.id}: runtime state is unknown`); state.instance_stages[instance.id] = status.state; if (instance.desired_state === DesiredState.RUNNING && [ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) state.original_running.push(instance.id) }
+        for (const instance of instances) { state.original_desired[instance.id] = { desired_state: instance.desired_state, version: instance.version }; const status = await this.runtime.status(instance); if (status.state === ObservedState.UNKNOWN) throw new Error(`inspect ${instance.id}: runtime state is unknown`); state.instance_stages[instance.id] = status.state; if (instance.desired_state === DesiredState.RUNNING && [ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) state.original_running.push(instance.id) }
         this.persist(state); state.state = UpgradeState.STOPPING_OLD; this.persist(state)
         for (const instance of instances) { const status = await this.runtime.status(instance); if (!isStopped(status.state)) { state.instance_stages[instance.id] = 'stopping-old'; this.persist(state); await this.runtime.stop(instance); const stopped = await this.runtime.status(instance); if (!isStopped(stopped.state)) throw new Error(`confirm ${instance.id} stopped`) } state.instance_stages[instance.id] = 'old-stopped'; this.persist(state) }
         state.state = UpgradeState.OLD_STOPPED; this.persist(state); if (this.activator) await this.activator.activateVersion(newVersion)
@@ -260,7 +260,7 @@ export class UpgradeService {
       return
     }
     try { if (this.activator) await this.activator.activateVersion(state.old_version) } catch (error) { blocked ||= error }
-    for (const old of originalInstances) { try { const current = this.store.getInstance(old.id); const restored = current.version !== state.old_version ? { ...current, version: state.old_version, revision: current.revision + 1, updated_at: this.clock().toISOString() } : current; await this.instances.prepareBinary(restored); if (restored !== current) { this.store.updateInstance(restored, current.revision); await this.units?.install(restored) } } catch (error) { blocked ||= error } }
+    for (const old of originalInstances) { try { const current = this.store.getInstance(old.id); const originalVersion = state.original_desired?.[old.id]?.version || state.old_version; const restored = current.version !== originalVersion ? { ...current, version: originalVersion, revision: current.revision + 1, updated_at: this.clock().toISOString() } : current; await this.instances.prepareBinary(restored); if (restored !== current) { this.store.updateInstance(restored, current.revision); await this.units?.install(restored) } } catch (error) { blocked ||= error } }
     if (!blocked) for (const old of originalInstances) if (state.original_running.includes(old.id)) { try { const current = this.store.getInstance(old.id); await this.instances.prepareBinary(current); await this.runtime.start(current); const status = await this.runtime.status(current); if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`old ${old.id} did not start`) } catch (error) { blocked ||= error } }
     state.state = blocked ? UpgradeState.BLOCKED : UpgradeState.ROLLED_BACK; state.message = blocked ? `${cause.message}; ${blocked.message}` : cause.message; this.persist(state)
   }

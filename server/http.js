@@ -19,7 +19,7 @@ const securityHeaders = {
 const jsonHeaders = { ...securityHeaders, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
 
 function writeJson(response, status, body, headers = {}) { response.writeHead(status, { ...jsonHeaders, ...headers }); response.end(JSON.stringify(body)) }
-function writeError(response, error) { const status = statusForError(error); writeJson(response, status, { error: status >= 500 ? 'internal server error' : (error?.message || 'request failed') }) }
+function writeError(response, error) { const status = statusForError(error); writeJson(response, status, { error: error?.publicMessage || (status >= 500 ? 'internal server error' : (error?.message || 'request failed')) }) }
 function parseCookies(header = '') { const result = Object.create(null); for (const chunk of header.split(';')) { const index = chunk.indexOf('='); if (index <= 0) continue; try { result[chunk.slice(0, index).trim()] = decodeURIComponent(chunk.slice(index + 1).trim()) } catch {} } return result }
 async function readJson(request, limit = 64 * 1024) {
   const contentLength = Number(request.headers['content-length'] || 0); if (contentLength > limit) throw Object.assign(new Error('request body is too large'), { status: 413 })

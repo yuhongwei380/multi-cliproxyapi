@@ -33,18 +33,33 @@ async function readResponse(response, maxBytes) {
 }
 
 export class GitHubSource {
-  constructor({ owner = 'router-for-me', repo = 'CLIProxyAPI', apiBase = 'https://api.github.com', fetchImpl = globalThis.fetch, userAgent = 'multi-cliproxyapi', timeoutMs = 30000, maxAssetBytes = DEFAULT_MAX_ASSET_BYTES } = {}) {
+  constructor({ owner = 'router-for-me', repo = 'CLIProxyAPI', apiBase = 'https://api.github.com', fetchImpl = globalThis.fetch, userAgent = 'multi-cliproxyapi', token = process.env.MULTI_CPA_GITHUB_TOKEN || '', timeoutMs = 30000, maxAssetBytes = DEFAULT_MAX_ASSET_BYTES } = {}) {
     if (!safeRepositoryPart(owner) || !safeRepositoryPart(repo)) throw new Error('GitHub repository contains unsafe characters')
     const api = new URL(apiBase)
     if (api.protocol !== 'https:' || api.hostname !== 'api.github.com' || api.username || api.password || api.port) throw new Error('GitHub API base must be https://api.github.com')
     if (!Number.isSafeInteger(maxAssetBytes) || maxAssetBytes < 1) throw new Error('release asset size limit is invalid')
-    this.owner = owner; this.repo = repo; this.apiBase = 'https://api.github.com'; this.fetchImpl = fetchImpl; this.userAgent = userAgent; this.timeoutMs = timeoutMs; this.maxAssetBytes = maxAssetBytes
+    if (typeof token !== 'string' || /[\r\n]/.test(token)) throw new Error('GitHub token is invalid')
+    this.owner = owner; this.repo = repo; this.apiBase = 'https://api.github.com'; this.fetchImpl = fetchImpl; this.userAgent = userAgent; this.token = token.trim(); this.timeoutMs = timeoutMs; this.maxAssetBytes = maxAssetBytes
   }
   async get(url) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
-      const response = await this.fetchImpl(url, { redirect: 'error', signal: controller.signal, headers: { Accept: 'application/vnd.github+json', 'User-Agent': this.userAgent } })
-      if (!response.ok) throw new Error(`GitHub release API returned HTTP ${response.status}`)
+      const headers = { Accept: 'application/vnd.github+json', 'User-Agent': this.userAgent }
+      if (this.token) headers.Authorization = `Bearer ${this.token}`
+      const response = await this.fetchImpl(url, { redirect: 'error', signal: controller.signal, headers })
+      if (!response.ok) {
+        if (response.status === 403) {
+          let detail = ''
+          try { detail = String(JSON.parse((await readResponse(response, MAX_RELEASE_JSON_BYTES)).toString('utf8'))?.message || '') } catch {}
+          const rateLimited = response.headers?.get?.('x-ratelimit-remaining') === '0' || /rate.?limit|abuse detection/i.test(detail)
+          const error = new Error(rateLimited ? 'GitHub release API rate limit exceeded' : 'GitHub release API access was denied (HTTP 403)')
+          Object.assign(error, rateLimited
+            ? { status: 429, code: 'ERR_GITHUB_RATE_LIMITED', publicMessage: 'GitHub API 请求已达到限额。请在 /etc/multi-cliproxyapi/controller.env 配置 MULTI_CPA_GITHUB_TOKEN，重启 multi-cliproxyapi.service 后重试。' }
+            : { status: 502, code: 'ERR_GITHUB_ACCESS_DENIED', publicMessage: 'GitHub 拒绝了发布信息请求（HTTP 403）。请检查 MULTI_CPA_GITHUB_TOKEN 和仓库访问权限。' })
+          throw error
+        }
+        throw new Error(`GitHub release API returned HTTP ${response.status}`)
+      }
       try { return JSON.parse((await readResponse(response, MAX_RELEASE_JSON_BYTES)).toString('utf8')) } catch (error) { throw new Error(`invalid GitHub release response: ${error.message}`) }
     } finally { clearTimeout(timer) }
   }
@@ -86,6 +101,57 @@ export class GitHubSource {
         if (!crypto.timingSafeEqual(Buffer.from(actual.toLowerCase()), Buffer.from(asset.digest.toLowerCase()))) throw new Error('release asset digest mismatch')
       }
       return data
+    } finally { clearTimeout(timer) }
+  }
+}
+
+export class DirectGitHubSource extends GitHubSource {
+  async latest() {
+    const url = `https://github.com/${this.owner}/${this.repo}/releases/latest`
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const response = await this.fetchImpl(url, { redirect: 'follow', signal: controller.signal, headers: { Accept: 'text/html', 'User-Agent': this.userAgent } })
+      if (!response.ok) throw new Error(`GitHub latest release page returned HTTP ${response.status}`)
+      let final
+      try { final = new URL(response.url || url) } catch { throw new Error('GitHub latest release redirect is invalid') }
+      const prefix = `/${this.owner}/${this.repo}/releases/tag/`
+      if (final.protocol !== 'https:' || final.hostname !== 'github.com' || final.username || final.password || final.port || !final.pathname.startsWith(prefix)) throw new Error('GitHub latest release redirected to an untrusted URL')
+      const encodedTag = final.pathname.slice(prefix.length)
+      if (!encodedTag || encodedTag.includes('/')) throw new Error('GitHub latest release tag is invalid')
+      let tag
+      try { tag = decodeURIComponent(encodedTag) } catch { throw new Error('GitHub latest release tag is invalid') }
+      if (!safeTag(tag)) throw new Error('GitHub latest release tag is invalid')
+      try { await response.body?.cancel() } catch {}
+      return this.byTag(tag)
+    } finally { clearTimeout(timer) }
+  }
+  async byTag(tag) {
+    if (!safeTag(tag)) throw new Error('invalid release tag')
+    const version = tag.replace(/^v/, '')
+    const candidates = [
+      `CLIProxyAPI_${version}_linux_amd64.tar.gz`,
+      `CLIProxyAPI_${version}_linux_amd64_no-plugin.tar.gz`
+    ]
+    const checksumUrl = `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/checksums.txt`
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const response = await this.fetchImpl(checksumUrl, { redirect: 'follow', signal: controller.signal, headers: { Accept: 'application/octet-stream', 'User-Agent': this.userAgent } })
+      if (!response.ok) throw new Error(`GitHub release checksum file returned HTTP ${response.status}`)
+      const allowedHosts = new Set(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
+      let final
+      try { final = new URL(response.url || checksumUrl) } catch { throw new Error('GitHub release checksum URL is invalid') }
+      if (final.protocol !== 'https:' || !allowedHosts.has(final.hostname) || final.username || final.password || final.port) throw new Error('GitHub release checksum redirected to an untrusted host')
+      const text = (await readResponse(response, 256 * 1024)).toString('utf8')
+      const checksums = new Map()
+      for (const line of text.split(/\r?\n/)) {
+        const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/i)
+        if (match) checksums.set(match[2].trim(), match[1].toLowerCase())
+      }
+      const assets = candidates.flatMap(name => {
+        const digest = checksums.get(name)
+        return digest ? [{ name, url: `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`, size: 0, digest: `sha256:${digest}` }] : []
+      })
+      return { tag: version, assets }
     } finally { clearTimeout(timer) }
   }
 }

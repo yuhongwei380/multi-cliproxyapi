@@ -204,15 +204,34 @@ function normalizeVersionDir(root) {
 }
 
 export class Installer {
-  constructor({ source, root, clock = () => new Date() } = {}) { this.source = source; this.root = root; this.clock = clock; this.installing = new Map() }
+  constructor({ source, root, store = null, clock = () => new Date() } = {}) { this.source = source; this.root = root; this.store = store; this.clock = clock; this.installing = new Map() }
   async install(requestedTag = '') {
     if (requestedTag && !safeTag(requestedTag)) throw Object.assign(new Error('invalid release tag'), { status: 400 })
+    if (requestedTag) {
+      const installed = this.registeredVersion(requestedTag)
+      if (installed) return installed
+    }
     if (requestedTag && !this.installing.has(requestedTag)) this.assertNotInstalled(requestedTag)
     const release = requestedTag ? await this.source.byTag(requestedTag) : await this.source.latest(); const tag = requestedTag || release.tag
     if (!safeTag(tag)) throw new Error(`invalid release tag ${JSON.stringify(tag)}`)
+    const installed = this.registeredVersion(tag)
+    if (installed) return installed
     if (this.installing.has(tag)) return this.installing.get(tag)
     const task = this.performInstall(release, tag); this.installing.set(tag, task)
     try { return await task } finally { this.installing.delete(tag) }
+  }
+  registeredVersion(tag) {
+    if (!this.store) return null
+    let version
+    try { version = this.store.getVersion(tag) } catch (error) { if (error.code === 'ERR_NOT_FOUND') return null; throw error }
+    const destination = path.resolve(this.root, tag)
+    if (!version.usable || path.resolve(version.path || '') !== destination) return null
+    try {
+      const directory = fs.lstatSync(destination)
+      const binary = fs.lstatSync(path.join(destination, 'cli-proxy-api'))
+      if (!directory.isDirectory() || directory.isSymbolicLink() || !binary.isFile() || binary.isSymbolicLink() || !(binary.mode & 0o111)) return null
+      return version
+    } catch (error) { if (error.code === 'ENOENT') return null; throw error }
   }
   assertNotInstalled(tag) {
     try { fs.lstatSync(path.join(this.root, tag)) } catch (error) { if (error.code === 'ENOENT') return; throw error }
@@ -242,15 +261,17 @@ export class Installer {
     if (info.isSymbolicLink() || !info.isDirectory()) throw new ConflictError('version path is not a safe directory')
 
     const pointer = path.join(root, 'current')
+    let removePointer = false
     try {
       const pointerInfo = fs.lstatSync(pointer)
       if (pointerInfo.isSymbolicLink()) {
         const activePath = path.resolve(path.dirname(pointer), fs.readlinkSync(pointer))
-        if (activePath === destination) throw new ConflictError('cannot uninstall the active CPA version')
+        if (activePath === destination) removePointer = true
       } else throw new ConflictError('version current pointer is not a safe symlink')
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }
+    if (removePointer) fs.unlinkSync(pointer)
     await fsp.rm(destination, { recursive: true, force: false })
   }
 }
@@ -265,10 +286,11 @@ export class VersionService {
       try { state = this.store.getUpgradeState() } catch (error) { if (error.code !== 'ERR_NOT_FOUND') throw error }
       if (state && ![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(state.state)) throw new ConflictError(`upgrade state is ${state.state}; recover the upgrade first`)
       if (this.store.listInstances().some(instance => instance.version === tag)) throw new ConflictError(`CPA version ${tag} is in use by an instance`)
-      if (this.instances.defaultVersion === tag) throw new ConflictError(`CPA version ${tag} is the default version`)
       if (!this.installer) throw new Error('version installer unavailable')
+      const fallback = this.store.listVersions().find(version => version.tag !== tag && version.usable)
       await this.installer.uninstall(installed)
       this.store.deleteVersion(tag)
+      if (this.instances.defaultVersion === tag) this.instances.defaultVersion = fallback?.tag || ''
       return installed
     })
   }

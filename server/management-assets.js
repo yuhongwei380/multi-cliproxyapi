@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { GitHubSource } from './release.js'
+import { DirectGitHubSource } from './release.js'
 
 const maxBytes = 16 * 1024 * 1024
 function validPage(bytes) {
@@ -9,7 +9,7 @@ function validPage(bytes) {
 }
 
 export class ManagementAssets {
-  constructor({ source = new GitHubSource({ repo: 'Cli-Proxy-API-Management-Center', maxAssetBytes: maxBytes, timeoutMs: 15000 }) } = {}) {
+  constructor({ source = new DirectGitHubSource({ repo: 'Cli-Proxy-API-Management-Center', maxAssetBytes: maxBytes, timeoutMs: 15000 }) } = {}) {
     this.source = source
     this.pending = new Map()
   }
@@ -35,8 +35,9 @@ export class ManagementAssets {
         if (cached.size <= maxBytes && validPage(fs.readFileSync(file))) return file
         throw new Error('cached management page is invalid')
       } catch (error) { if (error.code !== 'ENOENT') throw error }
-      const release = await this.source.latest()
-      const assets = (release.assets || []).filter(asset => asset.name === 'management.html')
+      const latestAsset = typeof this.source.latestAsset === 'function' ? await this.source.latestAsset('management.html') : null
+      const release = latestAsset ? null : await this.source.latest()
+      const assets = latestAsset ? [latestAsset] : (release.assets || []).filter(asset => asset.name === 'management.html')
       if (assets.length !== 1) throw new Error('official release must contain one management.html asset')
       const bytes = await this.source.download(assets[0])
       if (!validPage(bytes)) throw new Error('downloaded management page is invalid')

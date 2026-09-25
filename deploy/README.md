@@ -26,6 +26,8 @@ install -m 0600 /tmp/controller.env /etc/multi-cliproxyapi/controller.env
 
 CPA 版本由总控 Web 页面下载、校验并存入数据目录的 `versions/<tag>`；第一次启动且没有可用版本时会尝试下载 latest，网络失败不会阻止总控启动，之后可从版本页重试。创建或启动实例时，总控会把对应版本复制到数据目录的 `instances/<id>/bin/cli-proxy-api`，每个实例执行自己的普通文件副本，不使用符号链接或共享可执行文件。升级和回滚会为每个实例准备目标版本副本后再启动；`versions/current` 只保留作版本激活兼容指针。实例服务使用 `multi-cpa@<id>.service`，实例目录为数据目录的 `instances/<id>`。删除实例会停止进程、注销服务并清理该目录，但不会删除版本安装缓存。
 
+CPA 版本和管理页面资源下载都不依赖 GitHub Release API：总控跟随 `/releases/latest` 重定向确定 tag，再直接下载对应的 Linux amd64 压缩包并用同一 release 的 `checksums.txt` 校验 SHA-256；管理页面则直接下载固定名称的 `management.html`。
+
 开机时总控先恢复未完成的升级状态；没有升级屏障时，只启动数据库中期望状态为 `running` 的实例。手动停止的实例不会被自动启动。不要直接 enable 具体的 `multi-cpa@` 实例，实例期望状态由总控保存。
 
 控制器和 CPA 子服务均使用 `multi-cpa` 受限账号。polkit 规则只允许控制器对 `multi-cpa@<id>.service` 执行 start、stop、restart、status，不开放任意系统命令。

@@ -90,6 +90,63 @@ export class GitHubSource {
   }
 }
 
+export class DirectGitHubSource extends GitHubSource {
+  async latestTag() {
+    const url = `https://github.com/${this.owner}/${this.repo}/releases/latest`
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const response = await this.fetchImpl(url, { redirect: 'follow', signal: controller.signal, headers: { Accept: 'text/html', 'User-Agent': this.userAgent } })
+      if (!response.ok) throw new Error(`GitHub latest release page returned HTTP ${response.status}`)
+      let final
+      try { final = new URL(response.url || url) } catch { throw new Error('GitHub latest release redirect is invalid') }
+      const prefix = `/${this.owner}/${this.repo}/releases/tag/`
+      if (final.protocol !== 'https:' || final.hostname !== 'github.com' || final.username || final.password || final.port || !final.pathname.startsWith(prefix)) throw new Error('GitHub latest release redirected to an untrusted URL')
+      const encodedTag = final.pathname.slice(prefix.length)
+      if (!encodedTag || encodedTag.includes('/')) throw new Error('GitHub latest release tag is invalid')
+      let tag
+      try { tag = decodeURIComponent(encodedTag) } catch { throw new Error('GitHub latest release tag is invalid') }
+      if (!safeTag(tag)) throw new Error('GitHub latest release tag is invalid')
+      try { await response.body?.cancel() } catch {}
+      return tag
+    } finally { clearTimeout(timer) }
+  }
+  async latest() { return this.byTag(await this.latestTag()) }
+  async latestAsset(name) {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) throw new Error('invalid release asset name')
+    const tag = await this.latestTag()
+    return { name, url: `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`, size: 0, digest: '' }
+  }
+  async byTag(tag) {
+    if (!safeTag(tag)) throw new Error('invalid release tag')
+    const version = tag.replace(/^v/, '')
+    const candidates = [
+      `CLIProxyAPI_${version}_linux_amd64.tar.gz`,
+      `CLIProxyAPI_${version}_linux_amd64_no-plugin.tar.gz`
+    ]
+    const checksumUrl = `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/checksums.txt`
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const response = await this.fetchImpl(checksumUrl, { redirect: 'follow', signal: controller.signal, headers: { Accept: 'application/octet-stream', 'User-Agent': this.userAgent } })
+      if (!response.ok) throw new Error(`GitHub release checksum file returned HTTP ${response.status}`)
+      const allowedHosts = new Set(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
+      let final
+      try { final = new URL(response.url || checksumUrl) } catch { throw new Error('GitHub release checksum URL is invalid') }
+      if (final.protocol !== 'https:' || !allowedHosts.has(final.hostname) || final.username || final.password || final.port) throw new Error('GitHub release checksum redirected to an untrusted host')
+      const text = (await readResponse(response, 256 * 1024)).toString('utf8')
+      const checksums = new Map()
+      for (const line of text.split(/\r?\n/)) {
+        const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/i)
+        if (match) checksums.set(match[2].trim(), match[1].toLowerCase())
+      }
+      const assets = candidates.flatMap(name => {
+        const digest = checksums.get(name)
+        return digest ? [{ name, url: `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`, size: 0, digest: `sha256:${digest}` }] : []
+      })
+      return { tag: version, assets }
+    } finally { clearTimeout(timer) }
+  }
+}
+
 function isLinuxAmd64(name) {
   const lower = name.toLowerCase();
   return /(linux|ubuntu)/.test(lower) && /(amd64|x86_64|x64)/.test(lower) && !/(windows|darwin|macos|arm64|aarch64|386)/.test(lower)
@@ -147,15 +204,34 @@ function normalizeVersionDir(root) {
 }
 
 export class Installer {
-  constructor({ source, root, clock = () => new Date() } = {}) { this.source = source; this.root = root; this.clock = clock; this.installing = new Map() }
+  constructor({ source, root, store = null, clock = () => new Date() } = {}) { this.source = source; this.root = root; this.store = store; this.clock = clock; this.installing = new Map() }
   async install(requestedTag = '') {
     if (requestedTag && !safeTag(requestedTag)) throw Object.assign(new Error('invalid release tag'), { status: 400 })
+    if (requestedTag) {
+      const installed = this.registeredVersion(requestedTag)
+      if (installed) return installed
+    }
     if (requestedTag && !this.installing.has(requestedTag)) this.assertNotInstalled(requestedTag)
     const release = requestedTag ? await this.source.byTag(requestedTag) : await this.source.latest(); const tag = requestedTag || release.tag
     if (!safeTag(tag)) throw new Error(`invalid release tag ${JSON.stringify(tag)}`)
+    const installed = this.registeredVersion(tag)
+    if (installed) return installed
     if (this.installing.has(tag)) return this.installing.get(tag)
     const task = this.performInstall(release, tag); this.installing.set(tag, task)
     try { return await task } finally { this.installing.delete(tag) }
+  }
+  registeredVersion(tag) {
+    if (!this.store) return null
+    let version
+    try { version = this.store.getVersion(tag) } catch (error) { if (error.code === 'ERR_NOT_FOUND') return null; throw error }
+    const destination = path.resolve(this.root, tag)
+    if (!version.usable || path.resolve(version.path || '') !== destination) return null
+    try {
+      const directory = fs.lstatSync(destination)
+      const binary = fs.lstatSync(path.join(destination, 'cli-proxy-api'))
+      if (!directory.isDirectory() || directory.isSymbolicLink() || !binary.isFile() || binary.isSymbolicLink() || !(binary.mode & 0o111)) return null
+      return version
+    } catch (error) { if (error.code === 'ENOENT') return null; throw error }
   }
   assertNotInstalled(tag) {
     try { fs.lstatSync(path.join(this.root, tag)) } catch (error) { if (error.code === 'ENOENT') return; throw error }
@@ -185,15 +261,17 @@ export class Installer {
     if (info.isSymbolicLink() || !info.isDirectory()) throw new ConflictError('version path is not a safe directory')
 
     const pointer = path.join(root, 'current')
+    let removePointer = false
     try {
       const pointerInfo = fs.lstatSync(pointer)
       if (pointerInfo.isSymbolicLink()) {
         const activePath = path.resolve(path.dirname(pointer), fs.readlinkSync(pointer))
-        if (activePath === destination) throw new ConflictError('cannot uninstall the active CPA version')
+        if (activePath === destination) removePointer = true
       } else throw new ConflictError('version current pointer is not a safe symlink')
     } catch (error) {
       if (error.code !== 'ENOENT') throw error
     }
+    if (removePointer) fs.unlinkSync(pointer)
     await fsp.rm(destination, { recursive: true, force: false })
   }
 }
@@ -208,10 +286,11 @@ export class VersionService {
       try { state = this.store.getUpgradeState() } catch (error) { if (error.code !== 'ERR_NOT_FOUND') throw error }
       if (state && ![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(state.state)) throw new ConflictError(`upgrade state is ${state.state}; recover the upgrade first`)
       if (this.store.listInstances().some(instance => instance.version === tag)) throw new ConflictError(`CPA version ${tag} is in use by an instance`)
-      if (this.instances.defaultVersion === tag) throw new ConflictError(`CPA version ${tag} is the default version`)
       if (!this.installer) throw new Error('version installer unavailable')
+      const fallback = this.store.listVersions().find(version => version.tag !== tag && version.usable)
       await this.installer.uninstall(installed)
       this.store.deleteVersion(tag)
+      if (this.instances.defaultVersion === tag) this.instances.defaultVersion = fallback?.tag || ''
       return installed
     })
   }

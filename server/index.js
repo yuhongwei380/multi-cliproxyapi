@@ -9,7 +9,7 @@ import { Store, NotFoundError } from './store.js'
 import { openSecretStore } from './security.js'
 import { ProcessRuntime, SystemdRuntime, SystemdUnitManager } from './runtime.js'
 import { HTTPClient } from './cpa.js'
-import { GitHubSource, Installer, UpgradeService, VersionService } from './release.js'
+import { DirectGitHubSource, Installer, UpgradeService, VersionService } from './release.js'
 import { AuthService, InstanceService, DeleteService, QuotaService } from './services.js'
 import { Controller, createHttpServer } from './http.js'
 import { ManagementAssets } from './management-assets.js'
@@ -70,7 +70,7 @@ export function createApplication(config, overrides = {}) {
   const deleteService = overrides.deleteService || new DeleteService({ store, runtime, units, instances, auth });
   const clients = async instance => { const secret = instances.decryptManagementSecret(instance); return new HTTPClient({ baseUrl: `http://127.0.0.1:${instance.port}`, managementSecret: secret, quotaPath: config.quotaPath, maxRetries: 4, retryBaseMs: 150 }) }
   instances.healthCheck = async instance => { const client = await clients(instance); await client.health() }
-  const quota = overrides.quota || new QuotaService({ store, instances, clients, secrets }); const source = overrides.source || new GitHubSource(); const installer = overrides.installer || new Installer({ source, root: versionsRoot }); const activator = overrides.activator || units; const upgrade = overrides.upgrade || new UpgradeService({ store, instances, runtime, activator, units, prepareVersion: binaryByVersion }); const versionService = overrides.versionService || new VersionService({ store, instances, installer }); const branding = overrides.branding || new BrandingService({ store });
+  const quota = overrides.quota || new QuotaService({ store, instances, clients, secrets }); const source = overrides.source || new DirectGitHubSource(); const installer = overrides.installer || new Installer({ source, root: versionsRoot, store }); const activator = overrides.activator || units; const upgrade = overrides.upgrade || new UpgradeService({ store, instances, runtime, activator, units, prepareVersion: binaryByVersion }); const versionService = overrides.versionService || new VersionService({ store, instances, installer }); const branding = overrides.branding || new BrandingService({ store });
   const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
   return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, controller }
 }

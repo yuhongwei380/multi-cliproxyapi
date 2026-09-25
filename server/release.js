@@ -33,33 +33,18 @@ async function readResponse(response, maxBytes) {
 }
 
 export class GitHubSource {
-  constructor({ owner = 'router-for-me', repo = 'CLIProxyAPI', apiBase = 'https://api.github.com', fetchImpl = globalThis.fetch, userAgent = 'multi-cliproxyapi', token = process.env.MULTI_CPA_GITHUB_TOKEN || '', timeoutMs = 30000, maxAssetBytes = DEFAULT_MAX_ASSET_BYTES } = {}) {
+  constructor({ owner = 'router-for-me', repo = 'CLIProxyAPI', apiBase = 'https://api.github.com', fetchImpl = globalThis.fetch, userAgent = 'multi-cliproxyapi', timeoutMs = 30000, maxAssetBytes = DEFAULT_MAX_ASSET_BYTES } = {}) {
     if (!safeRepositoryPart(owner) || !safeRepositoryPart(repo)) throw new Error('GitHub repository contains unsafe characters')
     const api = new URL(apiBase)
     if (api.protocol !== 'https:' || api.hostname !== 'api.github.com' || api.username || api.password || api.port) throw new Error('GitHub API base must be https://api.github.com')
     if (!Number.isSafeInteger(maxAssetBytes) || maxAssetBytes < 1) throw new Error('release asset size limit is invalid')
-    if (typeof token !== 'string' || /[\r\n]/.test(token)) throw new Error('GitHub token is invalid')
-    this.owner = owner; this.repo = repo; this.apiBase = 'https://api.github.com'; this.fetchImpl = fetchImpl; this.userAgent = userAgent; this.token = token.trim(); this.timeoutMs = timeoutMs; this.maxAssetBytes = maxAssetBytes
+    this.owner = owner; this.repo = repo; this.apiBase = 'https://api.github.com'; this.fetchImpl = fetchImpl; this.userAgent = userAgent; this.timeoutMs = timeoutMs; this.maxAssetBytes = maxAssetBytes
   }
   async get(url) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
-      const headers = { Accept: 'application/vnd.github+json', 'User-Agent': this.userAgent }
-      if (this.token) headers.Authorization = `Bearer ${this.token}`
-      const response = await this.fetchImpl(url, { redirect: 'error', signal: controller.signal, headers })
-      if (!response.ok) {
-        if (response.status === 403) {
-          let detail = ''
-          try { detail = String(JSON.parse((await readResponse(response, MAX_RELEASE_JSON_BYTES)).toString('utf8'))?.message || '') } catch {}
-          const rateLimited = response.headers?.get?.('x-ratelimit-remaining') === '0' || /rate.?limit|abuse detection/i.test(detail)
-          const error = new Error(rateLimited ? 'GitHub release API rate limit exceeded' : 'GitHub release API access was denied (HTTP 403)')
-          Object.assign(error, rateLimited
-            ? { status: 429, code: 'ERR_GITHUB_RATE_LIMITED', publicMessage: 'GitHub API 请求已达到限额。请在 /etc/multi-cliproxyapi/controller.env 配置 MULTI_CPA_GITHUB_TOKEN，重启 multi-cliproxyapi.service 后重试。' }
-            : { status: 502, code: 'ERR_GITHUB_ACCESS_DENIED', publicMessage: 'GitHub 拒绝了发布信息请求（HTTP 403）。请检查 MULTI_CPA_GITHUB_TOKEN 和仓库访问权限。' })
-          throw error
-        }
-        throw new Error(`GitHub release API returned HTTP ${response.status}`)
-      }
+      const response = await this.fetchImpl(url, { redirect: 'error', signal: controller.signal, headers: { Accept: 'application/vnd.github+json', 'User-Agent': this.userAgent } })
+      if (!response.ok) throw new Error(`GitHub release API returned HTTP ${response.status}`)
       try { return JSON.parse((await readResponse(response, MAX_RELEASE_JSON_BYTES)).toString('utf8')) } catch (error) { throw new Error(`invalid GitHub release response: ${error.message}`) }
     } finally { clearTimeout(timer) }
   }
@@ -106,7 +91,7 @@ export class GitHubSource {
 }
 
 export class DirectGitHubSource extends GitHubSource {
-  async latest() {
+  async latestTag() {
     const url = `https://github.com/${this.owner}/${this.repo}/releases/latest`
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
@@ -122,8 +107,14 @@ export class DirectGitHubSource extends GitHubSource {
       try { tag = decodeURIComponent(encodedTag) } catch { throw new Error('GitHub latest release tag is invalid') }
       if (!safeTag(tag)) throw new Error('GitHub latest release tag is invalid')
       try { await response.body?.cancel() } catch {}
-      return this.byTag(tag)
+      return tag
     } finally { clearTimeout(timer) }
+  }
+  async latest() { return this.byTag(await this.latestTag()) }
+  async latestAsset(name) {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) throw new Error('invalid release asset name')
+    const tag = await this.latestTag()
+    return { name, url: `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`, size: 0, digest: '' }
   }
   async byTag(tag) {
     if (!safeTag(tag)) throw new Error('invalid release tag')

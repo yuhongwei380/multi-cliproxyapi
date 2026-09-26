@@ -2,6 +2,8 @@
 
 Multi CLIProxyAPI Controller 是一个运行在 Linux amd64 上的总控服务，用于管理同一台主机上的多个 CLIProxyAPI（CPA）实例。每个实例拥有独立的目录、CPA 二进制、配置、认证文件、日志和端口；总控重启或崩溃不会停止已经运行的子实例。
 
+本项目基于https://github.com/router-for-me/CLIProxyAPI 作为下游进行开发，不涉及修改 cliproxyapi的任何代码。
+
 项目提供管理 Web 页面和 HTTP API。管理员默认账号是 `admin`，首次密码也是 `admin`；登录后请立即修改密码。
 
 实例卡片支持“锁定实例 / 解锁实例”，锁定状态在总控重启后保留。锁定后禁止重启、停止、修改配置和删除；统一升级时只处理未锁定实例，已锁定实例保持不变；如果所有实例都已锁定，统一升级会拒绝执行，请先解锁至少一个实例。查看状态、刷新配额和启动已停止实例仍可使用。对应接口为 `POST /api/instances/:id/lock` 和 `POST /api/instances/:id/unlock`，两者都需要管理员登录；锁定无需额外密码，解锁必须在请求体中提供总控管理员密码 `admin_password`。两种操作都会记录到审计日志。

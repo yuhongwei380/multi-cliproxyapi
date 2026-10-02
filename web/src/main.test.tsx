@@ -244,6 +244,39 @@ test('unified upgrade stays available for unlocked instances when some children 
   expect(screen.getByText('本次只会升级未锁定实例，已锁定实例保持不变。')).toBeInTheDocument()
 })
 
+test.each([false, true])('can upgrade a previously locked child to an already used version (reverse order: %s)', async reverse => {
+  const items = [
+    { id: 'cpa_1', name: 'upgraded', port: 8317, locked: false, desired_state: 'running', version: 'v2', revision: 2, status: { state: 'running', ready: true } },
+    { id: 'cpa_2', name: 'protected', port: 8318, locked: true, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }
+  ]
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: reverse ? [...items].reverse() : items }) as any
+    if (path.endsWith('/quotas')) return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [{ tag: 'v2', usable: true }, { tag: 'v1', usable: true }] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    if (path === '/api/instances/cpa_2/unlock') { items[1] = { ...items[1], locked: false }; return response({}) as any }
+    if (path === '/api/versions/upgrade') { items[1] = { ...items[1], version: 'v2' }; return response({}) as any }
+    return response({}) as any
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByRole('button', { name: '解锁实例' })
+  const versionRow = () => within(screen.getByText('v2', { selector: '.version-row strong' }).closest('.version-row') as HTMLElement)
+  expect(versionRow().getByRole('button', { name: '统一升级' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: '卸载版本 v1' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '卸载版本 v2' })).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '解锁实例' }))
+  await user.type(screen.getByLabelText('输入总控管理员密码确认解锁'), 'administrator-password')
+  await user.click(screen.getByRole('button', { name: '确认解锁' }))
+  await waitFor(() => expect(versionRow().getByRole('button', { name: '统一升级' })).toBeEnabled())
+  await user.click(versionRow().getByRole('button', { name: '统一升级' }))
+  await waitFor(() => expect(versionRow().queryByRole('button', { name: '统一升级' })).not.toBeInTheDocument())
+  const upgradeCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/versions/upgrade')
+  expect(JSON.parse(String(upgradeCall?.[1]?.body))).toEqual({ version: 'v2' })
+})
+
 test('unified upgrade is disabled when every child is locked', async () => {
   vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
     const path = String(input)

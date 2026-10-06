@@ -53,6 +53,60 @@ test('Claude uses OAuth usage windows and omits absent windows', async () => {
   assert.equal(quota.values[0].name, '5 小时限额')
 })
 
+test('Kimi proxies OAuth usage and parses weekly and rolling windows without reading credentials', async () => {
+  let request
+  const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'test', fetchImpl: async (url, options) => {
+    request = { url, body: JSON.parse(options.body) }
+    return Response.json({ status_code: 200, body: JSON.stringify({
+      usage: { limit: '200', used: '50', remaining: '150', resetTime: '2030-10-07T00:00:00Z' },
+      limits: [{ detail: { limit: '100', used: '100', remaining: '0', resetTime: '2030-10-06T12:00:00Z' }, window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' } }],
+    }) })
+  } })
+  const quota = await client.fetchQuota({ id: 'kimi-1.json', provider: 'KIMI', auth_index: 'kimi-index' })
+  assert.equal(request.url, 'http://127.0.0.1:8317/v0/management/api-call')
+  assert.deepEqual(request.body, { authIndex: 'kimi-index', method: 'GET', url: 'https://api.kimi.com/coding/v1/usages', header: { Authorization: 'Bearer $TOKEN$', 'Content-Type': 'application/json' } })
+  assert.equal(quota.status, 'ok')
+  assert.deepEqual(quota.values, [
+    { name: '5 小时限额', remaining: 0, total: 100, unit: '%', reset_at: '2030-10-06T12:00:00.000Z' },
+    { name: '周限额', remaining: 75, total: 100, unit: '%', reset_at: '2030-10-07T00:00:00.000Z' },
+  ])
+})
+
+test('Kimi handles remaining-only, used-only, flat limits and monthly-only plans', () => {
+  const values = parseProviderQuota('kimi', {
+    limits: [
+      { limit: '80', used: '20', duration: '5', timeUnit: 'TIME_UNIT_HOUR' },
+      { detail: { limit: 200, remaining: 0 }, window: { duration: 7, timeUnit: 'TIME_UNIT_DAY' } },
+    ],
+    usages: { limit_month_total: { used_ratio: '0.2529', reset_time: '2030-11-01T00:00:00Z' } },
+  })
+  assert.equal(values[0].name, '5 小时限额')
+  assert.equal(values[0].remaining, 75)
+  assert.equal(values[1].name, '周限额')
+  assert.equal(values[1].remaining, 0)
+  assert.equal(values[2].name, '月限额')
+  assert.ok(Math.abs(values[2].remaining - 74.71) < 1e-10)
+  assert.equal(values[2].reset_at, '2030-11-01T00:00:00.000Z')
+  assert.equal(parseProviderQuota('kimi', { usages: { limit_month_total: { used_ratio: 0 } } })[0].remaining, 100)
+  const before = Date.now()
+  const reset = Date.parse(parseProviderQuota('kimi', { usage: { limit: 100, used: 125, resetIn: '60' } })[0].reset_at)
+  assert.ok(reset >= before + 60000 && reset <= Date.now() + 60000)
+})
+
+test('Kimi rejects missing and malformed usage instead of reporting full quota', async () => {
+  for (const payload of [
+    {}, { limits: [] }, { limits: {} }, { limits: [null] },
+    { usage: { limit: 100 } }, { usage: { limit: '100', used: '' } },
+    { usage: { limit: 0, used: 0 } }, { usage: { limit: 100, remaining: -1 } },
+    { usage: { limit: 100, used: true } }, { usage: { limit: 100, used: 0, resetTime: 'invalid' } },
+    { usages: { limit_month_total: { used_ratio: null } } },
+  ]) assert.throws(() => parseProviderQuota('kimi', payload))
+  for (const status of [401, 403, 429, 502]) {
+    const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'test', fetchImpl: async () => Response.json({ status_code: status, body: {} }) })
+    await assert.rejects(client.fetchQuota({ id: 'kimi', provider: 'kimi', auth_index: 'index' }), error => error.code !== 'ERR_UNSUPPORTED')
+  }
+})
+
 test('upstream errors and missing usage cannot masquerade as successful quota values', async () => {
   for (const payload of [{ status_code: 401, body: {} }, { status_code: 429, body: {} }, { status_code: 200, body: 'not JSON' }, { status_code: 200, body: { rate_limit: { primary_window: { used_percent: null } } } }, {}]) {
     const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'test', fetchImpl: async () => Response.json(payload) })
@@ -65,6 +119,7 @@ test('unknown providers are unsupported and missing auth index never falls back 
   const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'test', fetchImpl: async () => { calls++; throw new Error('unexpected network') } })
   await assert.rejects(client.fetchQuota({ id: 'a', provider: 'unknown' }), error => error.code === 'ERR_UNSUPPORTED')
   await assert.rejects(client.fetchQuota({ id: 'a', provider: 'codex' }), /auth_index/)
+  await assert.rejects(client.fetchQuota({ id: 'a', provider: 'kimi' }), /auth_index/)
   assert.equal(calls, 0)
 })
 

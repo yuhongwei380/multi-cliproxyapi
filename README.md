@@ -79,18 +79,18 @@ npm run package:linux
 - `release/install.sh`、`start.sh`、`stop.sh`、`uninstall.sh`：部署和生命周期脚本。
 
 构建过程会重新生成 `web/dist`，并清理打包 staging 和前端依赖目录。
-推送形如 `v26.9.6` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
+推送形如 `v26.9.7` 的 Git tag 后，GitHub Actions 会在 Linux amd64 runner 上运行测试、构建同样的发布包，并把包含二进制、校验文件和四个部署脚本的 `.tar.gz` 上传到 GitHub Release。
 
 ## 版本规则
 
-应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.6` 表示 2026 年 9 月的第七个发布版本；同一个月内的修复和小改动递增最后一位，例如从 `26.9.5` 更新到 `26.9.6`。Git tag 使用 `v` 前缀，例如 `v26.9.6`。
+应用版本采用 `YY.MM.PATCH` 的日历版本规则。当前版本 `26.9.7` 表示 2026 年 9 月的第八个发布版本；同一个月内的修复和小改动递增最后一位，例如从 `26.9.6` 更新到 `26.9.7`。Git tag 使用 `v` 前缀，例如 `v26.9.7`。
 
 这个规则比无语义的 `0.x` 更容易判断发布时间，同时仍符合 SemVer 的三个数字段，现有 npm、构建和发布工具可以继续使用。两位年份在 2099 年之后会产生歧义；如果项目需要长期维护，应在进入 2100 年前切换为 `YYYY.MM.PATCH`，当前阶段保留 `YY.MM.PATCH` 更简洁。
 
 ## 功能说明
 
 - 新建实例默认开启 `plugins.enabled: true`。
-- 总控通过 CPA 本机管理 API 获取 Codex 和 Claude OAuth 配额，默认每 6 小时刷新；总控不读取认证目录、不保存 OAuth Token，也不调用额度重置接口。
+- 总控通过 CPA 本机管理 API 获取 Codex、Claude 和 Kimi OAuth 配额，默认每 6 小时刷新；Kimi 支持周限额、滚动窗口和接口提供的月限额。总控不读取认证目录、不保存 OAuth Token，也不调用额度重置接口。
 - 配额页面显示周限额、模型窗口、百分比、进度条和重置时间；查询失败会保留上一次成功快照并显示失败状态。
 - 每个实例使用自己的 CPA 二进制副本。升级、回滚和总控重启会保留实例的期望状态；手动停止的实例不会被自动启动。
 - 运行日志和审计日志保存在控制数据库中，审计记录不会保存密码、Webhook Token 或 OAuth Token。

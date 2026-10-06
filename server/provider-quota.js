@@ -1,8 +1,9 @@
-// Contracts verified against the official management.html downloaded for
-// CPA 7.2.159. CPA substitutes $TOKEN$ internally; the controller never reads it.
+// Codex/Claude contracts verified against CPA 7.2.159 management.html;
+// Kimi follows the official Management Center's quota constants/builders.
+// CPA substitutes $TOKEN$ internally; the controller never reads it.
 export function providerQuotaRequest(account) {
   const provider = String(account.provider || '').toLowerCase()
-  if (!['codex', 'claude'].includes(provider)) return null
+  if (!['codex', 'claude', 'kimi'].includes(provider)) return null
   if (!account.auth_index) throw new Error('OAuth account is missing auth_index')
   const header = { Authorization: 'Bearer $TOKEN$', 'Content-Type': 'application/json' }
   let url
@@ -10,9 +11,11 @@ export function providerQuotaRequest(account) {
     url = 'https://chatgpt.com/backend-api/wham/usage'
     header['User-Agent'] = 'codex-tui/0.149.1'
     if (account.chatgpt_account_id) header['Chatgpt-Account-Id'] = account.chatgpt_account_id
-  } else {
+  } else if (provider === 'claude') {
     url = 'https://api.anthropic.com/api/oauth/usage'
     header['anthropic-beta'] = 'oauth-2025-04-20'
+  } else {
+    url = 'https://api.kimi.com/coding/v1/usages'
   }
   return { authIndex: account.auth_index, method: 'GET', url, header }
 }
@@ -43,6 +46,49 @@ function percentWindow(name, window, field, fallback) {
   return { name: windowName(name, window, fallback), remaining: Math.max(0, 100 - used), total: 100, unit: '%', ...(reset ? { reset_at: reset } : {}) }
 }
 
+function kimiNumber(value) {
+  if (typeof value === 'string' && value.trim()) value = Number(value)
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('invalid Kimi quota number')
+  return value
+}
+
+function kimiReset(window) {
+  const absolute = window.reset_at ?? window.resetAt ?? window.reset_time ?? window.resetTime
+  if (absolute !== undefined && absolute !== null) {
+    const date = typeof absolute === 'number' ? new Date(absolute * 1000) : typeof absolute === 'string' && absolute.trim() ? new Date(absolute) : null
+    if (!date || !Number.isFinite(date.getTime())) throw new Error('invalid Kimi quota reset time')
+    return { reset_at: date.toISOString() }
+  }
+  const relative = window.reset_in ?? window.resetIn ?? window.ttl
+  if (relative === undefined || relative === null) return {}
+  const date = new Date(Date.now() + kimiNumber(relative) * 1000)
+  if (!Number.isFinite(date.getTime())) throw new Error('invalid Kimi quota reset time')
+  return { reset_at: date.toISOString() }
+}
+
+function kimiWindow(detail, name) {
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) throw new Error('invalid Kimi quota window')
+  const total = kimiNumber(detail.limit)
+  if (total <= 0) throw new Error('Kimi quota window has no positive limit')
+  // Prefer the provider's remaining value; zero is a real exhausted window.
+  const remaining = detail.remaining !== undefined && detail.remaining !== null
+    ? kimiNumber(detail.remaining) : Math.max(0, total - kimiNumber(detail.used))
+  return { name, remaining: Math.min(100, remaining / total * 100), total: 100, unit: '%', ...kimiReset(detail) }
+}
+
+function kimiLimitName(item, detail, index) {
+  const window = item.window ?? {}
+  if (typeof window !== 'object' || Array.isArray(window) || window === null) throw new Error('invalid Kimi quota duration')
+  const duration = window.duration ?? item.duration ?? detail.duration
+  if (duration !== undefined && duration !== null) {
+    const unit = String(window.timeUnit ?? item.timeUnit ?? detail.timeUnit ?? 'MINUTE').toUpperCase().replace(/^TIME_UNIT_/, '').replace(/S$/, '')
+    const seconds = { SECOND: 1, MINUTE: 60, HOUR: 3600, DAY: 86400, WEEK: 604800 }[unit]
+    if (!seconds) throw new Error('invalid Kimi quota time unit')
+    return periodLabel({ limit_window_seconds: kimiNumber(duration) * seconds }, `限额 ${index + 1}`)
+  }
+  return item.name || item.title || item.scope || detail.name || detail.title || `限额 ${index + 1}`
+}
+
 export function parseProviderQuota(provider, payload) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) || payload.error) throw new Error('invalid provider quota response')
   const values = []
@@ -58,6 +104,17 @@ export function parseProviderQuota(provider, payload) {
   } else if (provider === 'claude') {
     const labels = { five_hour: '5 小时限额', seven_day: '周限额', seven_day_oauth_apps: 'OAuth 应用周限额', seven_day_opus: 'Opus 周限额', seven_day_sonnet: 'Sonnet 周限额', seven_day_cowork: 'Cowork 周限额', iguana_necktie: 'Iguana Necktie 周限额' }
     for (const key of Object.keys(labels)) if (payload[key]) values.push(percentWindow('', payload[key], 'utilization', labels[key]))
+  } else if (provider === 'kimi') {
+    if (payload.limits !== undefined && payload.limits !== null && !Array.isArray(payload.limits)) throw new Error('invalid Kimi quota limits')
+    for (const [index, item] of (payload.limits || []).entries()) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid Kimi quota limit')
+      const detail = item.detail ?? item
+      if (!detail || typeof detail !== 'object' || Array.isArray(detail)) throw new Error('invalid Kimi quota window')
+      values.push(kimiWindow(detail, kimiLimitName(item, detail, index)))
+    }
+    if (payload.usage) values.push(kimiWindow(payload.usage, '周限额'))
+    const monthly = payload.usages?.limit_month_total
+    if (monthly) values.push({ name: '月限额', remaining: Math.max(0, 100 - kimiNumber(monthly.used_ratio) * 100), total: 100, unit: '%', ...kimiReset(monthly) })
   }
   if (!values.length) throw new Error('provider response contains no quota windows')
   return values

@@ -304,8 +304,8 @@ export class UpgradeService {
   async upgrade(newVersion) {
     return this.instances.operations.run('global', async () => {
       if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable')
-      const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked)
-      if (allInstances.length && !instances.length) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
+      const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked && instance.version !== newVersion)
+      if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
       let oldState = null
       try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
       if (!instances.length || instances.every(item => item.version === newVersion)) return

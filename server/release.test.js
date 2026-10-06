@@ -245,6 +245,30 @@ test('unified upgrade skips locked children and refuses when all children are lo
   } finally { f.close() }
 })
 
+test('upgrading after unlocking only touches children still on the old version', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    await f.instances.start(f.second.id)
+    await f.instances.setLocked(f.second.id, true)
+    await f.upgrade.upgrade('v2')
+    const upgraded = f.store.getInstance(f.first.id)
+    await f.instances.setLocked(f.second.id, false)
+    const touched = []
+    for (const method of ['status', 'stop', 'start']) {
+      const original = f.runtime[method].bind(f.runtime)
+      f.runtime[method] = async item => { touched.push(item.id); return original(item) }
+    }
+    await f.upgrade.upgrade('v2')
+    assert.ok(touched.length > 0)
+    assert.ok(touched.every(id => id === f.second.id))
+    assert.deepEqual(f.store.getInstance(f.first.id), upgraded)
+    assert.equal(f.store.getInstance(f.second.id).version, 'v2')
+    assert.equal((await f.instances.status(f.second.id)).state, 'running')
+    assert.throws(() => f.store.getUpgradeState(), /upgrade state not found/)
+  } finally { f.close() }
+})
+
 test('unified upgrade refuses when every child is locked before touching any instance', async () => {
   const f = await upgradeFixture()
   try {

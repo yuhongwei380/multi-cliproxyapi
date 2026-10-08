@@ -55,25 +55,37 @@ test('duplicate version installation reports conflict without downloading again'
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
-test('uninstall removes an unused version and keeps the default version', async () => {
+for (const first of ['v1', 'v2']) test(`uninstall removes unused versions and updates the default (first: ${first})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-uninstall-'))
   const versionsRoot = path.join(root, 'versions')
   const store = new Store(path.join(root, 'control.db'))
   const instances = new InstanceService({ store, runtime: new FakeRuntime(), units: new NoopUnitManager(), root, defaultVersion: 'v2', requireVersion: false })
   const installer = new Installer({ source: {}, root: versionsRoot })
   try {
-    for (const tag of ['v1', 'v2']) {
+    for (const tag of ['v1', 'v2', 'v3']) {
       const directory = path.join(versionsRoot, tag)
       fs.mkdirSync(directory, { recursive: true })
       fs.writeFileSync(path.join(directory, 'cli-proxy-api'), `binary-${tag}`)
-      store.saveVersion({ tag, path: directory, sha256: '', installed_at: new Date().toISOString(), usable: true })
+      store.saveVersion({ tag, path: directory, sha256: '', installed_at: new Date().toISOString(), usable: tag !== 'v3' })
     }
     const versions = new VersionService({ store, instances, installer })
-    await versions.uninstall('v1')
-    assert.equal(fs.existsSync(path.join(versionsRoot, 'v1')), false)
-    assert.throws(() => store.getVersion('v1'), /version not found/)
-    assert.equal(store.getVersion('v2').tag, 'v2')
-    await assert.rejects(() => versions.uninstall('v2'), /default version/)
+    const pointer = path.join(versionsRoot, 'current')
+    fs.symlinkSync('v2', pointer)
+    const remaining = first === 'v1' ? 'v2' : 'v1'
+    await versions.uninstall(first)
+    assert.equal(fs.existsSync(path.join(versionsRoot, first)), false)
+    assert.throws(() => store.getVersion(first), /version not found/)
+    assert.equal(store.getVersion(remaining).tag, remaining)
+    assert.equal(instances.defaultVersion, remaining)
+    if (first === 'v1') assert.equal(fs.readlinkSync(pointer), 'v2')
+    else assert.throws(() => fs.lstatSync(pointer), { code: 'ENOENT' })
+
+    await versions.uninstall(remaining)
+    assert.equal(fs.existsSync(path.join(versionsRoot, remaining)), false)
+    assert.throws(() => store.getVersion(remaining), /version not found/)
+    assert.equal(instances.defaultVersion, '')
+    assert.equal(store.getVersion('v3').usable, false)
+    assert.throws(() => fs.lstatSync(pointer), { code: 'ENOENT' })
   } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }) }
 })
 

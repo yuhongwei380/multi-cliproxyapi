@@ -826,18 +826,24 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   const accounts = quotas.filter(quota => quota.account_id !== '__discovery__')
   return <section ref={summary} className="quota-summary">
     <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong><button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button></div>
-    <div className="quota-summary-columns"><span>账户</span><span>周额度剩余</span></div>
+    <div className="quota-summary-columns"><span>账户</span><span>5h limit</span><span>week limit</span></div>
     {quotas.map(quota => {
       const weekly = quota.values?.find(value => value.name === '周限额')
-      const percent = weekly ? quotaPercent(weekly) : null
+      const fiveHour = quota.values?.find(value => value.name === '5 小时限额')
       const label = quota.account_id === '__discovery__' ? 'OAuth 账户' : quota.account_id
       return <div className="quota-summary-row" key={quota.account_id}>
-        <div className="quota-summary-account"><strong title={label}>{label}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && weekly ? ' · 缓存' : ''}</small></div>
-        <div className="quota-summary-value"><strong>{weekly ? formatQuotaValue(weekly) : quota.status === 'empty' ? '—' : quota.status === 'failed' ? '查询失败' : '未提供周额度'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={`${label} 周额度剩余`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
+        <div className="quota-summary-account"><strong title={label}>{label}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && (fiveHour || weekly) ? ' · 缓存' : ''}</small></div>
+        <QuotaSummaryValue value={fiveHour} status={quota.status} label={`${label} 5 小时额度剩余`} />
+        <QuotaSummaryValue value={weekly} status={quota.status} label={`${label} 周额度剩余`} />
       </div>
     })}
     {showDetails && createPortal(<QuotaDetailDialog quotas={quotas} onClose={closeDetails} />, document.body)}
   </section>
+}
+
+function QuotaSummaryValue({ value, status, label }: { value?: QuotaValue; status: QuotaSnapshot['status']; label: string }) {
+  const percent = value ? quotaPercent(value) : null
+  return <div className="quota-summary-value"><strong>{value ? formatQuotaValue(value) : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
 }
 
 function QuotaDetailDialog({ quotas, onClose }: { quotas: QuotaSnapshot[]; onClose: () => void }) {

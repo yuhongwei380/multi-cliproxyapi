@@ -87,12 +87,16 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
     .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any)
-    .mockImplementationOnce(() => response({ items: [{ instance_id: 'cpa_1', account_id: 'oauth-1', provider: 'codex', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 31, total: 100, unit: '%', reset_at: '2030-09-19T08:09:00Z' }, { name: 'GPT-5.3-Codex-Spark 5 小时限额', remaining: 100, total: 100, unit: '%', reset_at: '2030-09-15T18:09:00Z' }] }] }) as any)
+    .mockImplementationOnce(() => response({ items: [{ instance_id: 'cpa_1', account_id: 'oauth-1', provider: 'codex', status: 'ok', collected_at: '2030-01-01T00:00:00Z', attempted_at: '2030-01-01T00:00:00Z', values: [{ name: '周限额', remaining: 31, total: 100, unit: '%', reset_at: '2030-09-19T08:09:00Z' }, { name: 'GPT-5.3-Codex-Spark 5 小时限额', remaining: 100, total: 100, unit: '%', reset_at: '2030-09-15T18:09:00Z' }, { name: '5 小时限额', remaining: 12, total: 100, unit: '%' }] }] }) as any)
     .mockImplementationOnce(() => response({ items: [] }) as any)
     .mockImplementationOnce(() => response({ state: 'idle' }) as any)
 
   render(<App />)
   await screen.findByRole('button', { name: '额度详情' })
+  expect(screen.getByText('5h limit')).toBeInTheDocument()
+  expect(screen.getByText('week limit')).toBeInTheDocument()
+  expect(screen.getByRole('progressbar', { name: 'oauth-1 5 小时额度剩余' })).toHaveAttribute('aria-valuenow', '12')
+  expect(screen.getByRole('progressbar', { name: 'oauth-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()
   await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(await screen.findByText('周限额')).toBeInTheDocument()
@@ -101,6 +105,31 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.getByRole('progressbar', { name: 'GPT-5.3-Codex-Spark 5 小时限额 剩余配额' })).toHaveAttribute('aria-valuenow', '100')
   expect(screen.getByText(/09\/19/)).toBeInTheDocument()
+})
+
+test('keeps each summary limit independent when a window is missing or cached', async () => {
+  const account = 'kimi-' + 'long-oauth-account-name-'.repeat(6) + '.json'
+  vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any)
+    .mockImplementationOnce(() => response({ items: [
+      { instance_id: 'cpa_1', account_id: account, provider: 'kimi', status: 'stale', values: [{ name: '5 小时限额', remaining: 0, total: 100, unit: '%' }] },
+      { instance_id: 'cpa_1', account_id: 'weekly-only', provider: 'kimi', status: 'ok', values: [{ name: '周限额', remaining: 100, total: 100, unit: '%' }] },
+      { instance_id: 'cpa_1', account_id: 'failed', status: 'failed' }
+    ] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+  render(<App />)
+  const name = await screen.findByText(account)
+  expect(name).toHaveAttribute('title', account)
+  const cachedRow = within(name.closest('.quota-summary-row') as HTMLElement)
+  expect(cachedRow.getByRole('progressbar', { name: `${account} 5 小时额度剩余` })).toHaveAttribute('aria-valuenow', '0')
+  expect(cachedRow.getByText(/缓存/)).toBeInTheDocument()
+  expect(cachedRow.getByText('未提供')).toBeInTheDocument()
+  const weeklyRow = within(screen.getByText('weekly-only').closest('.quota-summary-row') as HTMLElement)
+  expect(weeklyRow.getByText('未提供')).toBeInTheDocument()
+  expect(weeklyRow.getByRole('progressbar', { name: 'weekly-only 周额度剩余' })).toHaveAttribute('aria-valuenow', '100')
+  expect(within(screen.getByText('failed').closest('.quota-summary-row') as HTMLElement).getAllByText('查询失败', { selector: '.quota-summary-value > strong' })).toHaveLength(2)
 })
 
 test('shows two OAuth accounts by default and reveals more accounts from a selector', async () => {
@@ -125,7 +154,8 @@ test('shows two OAuth accounts by default and reveals more accounts from a selec
   expect(defaultRows.getByText('openai · oauth-2')).toBeInTheDocument()
   expect(defaultRows.queryByText('openai · oauth-3')).not.toBeInTheDocument()
 
-  await user.selectOptions(within(dialog).getByRole('combobox', { name: '选择其他 OAuth 账户' }), 'oauth-3')
+  await user.click(within(dialog).getByRole('combobox', { name: /^选择其他 OAuth 账户/ }))
+  await user.click(screen.getByRole('option', { name: 'openai · oauth-3' }))
   expect(within(dialog.querySelector('.quota-detail-additional .quota-rows') as HTMLElement).getByText('openai · oauth-3')).toBeInTheDocument()
 })
 

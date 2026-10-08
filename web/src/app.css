@@ -920,17 +920,17 @@ body { background: var(--bg-secondary); }
   white-space: nowrap;
 }
 
-/* Shared account/weekly summary; full windows live in the modal. */
+/* Reserve both quota columns independently of wrapping account names. */
 .quota-summary { margin-top: 12px; border-top: 1px solid var(--line); }
 .quota-summary-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; }
 .quota-summary-heading > strong { font-size: 12px; font-weight: 650; }
 .quota-summary-heading .button { min-height: 40px; padding-inline: 10px; font-size: 12px; }
-.quota-summary-columns, .quota-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 12px; }
+.quota-summary-columns, .quota-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 72px; gap: 8px; }
 .quota-summary-columns { padding: 4px 0; color: var(--muted); font-size: 11px; }
-.quota-summary-columns > :last-child { text-align: right; }
+.quota-summary-columns > :not(:first-child) { text-align: right; white-space: nowrap; }
 .quota-summary-row { align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
 .quota-summary-account { min-width: 0; }
-.quota-summary-account > strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; }
+.quota-summary-account > strong { display: block; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
 .quota-summary-account > small { display: block; margin-top: 2px; font-size: 11px; }
 .quota-summary-value { text-align: right; font-variant-numeric: tabular-nums; }
 .quota-summary-value > strong { font-size: 13px; }

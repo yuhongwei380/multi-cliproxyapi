@@ -824,17 +824,22 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   const closeDetails = () => { setShowDetails(false); queueMicrotask(() => summary.current?.querySelector('button')?.focus()) }
   if (!quotas.length) return null
   const accounts = quotas.filter(quota => quota.account_id !== '__discovery__')
+  const windowColumns = [
+    { name: '5 小时限额', title: '5h额度', label: '5 小时额度剩余' },
+    { name: '周限额', title: '周额度', label: '周额度剩余' },
+    { name: '月限额', title: 'month limit', label: '月额度剩余' },
+  ]
+  const availableColumns = windowColumns.filter(column => quotas.some(quota => quota.values?.some(value => value.name === column.name)))
+  const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)
+  const gridStyle = { gridTemplateColumns: `minmax(0, 1fr) repeat(${columns.length}, 72px)` }
   return <section ref={summary} className="quota-summary">
     <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong><button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button></div>
-    <div className="quota-summary-columns"><span>账户</span><span>5h limit</span><span>week limit</span></div>
+    <div className="quota-summary-columns" style={gridStyle}><span>账户</span>{columns.map(column => <span key={column.name}>{column.title}</span>)}</div>
     {quotas.map(quota => {
-      const weekly = quota.values?.find(value => value.name === '周限额')
-      const fiveHour = quota.values?.find(value => value.name === '5 小时限额')
       const label = quota.account_id === '__discovery__' ? 'OAuth 账户' : quota.account_id
-      return <div className="quota-summary-row" key={quota.account_id}>
-        <div className="quota-summary-account"><strong title={label}>{label}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && (fiveHour || weekly) ? ' · 缓存' : ''}</small></div>
-        <QuotaSummaryValue value={fiveHour} status={quota.status} label={`${label} 5 小时额度剩余`} />
-        <QuotaSummaryValue value={weekly} status={quota.status} label={`${label} 周额度剩余`} />
+      return <div className="quota-summary-row" style={gridStyle} key={quota.account_id}>
+        <div className="quota-summary-account"><strong title={label}>{label}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && columns.some(column => quota.values?.some(value => value.name === column.name)) ? ' · 缓存' : ''}</small></div>
+        {columns.map(column => <QuotaSummaryValue key={column.name} value={quota.values?.find(value => value.name === column.name)} status={quota.status} label={`${label} ${column.label}`} />)}
       </div>
     })}
     {showDetails && createPortal(<QuotaDetailDialog quotas={quotas} onClose={closeDetails} />, document.body)}

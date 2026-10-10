@@ -93,8 +93,8 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
 
   render(<App />)
   await screen.findByRole('button', { name: '额度详情' })
-  expect(screen.getByText('5h limit')).toBeInTheDocument()
-  expect(screen.getByText('week limit')).toBeInTheDocument()
+  expect(screen.getByText('5h额度')).toBeInTheDocument()
+  expect(screen.getByText('周额度')).toBeInTheDocument()
   expect(screen.getByRole('progressbar', { name: 'oauth-1 5 小时额度剩余' })).toHaveAttribute('aria-valuenow', '12')
   expect(screen.getByRole('progressbar', { name: 'oauth-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()
@@ -130,6 +130,30 @@ test('keeps each summary limit independent when a window is missing or cached', 
   expect(weeklyRow.getByText('未提供')).toBeInTheDocument()
   expect(weeklyRow.getByRole('progressbar', { name: 'weekly-only 周额度剩余' })).toHaveAttribute('aria-valuenow', '100')
   expect(within(screen.getByText('failed').closest('.quota-summary-row') as HTMLElement).getAllByText('查询失败', { selector: '.quota-summary-value > strong' })).toHaveLength(2)
+})
+
+test.each([false, true])('shows Kimi monthly quotas with a weekly column only when supplied (%s)', async weekly => {
+  const values = [
+    { name: '5 小时限额', remaining: 100, total: 100, unit: '%' },
+    ...(weekly ? [{ name: '周限额', remaining: 96, total: 100, unit: '%' }] : []),
+    { name: '月限额', remaining: 0, total: 100, unit: '%', reset_at: '2030-11-10T00:00:00Z' },
+  ]
+  vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'kimi', port: 8320, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any)
+    .mockImplementationOnce(() => response({ items: [{ instance_id: 'cpa_1', account_id: 'kimi-1', provider: 'kimi', status: 'ok', values }] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+  render(<App />)
+  await screen.findByText('kimi-1')
+  expect(screen.getByText('5h额度')).toBeInTheDocument()
+  expect(screen.getByText('month limit')).toBeInTheDocument()
+  expect(Boolean(screen.queryByText('周额度'))).toBe(weekly)
+  expect(screen.getByRole('progressbar', { name: 'kimi-1 月额度剩余' })).toHaveAttribute('aria-valuenow', '0')
+  if (weekly) expect(screen.getByRole('progressbar', { name: 'kimi-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '96')
+  await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
+  expect(screen.getByText('月限额')).toBeInTheDocument()
+  expect(screen.getByRole('progressbar', { name: '月限额 剩余配额' })).toHaveAttribute('aria-valuenow', '0')
 })
 
 test('shows two OAuth accounts by default and reveals more accounts from a selector', async () => {

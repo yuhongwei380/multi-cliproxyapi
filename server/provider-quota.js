@@ -23,7 +23,8 @@ export function providerQuotaRequest(account) {
 function periodLabel(window, fallback) {
   const seconds = Number(window.limit_window_seconds)
   if (!Number.isFinite(seconds) || seconds <= 0) return fallback
-  if (seconds >= 6 * 24 * 60 * 60) return '周限额'
+  if (seconds >= 28 * 24 * 60 * 60 && seconds <= 31 * 24 * 60 * 60) return '月限额'
+  if (seconds === 7 * 24 * 60 * 60) return '周限额'
   if (seconds % (24 * 60 * 60) === 0) return `${seconds / (24 * 60 * 60)} 天限额`
   if (seconds % (60 * 60) === 0) return `${seconds / (60 * 60)} 小时限额`
   if (seconds % 60 === 0) return `${seconds / 60} 分钟限额`
@@ -82,7 +83,7 @@ function kimiLimitName(item, detail, index) {
   const duration = window.duration ?? item.duration ?? detail.duration
   if (duration !== undefined && duration !== null) {
     const unit = String(window.timeUnit ?? item.timeUnit ?? detail.timeUnit ?? 'MINUTE').toUpperCase().replace(/^TIME_UNIT_/, '').replace(/S$/, '')
-    const seconds = { SECOND: 1, MINUTE: 60, HOUR: 3600, DAY: 86400, WEEK: 604800 }[unit]
+    const seconds = { SECOND: 1, MINUTE: 60, HOUR: 3600, DAY: 86400, WEEK: 604800, MONTH: 2592000 }[unit]
     if (!seconds) throw new Error('invalid Kimi quota time unit')
     return periodLabel({ limit_window_seconds: kimiNumber(duration) * seconds }, `限额 ${index + 1}`)
   }
@@ -105,16 +106,28 @@ export function parseProviderQuota(provider, payload) {
     const labels = { five_hour: '5 小时限额', seven_day: '周限额', seven_day_oauth_apps: 'OAuth 应用周限额', seven_day_opus: 'Opus 周限额', seven_day_sonnet: 'Sonnet 周限额', seven_day_cowork: 'Cowork 周限额', iguana_necktie: 'Iguana Necktie 周限额' }
     for (const key of Object.keys(labels)) if (payload[key]) values.push(percentWindow('', payload[key], 'utilization', labels[key]))
   } else if (provider === 'kimi') {
+    const usages = payload.usages
+    if (usages !== undefined && usages !== null && (typeof usages !== 'object' || Array.isArray(usages))) throw new Error('invalid Kimi quota usages')
+    // Named windows identify the plan. Do not invent a weekly window from the
+    // legacy summary when the provider explicitly supplies 5h/monthly windows.
+    const namedCodeWindows = usages?.limit_5h != null || usages?.limit_7d != null
+    const namedWindows = new Map()
+    for (const [key, name] of [['limit_5h', '5 小时限额'], ['limit_7d', '周限额'], ['limit_month_total', '月限额']]) {
+      const window = usages?.[key]
+      if (window === undefined || window === null) continue
+      if (typeof window !== 'object' || Array.isArray(window)) throw new Error('invalid Kimi quota window')
+      namedWindows.set(name, { name, remaining: Math.max(0, 100 - kimiNumber(window.used_ratio) * 100), total: 100, unit: '%', ...kimiReset(window) })
+    }
     if (payload.limits !== undefined && payload.limits !== null && !Array.isArray(payload.limits)) throw new Error('invalid Kimi quota limits')
     for (const [index, item] of (payload.limits || []).entries()) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('invalid Kimi quota limit')
       const detail = item.detail ?? item
       if (!detail || typeof detail !== 'object' || Array.isArray(detail)) throw new Error('invalid Kimi quota window')
-      values.push(kimiWindow(detail, kimiLimitName(item, detail, index)))
+      const name = kimiLimitName(item, detail, index)
+      if (!namedWindows.has(name)) values.push(kimiWindow(detail, name))
     }
-    if (payload.usage) values.push(kimiWindow(payload.usage, '周限额'))
-    const monthly = payload.usages?.limit_month_total
-    if (monthly) values.push({ name: '月限额', remaining: Math.max(0, 100 - kimiNumber(monthly.used_ratio) * 100), total: 100, unit: '%', ...kimiReset(monthly) })
+    if (payload.usage && !namedCodeWindows && !values.some(value => value.name === '周限额')) values.push(kimiWindow(payload.usage, '周限额'))
+    values.push(...namedWindows.values())
   }
   if (!values.length) throw new Error('provider response contains no quota windows')
   return values

@@ -100,10 +100,41 @@ test('Kimi rejects missing and malformed usage instead of reporting full quota',
     { usage: { limit: 0, used: 0 } }, { usage: { limit: 100, remaining: -1 } },
     { usage: { limit: 100, used: true } }, { usage: { limit: 100, used: 0, resetTime: 'invalid' } },
     { usages: { limit_month_total: { used_ratio: null } } },
+    { usages: [] }, { usages: { limit_5h: [] } }, { usages: { limit_7d: { used_ratio: -1 } } },
   ]) assert.throws(() => parseProviderQuota('kimi', payload))
   for (const status of [401, 403, 429, 502]) {
     const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'test', fetchImpl: async () => Response.json({ status_code: status, body: {} }) })
     await assert.rejects(client.fetchQuota({ id: 'kimi', provider: 'kimi', auth_index: 'index' }), error => error.code !== 'ERR_UNSUPPORTED')
+  }
+})
+
+test('Kimi named windows distinguish monthly plans and override legacy summaries without duplicates', () => {
+  for (const weekly of [false, true]) {
+    const values = parseProviderQuota('kimi', {
+      usage: { limit: 100, remaining: 96, resetTime: '2030-11-10T00:00:00Z' },
+      limits: [{ detail: { limit: 100, remaining: 100 }, window: { duration: 300, timeUnit: 'TIME_UNIT_MINUTE' } }],
+      usages: {
+        limit_5h: { used_ratio: 0, reset_time: '2030-10-10T08:00:00Z' },
+        limit_7d: weekly ? { used_ratio: '0.25', reset_time: '2030-10-17T00:00:00Z' } : null,
+        limit_month_total: { used_ratio: 1, reset_time: '2030-11-10T00:00:00Z' },
+      },
+    })
+    assert.deepEqual(values.map(value => value.name), weekly ? ['5 小时限额', '周限额', '月限额'] : ['5 小时限额', '月限额'])
+    assert.equal(values[0].remaining, 100)
+    assert.equal(values.at(-1).remaining, 0)
+    assert.equal(values[0].reset_at, '2030-10-10T08:00:00.000Z')
+    if (weekly) assert.equal(values[1].remaining, 75)
+  }
+})
+
+test('Kimi legacy monthly-only and weekly/monthly plans retain their actual windows', () => {
+  const monthly = { limit_month_total: { used_ratio: 0.5 } }
+  const rolling = { limit: 100, remaining: 80, duration: 5, timeUnit: 'HOUR' }
+  assert.deepEqual(parseProviderQuota('kimi', { limits: [rolling], usages: monthly }).map(value => value.name), ['5 小时限额', '月限额'])
+  assert.deepEqual(parseProviderQuota('kimi', { limits: [rolling], usage: { limit: 100, remaining: 60 }, usages: monthly }).map(value => value.name), ['5 小时限额', '周限额', '月限额'])
+  for (const [duration, timeUnit, name] of [[30, 'DAY', '月限额'], [1, 'TIME_UNIT_MONTH', '月限额'], [14, 'DAY', '14 天限额']]) {
+    const values = parseProviderQuota('kimi', { limits: [{ limit: 100, remaining: 25, duration, timeUnit }] })
+    assert.equal(values[0].name, name)
   }
 })
 

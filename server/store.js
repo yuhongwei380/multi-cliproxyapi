@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { backupMetadata } from './instance-backup.js'
 
 export class NotFoundError extends Error {
   constructor(message = 'not found') { super(message); this.code = 'ERR_NOT_FOUND'; this.status = 404 }
@@ -32,6 +33,17 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
     this.db.exec('CREATE TABLE IF NOT EXISTS plugin_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS managed_keys (
+        id TEXT PRIMARY KEY, note TEXT NOT NULL, ciphertext TEXT NOT NULL,
+        fingerprint TEXT NOT NULL UNIQUE, locked INTEGER NOT NULL DEFAULT 0,
+        deleting INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS key_bindings (
+        key_id TEXT NOT NULL REFERENCES managed_keys(id) ON DELETE CASCADE,
+        instance_id TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL,
+        PRIMARY KEY(key_id,instance_id)
+      );
+      CREATE INDEX IF NOT EXISTS key_bindings_instance_idx ON key_bindings(instance_id);
       CREATE TABLE IF NOT EXISTS admins (
         username TEXT PRIMARY KEY,
         password_hash TEXT NOT NULL
@@ -150,6 +162,13 @@ export class Store {
     // Add the columns explicitly so an upgrade keeps the current settings row.
     const instanceColumns = new Set(this.db.prepare('PRAGMA table_info(instances)').all().map(row => row.name))
     if (!instanceColumns.has('locked')) this.db.exec('ALTER TABLE instances ADD COLUMN locked INTEGER NOT NULL DEFAULT 0')
+    if (!instanceColumns.has('is_backup')) {
+      this.db.exec('ALTER TABLE instances ADD COLUMN is_backup INTEGER NOT NULL DEFAULT 0')
+      for (const instance of this.db.prepare('SELECT id,directory FROM instances').all()) {
+        if (backupMetadata(instance)) this.db.prepare('UPDATE instances SET is_backup=1 WHERE id=?').run(instance.id)
+      }
+    }
+    this.db.exec('CREATE TABLE IF NOT EXISTS instance_limits (id INTEGER PRIMARY KEY CHECK(id=1), max_instances INTEGER NOT NULL, max_backups INTEGER NOT NULL)')
     const quotaColumns = new Set(this.db.prepare('PRAGMA table_info(quota_settings)').all().map(row => row.name))
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
@@ -165,7 +184,25 @@ export class Store {
   }
 
   close() { this.db?.close(); this.db = null }
+  getInstanceLimits() { return this.db.prepare('SELECT max_instances,max_backups FROM instance_limits WHERE id=1').get() || null }
+  saveInstanceLimits(value) {
+    this.db.prepare('INSERT INTO instance_limits VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET max_instances=excluded.max_instances,max_backups=excluded.max_backups').run(value.max_instances, value.max_backups)
+  }
   init() {}
+  listManagedKeys() { return this.db.prepare('SELECT * FROM managed_keys ORDER BY created_at DESC, id').all().map(row => ({ ...row, locked: Boolean(row.locked), deleting: Boolean(row.deleting) })) }
+  getManagedKey(id) { const key = this.db.prepare('SELECT * FROM managed_keys WHERE id=?').get(id); if (!key) throw new NotFoundError('Key 不存在'); return { ...key, locked: Boolean(key.locked), deleting: Boolean(key.deleting) } }
+  createManagedKey(key) {
+    try { this.db.prepare('INSERT INTO managed_keys(id,note,ciphertext,fingerprint,locked,deleting,created_at) VALUES(?,?,?,?,?,?,?)').run(key.id,key.note,key.ciphertext,key.fingerprint,0,0,key.created_at) }
+    catch (error) { if (this.db.prepare('SELECT id FROM managed_keys WHERE fingerprint=?').get(key.fingerprint)) throw new ConflictError('Key 已存在'); throw error }
+  }
+  saveManagedKey(key) { this.db.prepare('UPDATE managed_keys SET note=?,locked=?,deleting=? WHERE id=?').run(key.note,key.locked ? 1 : 0,key.deleting ? 1 : 0,key.id) }
+  deleteManagedKey(id) { if (this.keyBindings(id).length) throw new ConflictError('Key 仍有未撤销绑定'); this.db.prepare('DELETE FROM managed_keys WHERE id=?').run(id) }
+  keyBindings(id) { return this.db.prepare('SELECT b.*,i.name AS instance_name FROM key_bindings b LEFT JOIN instances i ON i.id=b.instance_id WHERE key_id=? ORDER BY instance_id').all(id) }
+  bindKey(id, instanceId) { this.db.prepare("INSERT OR IGNORE INTO key_bindings(key_id,instance_id,status,message) VALUES(?,?,'pending','')").run(id,instanceId) }
+  saveKeyBinding(id, instanceId, status, message) { this.db.prepare('UPDATE key_bindings SET status=?,message=? WHERE key_id=? AND instance_id=?').run(status,message,id,instanceId) }
+  unbindKey(id, instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE key_id=? AND instance_id=?').run(id,instanceId) }
+  assertNoKeyBindings(instanceId) { if (this.db.prepare('SELECT 1 FROM key_bindings WHERE instance_id=? LIMIT 1').get(instanceId)) throw new ConflictError('实例仍绑定总控 Key，请先解绑并撤销') }
+  inheritKeyBindings(sourceId, targetId) { this.db.prepare("INSERT INTO key_bindings(key_id,instance_id,status,message) SELECT key_id,?,'copied','备份继承的 Key，启动后可验证或撤销' FROM key_bindings WHERE instance_id=?").run(targetId,sourceId) }
 
   getAdminHash(username) {
     const row = this.db.prepare('SELECT password_hash FROM admins WHERE username = ?').get(username)
@@ -190,14 +227,14 @@ export class Store {
     return {
       id: row.id, name: row.name, port: Number(row.port), directory: row.directory,
       management_secret_ciphertext: row.management_secret_ciphertext,
-      locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
+      is_backup: Boolean(row.is_backup), locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
       created_at: row.created_at, updated_at: row.updated_at
     }
   }
   createInstance(instance) {
     try {
-      this.db.prepare(`INSERT INTO instances(id,name,port,directory,management_secret_ciphertext,desired_state,version,revision,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(instance.id, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at)
+      this.db.prepare(`INSERT INTO instances(id,name,port,directory,management_secret_ciphertext,desired_state,version,revision,created_at,updated_at,locked,is_backup)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(instance.id, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at, instance.locked ? 1 : 0, instance.is_backup ? 1 : 0)
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) throw new ConflictError()
       throw error
@@ -219,6 +256,7 @@ export class Store {
     }
   }
   deleteInstance(id) {
+    this.assertNoKeyBindings(id)
     const result = this.db.prepare('DELETE FROM instances WHERE id = ?').run(id)
     if (Number(result.changes) !== 1) throw new NotFoundError('instance not found')
   }
@@ -322,6 +360,12 @@ export class Store {
   clearUpgradeState() { this.db.prepare('DELETE FROM upgrade_state WHERE id=?').run('singleton') }
   savePluginJob(job) { this.db.prepare('INSERT INTO plugin_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(job.id, json(job)) }
   listPluginJobs() { return this.db.prepare('SELECT payload FROM plugin_jobs ORDER BY rowid DESC LIMIT 100').all().map(row => parse(row.payload, {})) }
+  deletePluginJob(id) {
+    const result = this.db.prepare("DELETE FROM plugin_jobs WHERE id=? AND json_extract(payload, '$.state') IN ('completed','failed')").run(id)
+    if (Number(result.changes) === 1) return
+    if (!this.db.prepare('SELECT id FROM plugin_jobs WHERE id=?').get(id)) throw new NotFoundError('plugin deployment record not found')
+    throw new ConflictError('only completed or failed plugin deployment records can be deleted')
+  }
 
   createDeleteChallenge(challenge) {
     this.db.prepare('INSERT INTO delete_challenges(id,instance_id,revision,expires_at,used) VALUES(?,?,?,?,0)').run(challenge.id, challenge.instance_id, challenge.revision, challenge.expires_at)

@@ -317,6 +317,7 @@ export class UpgradeService {
         for (const version of new Set(instances.map(item => item.version))) await this.prepareVersion(version)
         await this.prepareVersion(newVersion)
       }
+      await this.instances.automaticBackups(instances.map(instance => instance.id), `CPA ${newVersion}`)
       const state = { id: 'singleton', state: UpgradeState.PREPARED, old_version: oldVersion, new_version: newVersion, original_running: [], original_desired: {}, instance_stages: {}, message: '', updated_at: this.clock().toISOString() }
       try {
         for (const instance of instances) { state.original_desired[instance.id] = { desired_state: instance.desired_state, version: instance.version }; const status = await this.runtime.status(instance); if (status.state === ObservedState.UNKNOWN) throw new Error(`inspect ${instance.id}: runtime state is unknown`); state.instance_stages[instance.id] = status.state; if (instance.desired_state === DesiredState.RUNNING && [ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) state.original_running.push(instance.id) }

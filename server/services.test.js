@@ -37,6 +37,47 @@ import net from 'node:net'
 async function port() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-service-')); const store = new Store(path.join(root, 'control.db')); const secrets = openSecretStore(path.join(root, 'secrets.key')); const runtime = new FakeRuntime(); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); return { root, store, secrets, runtime, instances } }
 
+test('ordinary and backup limits are independent, persistent and enforced before source interruption', async () => {
+  const f = fixture()
+  try {
+    await f.instances.updateLimits({ max_instances: 1, max_backups: 1 })
+    const source = await f.instances.create({ name: 'source', port: await port() })
+    const copy = await f.instances.backup(source.id, { name: 'copy', port: await port() })
+    assert.equal(f.store.getInstance(copy.id).is_backup, true)
+    await f.instances.start(copy.id); await f.instances.update(copy.id, { name: 'renamed-copy' })
+    assert.deepEqual(f.instances.getLimits(), { max_instances: 1, max_backups: 1, instances_used: 1, backups_used: 1 })
+    await assert.rejects(f.instances.create({ name: 'second', port: await port() }), /普通实例名额不足/)
+    await assert.rejects(f.instances.backup(source.id, { name: 'second-copy', port: await port() }), /备份实例名额不足/)
+    await f.instances.updateLimits({ max_instances: 2, max_backups: 2 })
+    await f.instances.create({ name: 'second', port: await port() })
+    await assert.rejects(f.instances.updateLimits({ max_instances: 1, max_backups: 2 }), { status: 409 })
+    for (const value of [0, -1, 1.5, '5', 1001]) await assert.rejects(f.instances.updateLimits({ max_instances: value, max_backups: 2 }), { status: 400 })
+    const reopened = new Store(path.join(f.root, 'control.db'))
+    try {
+      assert.deepEqual({ ...reopened.getInstanceLimits() }, { max_instances: 2, max_backups: 2 })
+      assert.equal(reopened.getInstance(copy.id).is_backup, true)
+    } finally { reopened.close() }
+    f.store.deleteInstance(copy.id)
+    assert.equal(f.instances.getLimits().backups_used, 0)
+    await f.instances.backup(source.id, { name: 'replacement', port: await port() })
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('existing backup metadata migrates to a durable backup classification', async () => {
+  const f = fixture()
+  try {
+    const source = await f.instances.create({ name: 'legacy-copy', port: await port() })
+    fs.writeFileSync(path.join(source.directory, '.multi-cpa-backup.json'), JSON.stringify({ source_id: 'old-source', source_name: 'old' }))
+    f.store.db.exec('ALTER TABLE instances DROP COLUMN is_backup')
+    const reopened = new Store(path.join(f.root, 'control.db'))
+    try {
+      assert.equal(reopened.getInstance(source.id).is_backup, true)
+      fs.unlinkSync(path.join(source.directory, '.multi-cpa-backup.json'))
+      assert.equal(reopened.getInstance(source.id).is_backup, true)
+    } finally { reopened.close() }
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('v8 child config remains valid across start, restart, port and password changes', async () => {
   const f = fixture()
   try {

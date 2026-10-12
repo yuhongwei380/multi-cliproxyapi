@@ -10,6 +10,7 @@ import { NotFoundError, ConflictError } from './store.js'
 import { unsupported } from './cpa.js'
 import { prepareInstanceBinary } from './instance-binary.js'
 import { editChildConfig } from './child-config.js'
+import { backupMetadata, copyBackupTree, relocateBackupConfig } from './instance-backup.js'
 
 export const ErrInvalidCredentials = Object.assign(new Error('invalid credentials'), { code: 'ERR_INVALID_CREDENTIALS', status: 401 })
 export const ErrRateLimited = Object.assign(new Error('too many authentication attempts'), { code: 'ERR_RATE_LIMITED', status: 429 })
@@ -133,30 +134,121 @@ export class InstanceService {
     if (!['committed', 'rolled-back'].includes(state.state)) throw new ConflictError(`upgrade state is ${state.state}; recover the upgrade first`)
   }
   async create(input) {
-    return this.operations.run('global', async () => {
+    return this.operations.run('global', () => { this.assertUpgradeIdle(); return this.createUnlocked(input) })
+  }
+  getLimits() {
+    const limits = this.store.getInstanceLimits() || { max_instances: this.maxInstances, max_backups: 10 }
+    const items = this.store.listInstances()
+    return { ...limits, instances_used: items.filter(item => !item.is_backup).length, backups_used: items.filter(item => item.is_backup).length }
+  }
+  async updateLimits(input) {
+    return this.operations.run('global', () => {
       this.assertUpgradeIdle()
+      for (const key of ['max_instances', 'max_backups']) {
+        if (!Number.isInteger(input?.[key]) || input[key] < 1 || input[key] > 1000) throw Object.assign(new Error('实例上限必须为 1 到 1000 的整数'), { status: 400 })
+      }
+      const current = this.getLimits()
+      if (input.max_instances < current.instances_used || input.max_backups < current.backups_used) throw new ConflictError('上限不能低于当前已使用数量，请先删除不再需要的实例或备份')
+      this.store.saveInstanceLimits({ max_instances: input.max_instances, max_backups: input.max_backups })
+      return this.getLimits()
+    })
+  }
+  assertCapacity(backup, count = 1) {
+    const limits = this.getLimits()
+    const maximum = backup ? limits.max_backups : limits.max_instances
+    const used = backup ? limits.backups_used : limits.instances_used
+    if (maximum > 0 && used + count > maximum) throw new ConflictError(`${backup ? '备份' : '普通'}实例名额不足：需要 ${count} 个，已使用 ${used}/${maximum}；请在管理员设置中调整上限或清理实例`)
+  }
+  // Call only while holding the global operation lock.
+  async createUnlocked(input, initialize = null, { locked = false, backup = false } = {}) {
       ensureDirectory(this.root); ensureDirectory(path.join(this.root, 'instances'))
       validateName(input?.name); validatePort(input?.port)
       if (!(await portAvailable(input.port))) throw ErrPortUnavailable
       const childPassword = managementPassword(input?.management_password)
-      const existing = this.store.listInstances(); if (this.maxInstances > 0 && existing.length >= this.maxInstances) throw new ConflictError(`maximum of ${this.maxInstances} instances reached`)
+      const existing = this.store.listInstances(); this.assertCapacity(backup)
       if (existing.some(item => item.name.toLowerCase() === input.name.toLowerCase() || item.port === input.port)) throw new ConflictError()
       const version = input.version || this.defaultVersion || this.store.listVersions().find(item => item.usable)?.tag || existing[0]?.version || ''
       if (this.requireVersion && !version) throw new Error('no usable CPA version is installed')
       if (this.requireVersion) { const installed = this.store.getVersion(version); if (!installed.usable) throw new Error(`CPA version ${version} is not usable`) }
       if (!this.secrets) throw new Error('secret store is unavailable')
       const instanceId = id('cpa'); const directory = path.join(this.root, 'instances', instanceId); const timestamp = this.clock().toISOString()
-      const instance = { id: instanceId, name: input.name, port: input.port, directory, desired_state: DesiredState.STOPPED, locked: false, version, revision: 1, created_at: timestamp, updated_at: timestamp, management_secret_ciphertext: this.secrets.encrypt(childPassword.secret) }
+      const instance = { id: instanceId, name: input.name, port: input.port, directory, is_backup: backup, desired_state: DesiredState.STOPPED, locked, version, revision: 1, created_at: timestamp, updated_at: timestamp, management_secret_ciphertext: this.secrets.encrypt(childPassword.secret) }
       try {
         ensureDirectory(directory); ensureDirectory(path.join(directory, 'auths')); ensureDirectory(path.join(directory, 'logs'))
         this.writeInitialConfig(instance, childPassword.secret)
+        if (initialize) await initialize(instance)
         await this.prepareBinary(instance)
         this.store.createInstance(instance)
         await this.units?.install(instance)
         this.runtimeLog('info', instance, `instance ${instance.name} created`, { port: instance.port, version: instance.version })
         return instance
       } catch (error) { try { this.store.deleteInstance(instance.id) } catch {} try { fs.rmSync(directory, { recursive: true, force: true }) } catch {} try { await this.units?.unregister(instance) } catch {}; throw error }
+  }
+  async backup(instanceId, input) {
+    return this.operations.run('global', () => { this.assertUpgradeIdle(); return this.backupUnlocked(instanceId, input) })
+  }
+  async backupUnlocked(instanceId, input, { automatic = false, reason = '' } = {}) {
+    return this.withInstanceLock(instanceId, async () => {
+      const source = this.store.getInstance(instanceId); this.assertUnlocked(source)
+      if (path.resolve(source.directory) !== path.resolve(this.root, 'instances', source.id)) throw new ConflictError('unsafe source instance directory')
+      const sourceStat = fs.lstatSync(source.directory)
+      if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) throw new ConflictError('source instance directory must be a real directory')
+      const status = await this.runtime.status(source)
+      if (!['running', 'stopped', 'failed'].includes(status.state)) throw new ConflictError(`cannot back up instance while state is ${status.state}`)
+      const wasRunning = status.state === 'running'
+      const secret = this.decryptManagementSecret(source)
+      // Validate path isolation before interrupting the source runtime.
+      if (!fs.existsSync(path.join(source.directory, 'config.yaml'))) throw new ConflictError('instance config missing')
+      relocateBackupConfig(fs.readFileSync(path.join(source.directory, 'config.yaml'), 'utf8'), source.directory, source.directory)
+      const backup = await this.createUnlocked({ name: input?.name, port: input?.port, version: source.version, management_password: secret }, async target => {
+        let stopAttempted = false
+        try {
+          if (wasRunning) {
+            stopAttempted = true; await this.runtime.stop(source)
+            if (!isStopped((await this.runtime.status(source)).state)) throw ErrStopNotConfirmed('source did not stop before backup')
+          }
+          for (const entry of fs.readdirSync(source.directory)) {
+            if (['logs', '.multi-cpa.pid', '.plugin-backups', '.multi-cpa-backup.json'].includes(entry)) continue
+            copyBackupTree(path.join(source.directory, entry), path.join(target.directory, entry))
+          }
+          const file = path.join(target.directory, 'config.yaml')
+          let config = relocateBackupConfig(fs.readFileSync(file, 'utf8'), source.directory, target.directory)
+          config = editChildConfig(config, { port: target.port })
+          fs.writeFileSync(file, config, { mode: 0o600 })
+          fs.writeFileSync(path.join(target.directory, '.multi-cpa-backup.json'), JSON.stringify({ source_id: source.id, source_name: source.name, reason, automatic, created_at: this.clock().toISOString() }), { mode: 0o600 })
+        } finally {
+          if (stopAttempted) {
+            try { await this.runtime.start(source); await this.confirmStarted(source) }
+            catch (error) { this.runtimeLog('error', source, 'source restart after backup failed'); throw ErrStartNotConfirmed(`source restart after backup failed: ${error.message}`) }
+          }
+        }
+      }, { locked: automatic, backup: true })
+      this.store.inheritKeyBindings(source.id, backup.id)
+      this.runtimeLog('info', backup, 'instance backup created', { source_instance_id: source.id, port: backup.port })
+      return backup
     })
+  }
+  // Upgrade callers hold the global operation lock and freeze their targets
+  // before adding backups. Every backup finishes before any upgrade begins.
+  async automaticBackups(ids, reason, onSaved = () => {}, onStarting = () => {}) {
+    const sources = ids.map(id => this.store.getInstance(id)).filter(item => !item.locked)
+    this.assertCapacity(true, sources.length)
+    const reserved = new Set(this.store.listInstances().map(item => item.port)); const plans = []
+    for (const source of sources) {
+      let port = 18317
+      while (port <= 65535 && (reserved.has(port) || !(await portAvailable(port)))) port++
+      if (port > 65535) throw ErrPortUnavailable
+      reserved.add(port)
+      plans.push({ source, port, name: `${source.name.slice(0, 30)}-backup-${this.clock().toISOString().replace(/\D/g, '').slice(0, 14)}-${crypto.randomUUID().slice(0, 4)}` })
+    }
+    const backups = []
+    for (const plan of plans) {
+      await onStarting(plan.source.id)
+      const backup = await this.backupUnlocked(plan.source.id, { name: plan.name, port: plan.port }, { automatic: true, reason })
+      backups.push(backup); await onSaved(plan.source.id, backup)
+      this.store.appendAuditLog?.({ actor: 'system', action: 'instance.backup', resource_type: 'instance', resource_id: backup.id, outcome: 'success', detail: `source=${plan.source.id}; reason=${reason}`, created_at: this.clock().toISOString() })
+    }
+    return backups
   }
   writeInitialConfig(instance, secret) {
     const file = path.join(instance.directory, 'config.yaml'); const temporary = `${file}.tmp`
@@ -229,7 +321,7 @@ export class InstanceService {
       return status
     })
   }
-  async list() { const instances = this.store.listInstances(); return Promise.all(instances.map(async instance => ({ ...instance, status: await this.status(instance.id) }))) }
+  async list() { const instances = this.store.listInstances(); return Promise.all(instances.map(async instance => ({ ...instance, backup: backupMetadata(instance), status: await this.status(instance.id) }))) }
   async update(instanceId, input) {
     return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
       this.assertUpgradeIdle()
@@ -308,12 +400,13 @@ export class InstanceService {
 
 export class DeleteService {
   constructor({ store, runtime, units, instances, auth, clock = () => new Date(), challengeTtlMs = 10 * 60 * 1000 } = {}) { this.store = store; this.runtime = runtime; this.units = units; this.instances = instances; this.auth = auth; this.clock = clock; this.challengeTtlMs = challengeTtlMs; this.running = new Set() }
-  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
+  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.store.assertNoKeyBindings(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
   async confirm(instanceId, challengeId, password) {
     if (!this.auth) throw new Error('authentication service unavailable'); this.auth.verifyAdminPassword(password); if (this.running.has(instanceId)) throw new Error('delete already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
         this.instances.pluginService?.assertIdle()
+        this.store.assertNoKeyBindings(instanceId)
         const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); this.store.consumeDeleteChallenge(challengeId, instanceId, instance.revision, this.clock().toISOString()); const operation = { id: id('op'), kind: 'delete', instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }; this.store.saveOperation(operation)
         try { await this.remove(instance); operation.state = 'succeeded'; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation) }
         catch (error) { operation.state = 'failed'; operation.message = error.message; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation); throw error }

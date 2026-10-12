@@ -9,6 +9,7 @@ import { Store, NotFoundError } from './store.js'
 import { openSecretStore } from './security.js'
 import { ProcessRuntime, SystemdRuntime, SystemdUnitManager } from './runtime.js'
 import { HTTPClient } from './cpa.js'
+import { KeyService } from './keys.js'
 import { DirectGitHubSource, Installer, UpgradeService, VersionService } from './release.js'
 import { AuthService, InstanceService, DeleteService, QuotaService } from './services.js'
 import { Controller, createHttpServer } from './http.js'
@@ -74,8 +75,9 @@ export function createApplication(config, overrides = {}) {
   const quota = overrides.quota || new QuotaService({ store, instances, clients, secrets }); const source = overrides.source || new DirectGitHubSource(); const installer = overrides.installer || new Installer({ source, root: versionsRoot, store }); const activator = overrides.activator || units; const upgrade = overrides.upgrade || new UpgradeService({ store, instances, runtime, activator, units, prepareVersion: binaryByVersion }); const versionService = overrides.versionService || new VersionService({ store, instances, installer }); const branding = overrides.branding || new BrandingService({ store });
   const plugins = overrides.plugins || new PluginService({ store, instances, runtime, clients, artifacts: new PluginArtifacts({ root: path.join(config.dataDir, 'plugin-cache') }) })
   instances.pluginService = plugins
-  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
-  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, plugins, controller }
+  const keys = new KeyService({ store, instances, clients, secrets, auth })
+  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, keys, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
+  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, plugins, keys, controller }
 }
 
 async function ensureInitialVersion(app, config, logger) {

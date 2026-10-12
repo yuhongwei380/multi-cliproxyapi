@@ -1,0 +1,28 @@
+{
+  "date": "2026-10-12",
+  "platform": "linux/x64",
+  "node": "v24.18.0",
+  "cpa_version": "8.0.23",
+  "cpa_sha256": "085c1bd627c952f2c8db9b5af60bf4aeb1772c3fb102a241bf5ab7662d47f727",
+  "checks": [
+    "administrator authentication required",
+    "two independent real CPA processes start and expose Key APIs",
+    "manual creation, secure generation, notes, masking and duplicate rejection",
+    "binding records relationships without deploying",
+    "real deployment preserves existing Keys and enables client authentication",
+    "repeated deployment is idempotent",
+    "Key locking prevents removal; unlock requires correct administrator password",
+    "instance locks are respected; single unbind removes the real Key only from its target",
+    "stopped target prevents deletion; failed binding and delete intent persist",
+    "retry completes deletion; last-Key guard rejects revoked, anonymous and invalid access",
+    "manual and automatic backups inherit bindings; bound instance deletion is prohibited",
+    "backup copies really contain the Key and revoke it before global removal",
+    "concurrent deployment avoids duplicates; controller restart preserves encrypted Key, note, lock and binding",
+    "audit records omit plaintext Keys and passwords",
+    "all isolated test Keys and CPA processes cleaned up successfully"
+  ],
+  "protocols": [
+    "/v0/management/api-keys"
+  ],
+  "success": true
+}

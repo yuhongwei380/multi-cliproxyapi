@@ -1,14 +1,16 @@
-import { InputHTMLAttributes, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
 import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
 import './app.css'
 import './management-link.css'
+import { Dropdown, DropdownOption } from './Dropdown'
 import { PluginPanel } from './PluginPanel'
+import { KeyPanel } from './KeyPanel'
 
-type Modal = 'create' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
-type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'plugins' | 'runtime-logs' | 'audit-logs'
+type Modal = 'create' | 'backup' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
+type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'plugins' | 'keys' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
   refresh_interval_minutes: 360,
@@ -40,6 +42,7 @@ const MODULE_LABELS: Record<Module, string> = {
   quotas: '配额观察',
   versions: '版本管理',
   plugins: '插件管理',
+  keys: 'API Key 管理',
   'runtime-logs': '运行日志',
   'audit-logs': '审计日志'
 }
@@ -48,6 +51,7 @@ const LOGO_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif'
 const MAX_LOGO_BYTES = 256 * 1024
 
 function moduleFromHash(hash: string): Module {
+  if (hash === '#keys') return 'keys'
   if (hash === '#plugins') return 'plugins'
   const value = hash.replace(/^#/, '')
   if (value === 'instances' || value === 'quotas' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
@@ -58,128 +62,6 @@ function moduleHref(module: Module) {
   return module === 'overview' ? '#dashboard' : '#' + module
 }
 
-type DropdownOption = { value: string; label: string }
-
-function Dropdown({ id, label, options, value, onChange, placeholder, className = '' }: {
-  id: string
-  label: string
-  options: readonly DropdownOption[]
-  value: string
-  onChange: (value: string) => void
-  placeholder?: string
-  className?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(0)
-  const pickerRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const selectedIndex = options.findIndex(option => option.value === value)
-  const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : placeholder
-  const listboxId = `${id}-listbox`
-
-  useEffect(() => {
-    if (open) optionRefs.current[activeIndex]?.focus()
-  }, [open, activeIndex])
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
-  }, [open])
-
-  const toggle = () => {
-    if (!open) setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
-    setOpen(current => !current)
-  }
-
-  const choose = (option: DropdownOption) => {
-    onChange(option.value)
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-
-  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const lastIndex = options.length - 1
-    let nextIndex: number | null = null
-    if (event.key === 'ArrowDown') nextIndex = (activeIndex + 1) % options.length
-    if (event.key === 'ArrowUp') nextIndex = (activeIndex - 1 + options.length) % options.length
-    if (event.key === 'Home') nextIndex = 0
-    if (event.key === 'End') nextIndex = lastIndex
-    if (nextIndex !== null) {
-      event.preventDefault()
-      setActiveIndex(nextIndex)
-      optionRefs.current[nextIndex]?.focus()
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-  }
-
-  return <div
-    className={`dropdown-picker ${className}`.trim()}
-    ref={pickerRef}
-    onBlur={event => {
-      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
-    }}
-  >
-    <button
-      ref={triggerRef}
-      type="button"
-      className="dropdown-trigger"
-      role="combobox"
-      aria-label={`${label}${selectedLabel ? `: ${selectedLabel}` : ''}`}
-      aria-haspopup="listbox"
-      aria-expanded={open}
-      aria-controls={listboxId}
-      onClick={toggle}
-      onKeyDown={event => {
-        if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End')) {
-          event.preventDefault()
-          const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : selectedIndex >= 0 ? selectedIndex : 0
-          setActiveIndex(index)
-          setOpen(true)
-        }
-      }}
-    >
-      <span className="dropdown-value">{selectedLabel || placeholder || '\u00a0'}</span>
-      <svg className={`dropdown-chevron${open ? ' is-open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
-        <path d="m4.5 6 3.5 3.5L11.5 6" />
-      </svg>
-    </button>
-    {open && <div
-      className="dropdown-menu"
-      id={listboxId}
-      role="listbox"
-      aria-label={label}
-      onKeyDown={handleMenuKeyDown}
-    >
-      {options.map((option, index) => <button
-        key={option.value}
-        ref={element => { optionRefs.current[index] = element }}
-        type="button"
-        className="dropdown-option"
-        role="option"
-        aria-selected={value === option.value}
-        tabIndex={activeIndex === index ? 0 : -1}
-        data-active={activeIndex === index}
-        onFocus={() => setActiveIndex(index)}
-        onClick={() => choose(option)}
-      >
-        <span>{option.label}</span>
-        <svg className="dropdown-option-check" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="m3.5 8.25 2.75 2.5 6-5.5" />
-        </svg>
-      </button>)}
-    </div>}
-  </div>
-}
 
 function App() {
   const [user, setUser] = useState<string | null>(null)
@@ -303,10 +185,11 @@ function App() {
     setError('')
   }
 
-  const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => {
+  const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => {
     if (instanceActionLock.current.has(instance.id)) return
     if (instance.locked && (action === 'restart' || action === 'stop')) return
     if (action === 'unlock') { beginUnlock(instance); return }
+    if (action === 'backup') { if (!instance.locked) { setEditTarget(instance); setModal('backup'); setError('') }; return }
     if ((action === 'restart' || action === 'stop') && !window.confirm(`确认${action === 'restart' ? '重启' : '停止'}实例「${instance.name}」？这会中断当前请求。`)) return
     instanceActionLock.current.add(instance.id)
     setInstanceBusy(previous => ({ ...previous, [instance.id]: action }))
@@ -373,7 +256,7 @@ function App() {
   const upgradeVersion = async (tag: string) => {
     setBusy('version:upgrade:' + tag)
     setError('')
-    try { await api.post('/versions/upgrade', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败') } finally { setBusy(null) }
+    try { await api.post('/versions/upgrade', { version: tag }); setSettingsNotice('升级完成，升级前的备份实例已保留，默认停止并锁定。'); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败'); await load() } finally { setBusy(null) }
   }
 
   const recoverUpgrade = async () => {
@@ -415,6 +298,7 @@ function App() {
         <NavigationLink module="instances" activeModule={activeModule} onNavigate={navigate} icon="◈" ariaLabel="CLIProxyAPI 实例管理（实例运行轨）">CLIProxyAPI 实例管理<span className="nav-count">{instances.length}</span></NavigationLink>
         <NavigationLink module="versions" activeModule={activeModule} onNavigate={navigate} icon="↥">版本管理</NavigationLink>
         <NavigationLink module="plugins" activeModule={activeModule} onNavigate={navigate} icon="◇">插件管理</NavigationLink>
+        <NavigationLink module="keys" activeModule={activeModule} onNavigate={navigate} icon="⚿">API Key 管理</NavigationLink>
       </nav>
       <div className="sidebar-caption nav-section-caption">观测</div>
       <nav className="sidebar-nav">
@@ -449,10 +333,12 @@ function App() {
         {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
         {activeModule === 'plugins' && <PluginPanel />}
+        {activeModule === 'keys' && <KeyPanel />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
       <footer className="content-copyright" aria-label="版权信息"><span>{branding.copyright}</span><span className="content-version">v{APP_VERSION}</span></footer>
     </div>
+    {modal === 'backup' && editTarget && <BackupDialog instance={editTarget} instances={instances} onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('备份实例已保存，可单独启动进行测试升级。'); void load() }} />}
     {modal === 'create' && <CreateDialog onClose={() => setModal(null)} onCreated={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'edit' && editTarget && <EditDialog instance={editTarget} onClose={() => setModal(null)} onSaved={() => { setModal(null); setEditTarget(null); void load() }} onError={setError} />}
     {modal === 'delete' && deleteTarget && <DeleteDialog instance={deleteTarget} challenge={challenge} onClose={() => setModal(null)} onDeleted={() => { setModal(null); void load() }} onError={setError} />}
@@ -466,7 +352,7 @@ function NavigationLink({ module, activeModule, onNavigate, icon, ariaLabel, chi
   return <a className={'nav-item ' + (module === activeModule ? 'active' : '')} href={moduleHref(module)} aria-label={ariaLabel} aria-current={module === activeModule ? 'page' : undefined} onClick={event => { event.preventDefault(); onNavigate(module) }}><span className="nav-icon" aria-hidden="true">{icon}</span>{children}</a>
 }
 
-function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
+function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
   const running = instances.filter(instance => instance.status?.ready).length
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
@@ -496,7 +382,7 @@ function Overview({ branding, instances, quotas, versions, upgradeState, loading
   </>
 }
 
-function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   return <section className="module-pane instances-module"><section className="section-heading module-heading"><div><div className="eyebrow">CLIPROXYAPI INSTANCES</div><h1>CLIProxyAPI 实例管理</h1><p>创建、停止、重启和配置独立的 CLIProxyAPI 子实例。</p></div><div className="section-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><button className="button ghost" onClick={onRefresh}>重新同步</button></div></section>{loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}</section>
 }
 
@@ -557,7 +443,7 @@ function AuditLogRow({ item }: { item: AuditLog }) {
 function formatLogTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
 function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误' } as Record<string, string>)[level] ?? level }
 function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
-function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
+function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.backup': '备份实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
 
 const LOGIN_COPY = {
   zh: {
@@ -689,7 +575,7 @@ function AdminSettingsDialog({ branding, onClose, onSaved, onBrandingSaved }: { 
     if (file.size > MAX_LOGO_BYTES) { setBrandingError('Logo 文件不能超过 256 KB'); return }
     try { update('logo', await readFileAsDataUrl(file)); setBrandingError('') } catch { setBrandingError('Logo 读取失败，请重试') }
   }
-  return <dialog open className="modal-backdrop"><div className="dialog settings-dialog"><button type="button" className="dialog-close" disabled={brandingBusy || passwordBusy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true"><SettingsIcon /></div><div className="eyebrow">CONTROL CENTER SETTINGS</div><h2>管理员设置</h2><p>在这里管理总控身份和管理员安全设置。品牌修改会同步到登录页、总览横幅、网页标题与浏览器图标。</p><section className="settings-block"><div className="settings-block-heading"><div><h3>品牌与网页信息</h3><p>控制台所有可见的品牌文案都从这里读取。</p></div><BrandIcon branding={draft} /></div><div className="logo-setting"><div><strong>品牌 Logo</strong><p>上传后会替换侧栏、登录页和浏览器标签中的图标。</p></div><div className="logo-setting-actions"><input ref={logoInput} className="visually-hidden" aria-label="上传品牌 Logo" type="file" accept={LOGO_ACCEPT} onChange={readLogo} /><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={() => logoInput.current?.click()}>{draft.logo ? '更换 Logo' : '上传 Logo'}</button>{draft.logo && <button type="button" className="button ghost danger-outline" disabled={brandingBusy || passwordBusy} onClick={() => update('logo', '')}>移除 Logo</button>}</div></div><p className="settings-hint logo-hint">支持 PNG、JPEG、WebP 或 GIF，建议使用正方形图片，文件大小不超过 256 KB。</p><form onSubmit={async event => { event.preventDefault(); setBrandingError(''); setBrandingBusy(true); try { const saved = await api.patch('/branding', draft) as BrandingSettings; onBrandingSaved({ ...DEFAULT_BRANDING, ...saved }) } catch (cause) { setBrandingError(cause instanceof Error ? cause.message : '品牌设置保存失败') } finally { setBrandingBusy(false) } }}><div className="settings-grid"><label>品牌名称<input aria-label="品牌名称" value={draft.brand_name} onChange={event => update('brand_name', event.target.value)} maxLength={48} required /></label><label>品牌副标题<input aria-label="品牌副标题" value={draft.brand_subtitle} onChange={event => update('brand_subtitle', event.target.value)} maxLength={64} placeholder="例如 CONTROL CENTER" /></label><label>登录页横幅标题<input aria-label="登录页横幅标题" value={draft.banner_title} onChange={event => update('banner_title', event.target.value)} maxLength={80} required /></label><label>网页标题<input aria-label="网页标题" value={draft.page_title} onChange={event => update('page_title', event.target.value)} maxLength={80} required /></label><label className="settings-wide">横幅描述<input aria-label="横幅描述" value={draft.banner_description} onChange={event => update('banner_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">网页描述<input aria-label="网页描述" value={draft.page_description} onChange={event => update('page_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">Copyright<input aria-label="Copyright" value={draft.copyright} onChange={event => update('copyright', event.target.value)} maxLength={160} placeholder="留空隐藏版权信息" /></label></div><p className="settings-hint">图标统一复用品牌 Logo；当前版本号显示为 v{APP_VERSION}。</p>{brandingError && <p className="form-error" role="alert">{brandingError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{brandingBusy ? '保存中…' : '保存品牌设置'}</button></div></form></section><section className="settings-block settings-security"><div className="settings-block-heading"><div><h3>管理员密码</h3><p>修改后当前会话保持有效，新密码立即生效。</p></div></div><form onSubmit={async event => { event.preventDefault(); setPasswordError(''); if (newPassword !== confirmPassword) { setPasswordError('两次输入的新密码不一致'); return } setPasswordBusy(true); try { await api.patch('/auth/password', { current_password: currentPassword, new_password: newPassword }); onSaved() } catch (cause) { setPasswordError(cause instanceof Error ? cause.message : '密码修改失败') } finally { setPasswordBusy(false) } }}><label>当前管理员密码<PasswordInput aria-label="当前管理员密码" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入当前密码" /></label><label>新管理员密码<PasswordInput aria-label="新管理员密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" required placeholder="请输入新密码" /></label><label>确认新管理员密码<PasswordInput aria-label="确认新管理员密码" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required placeholder="再次输入新密码" /></label>{passwordError && <p className="form-error" role="alert">{passwordError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{passwordBusy ? '保存中…' : '保存新密码'}</button></div></form></section></div></dialog>
+  return <dialog open className="modal-backdrop"><div className="dialog settings-dialog"><button type="button" className="dialog-close" disabled={brandingBusy || passwordBusy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true"><SettingsIcon /></div><div className="eyebrow">CONTROL CENTER SETTINGS</div><h2>管理员设置</h2><p>在这里管理总控身份和管理员安全设置。品牌修改会同步到登录页、总览横幅、网页标题与浏览器图标。</p><section className="settings-block"><div className="settings-block-heading"><div><h3>品牌与网页信息</h3><p>控制台所有可见的品牌文案都从这里读取。</p></div><BrandIcon branding={draft} /></div><div className="logo-setting"><div><strong>品牌 Logo</strong><p>上传后会替换侧栏、登录页和浏览器标签中的图标。</p></div><div className="logo-setting-actions"><input ref={logoInput} className="visually-hidden" aria-label="上传品牌 Logo" type="file" accept={LOGO_ACCEPT} onChange={readLogo} /><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={() => logoInput.current?.click()}>{draft.logo ? '更换 Logo' : '上传 Logo'}</button>{draft.logo && <button type="button" className="button ghost danger-outline" disabled={brandingBusy || passwordBusy} onClick={() => update('logo', '')}>移除 Logo</button>}</div></div><p className="settings-hint logo-hint">支持 PNG、JPEG、WebP 或 GIF，建议使用正方形图片，文件大小不超过 256 KB。</p><form onSubmit={async event => { event.preventDefault(); setBrandingError(''); setBrandingBusy(true); try { const saved = await api.patch('/branding', draft) as BrandingSettings; onBrandingSaved({ ...DEFAULT_BRANDING, ...saved }) } catch (cause) { setBrandingError(cause instanceof Error ? cause.message : '品牌设置保存失败') } finally { setBrandingBusy(false) } }}><div className="settings-grid"><label>品牌名称<input aria-label="品牌名称" value={draft.brand_name} onChange={event => update('brand_name', event.target.value)} maxLength={48} required /></label><label>品牌副标题<input aria-label="品牌副标题" value={draft.brand_subtitle} onChange={event => update('brand_subtitle', event.target.value)} maxLength={64} placeholder="例如 CONTROL CENTER" /></label><label>登录页横幅标题<input aria-label="登录页横幅标题" value={draft.banner_title} onChange={event => update('banner_title', event.target.value)} maxLength={80} required /></label><label>网页标题<input aria-label="网页标题" value={draft.page_title} onChange={event => update('page_title', event.target.value)} maxLength={80} required /></label><label className="settings-wide">横幅描述<input aria-label="横幅描述" value={draft.banner_description} onChange={event => update('banner_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">网页描述<input aria-label="网页描述" value={draft.page_description} onChange={event => update('page_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">Copyright<input aria-label="Copyright" value={draft.copyright} onChange={event => update('copyright', event.target.value)} maxLength={160} placeholder="留空隐藏版权信息" /></label></div><p className="settings-hint">图标统一复用品牌 Logo；当前版本号显示为 v{APP_VERSION}。</p>{brandingError && <p className="form-error" role="alert">{brandingError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{brandingBusy ? '保存中…' : '保存品牌设置'}</button></div></form></section><InstanceLimitsSettings /><section className="settings-block settings-security"><div className="settings-block-heading"><div><h3>管理员密码</h3><p>修改后当前会话保持有效，新密码立即生效。</p></div></div><form onSubmit={async event => { event.preventDefault(); setPasswordError(''); if (newPassword !== confirmPassword) { setPasswordError('两次输入的新密码不一致'); return } setPasswordBusy(true); try { await api.patch('/auth/password', { current_password: currentPassword, new_password: newPassword }); onSaved() } catch (cause) { setPasswordError(cause instanceof Error ? cause.message : '密码修改失败') } finally { setPasswordBusy(false) } }}><label>当前管理员密码<PasswordInput aria-label="当前管理员密码" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入当前密码" /></label><label>新管理员密码<PasswordInput aria-label="新管理员密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" required placeholder="请输入新密码" /></label><label>确认新管理员密码<PasswordInput aria-label="确认新管理员密码" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required placeholder="再次输入新密码" /></label>{passwordError && <p className="form-error" role="alert">{passwordError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{passwordBusy ? '保存中…' : '保存新密码'}</button></div></form></section></div></dialog>
 }
 
 function BrandIcon({ branding, variant = '' }: { branding: BrandingSettings; variant?: string }) {
@@ -770,14 +656,14 @@ function VersionPanel({ versions, instances, upgradeState, busy, onInstall, onUp
   const partiallyLocked = lockedCount > 0 && !allInstancesLocked
   const upgradeDisabled = busy !== null || upgradeInProgress || allInstancesLocked
   const upgradeTitle = allInstancesLocked ? '所有实例均已锁定，请先解锁至少一个实例' : partiallyLocked ? '仅升级未锁定实例，已锁定实例保持不变' : undefined
-  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>版本管理</h2><p>下载并校验版本，再切换未锁定的 CPA 实例；已锁定实例保持不变，升级完成后可清理旧版本缓存。</p>{allInstancesLocked && <p className="version-lock-hint" role="status">所有实例均已锁定，无法统一升级。请先解锁至少一个实例。</p>}{partiallyLocked && <p className="version-lock-hint" role="status">本次只会升级未锁定实例，已锁定实例保持不变。</p>}</div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空下载 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || upgradeInProgress}>{busy === 'version:install' ? '下载中…' : '下载版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未下载 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = instances.some(instance => instance.version === version.tag); const needsUpgrade = instances.some(instance => instance.version !== version.tag); const hasUnlockedUpgrade = instances.some(instance => !instance.locked && instance.version !== version.tag); const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && needsUpgrade && <button className="button ghost" disabled={upgradeDisabled || !hasUnlockedUpgrade} title={upgradeTitle || (!hasUnlockedUpgrade ? '需要升级的实例均已锁定，请先解锁' : undefined)} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || upgradeInProgress} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
+  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>版本管理</h2><p>升级前自动创建备份子实例，再切换未锁定的 CPA 实例。备份自动分配端口、默认停止并锁定；名额不足或备份失败时中止升级。</p>{allInstancesLocked && <p className="version-lock-hint" role="status">所有实例均已锁定，无法统一升级。请先解锁至少一个实例。</p>}{partiallyLocked && <p className="version-lock-hint" role="status">本次只会升级未锁定实例，已锁定实例保持不变。</p>}</div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空下载 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || upgradeInProgress}>{busy === 'version:install' ? '下载中…' : '下载版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未下载 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = instances.some(instance => instance.version === version.tag); const needsUpgrade = instances.some(instance => instance.version !== version.tag); const hasUnlockedUpgrade = instances.some(instance => !instance.locked && instance.version !== version.tag); const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && needsUpgrade && <button className="button ghost" disabled={upgradeDisabled || !hasUnlockedUpgrade} title={upgradeTitle || (!hasUnlockedUpgrade ? '需要升级的实例均已锁定，请先解锁' : undefined)} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || upgradeInProgress} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
 }
 
 function upgradeStateLabel(state: string) {
   return ({ prepared: '准备中', 'stopping-old': '停止旧版本', 'old-stopped': '旧版本已停止', 'starting-new': '启动新版本', committed: '已完成', 'restoring-old': '正在回滚', 'rolled-back': '已回滚', blocked: '回滚受阻' } as Record<string, string>)[state] ?? state
 }
 
-function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   const running = instance.status?.ready
   const actualState = instance.status?.state ?? 'unknown'
   const actualActive = ['running', 'starting', 'stopping'].includes(actualState)
@@ -812,6 +698,7 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     </div>
     <div className="card-actions" aria-label={`${instance.name} 操作`}>
       <button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onConfigure(instance)}>配置</button>
+      <button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onAction(instance, 'backup')}>备份</button>
       <button type="button" className="button primary" disabled={actionBusy || (running && instance.locked)} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button>
       <button type="button" className="button danger" disabled={actionBusy || !running || instance.locked} onClick={() => onAction(instance, 'stop')}>停止</button>
       <button type="button" className="button danger delete-instance" disabled={actionBusy || instance.locked} onClick={() => onDelete(instance)}>删除</button>
@@ -819,6 +706,7 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     <div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div>
     <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
     <div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>
+    {instance.backup && <div className="card-status"><span className="muted-text">{instance.backup.automatic ? '升级前自动备份' : '手动备份'} · 来源：{instance.backup.source_name}{instance.backup.reason && ` · ${instance.backup.reason}`} · {new Date(instance.backup.created_at).toLocaleString('zh-CN', { hour12: false })}</span></div>}
     <QuotaDetails quotas={quotas} />
   </article>
 }
@@ -832,7 +720,7 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   const windowColumns = [
     { name: '5 小时限额', title: '5h额度', label: '5 小时额度剩余' },
     { name: '周限额', title: '周额度', label: '周额度剩余' },
-    { name: '月限额', title: 'month limit', label: '月额度剩余' },
+    { name: '月限额', title: '月额度', label: '月额度剩余' },
   ]
   const availableColumns = windowColumns.filter(column => quotas.some(quota => quota.values?.some(value => value.name === column.name)))
   const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)
@@ -942,6 +830,15 @@ function CreateDialog({ onClose, onCreated, onError }: { onClose: () => void; on
   return <dialog open className="modal-backdrop"><div className="dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="eyebrow">NEW INSTANCE</div><h2>创建 CPA 实例</h2><p>总控会为实例创建独立目录；账户和 API Key 在子实例管理页配置。</p><form onSubmit={async event => { event.preventDefault(); setBusy(true); try { await api.post('/instances', { name, port: Number(port), ...(password ? { management_password: password } : {}) }); onCreated() } catch (cause) { onError(cause instanceof Error ? cause.message : '创建失败') } finally { setBusy(false) } }}><label>实例名称<input value={name} onChange={event => setName(event.target.value)} placeholder="例如 claude-work" required /></label><label>监听端口<input type="number" min="1024" max="65535" value={port} onChange={event => setPort(event.target.value)} required /></label><label>子实例管理密码（可选）<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" placeholder="留空使用默认密码 admin" /></label><div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? '创建中…' : '创建实例'}</button></div></form></div></dialog>
 }
 
+function BackupDialog({ instance, instances, onClose, onSaved }: { instance: Instance; instances: Instance[]; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(`${instance.name.slice(0, 48)}-backup`)
+  const [port, setPort] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const conflict = instances.some(item => item.port === Number(port))
+  return <dialog open className="modal-backdrop" aria-labelledby="backup-title"><div className="dialog"><button className="dialog-close" disabled={busy} onClick={onClose} aria-label="关闭">×</button><div className="eyebrow">BACKUP INSTANCE</div><h2 id="backup-title">备份 {instance.name}</h2><p>复制当前 CPA 版本、配置、认证和插件数据，保存为独立实例。新实例默认停止，管理密码保持一致。</p><p>运行中的源实例会短暂停止，复制结束后恢复。历史日志不复制，备份占用独立的备份名额，不占普通实例名额。</p><form onSubmit={async event => { event.preventDefault(); if (busy || conflict) return; setBusy(true); setError(''); try { await api.post('/instances/' + instance.id + '/backup', { name: name.trim(), port: Number(port) }); onSaved() } catch (cause) { setError(cause instanceof Error ? cause.message : '备份失败') } finally { setBusy(false) } }}><label>备份实例名称<input value={name} disabled={busy} maxLength={64} onChange={event => setName(event.target.value)} required /></label><label>新的监听端口<input type="number" min="1024" max="65535" disabled={busy} value={port} onChange={event => setPort(event.target.value)} placeholder="填写未使用的端口" autoFocus required /></label>{(error || conflict) && <p className="settings-inline-error" role="alert">{error || '该端口已被现有实例使用，请填写新端口。'}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy || !port || !name.trim() || conflict}>{busy ? '备份中…' : '保存备份实例'}</button></div></form></div></dialog>
+}
+
 function EditDialog({ instance, onClose, onSaved, onError }: { instance: Instance; onClose: () => void; onSaved: () => void; onError: (error: string) => void }) {
   const [name, setName] = useState(instance.name)
   const [port, setPort] = useState(String(instance.port))
@@ -1002,3 +899,13 @@ if (root) createRoot(root).render(<App />)
 
 
 
+
+function InstanceLimitsSettings() {
+  const [limits, setLimits] = useState<{ max_instances: number; max_backups: number; instances_used: number; backups_used: number } | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const load = () => { setError(''); void api.get('/instance-limits').then(value => setLimits(value as NonNullable<typeof limits>)).catch(cause => setError(cause instanceof Error ? cause.message : '读取实例上限失败')) }
+  useEffect(load, [])
+  return <section className="settings-block" aria-label="实例名额设置"><h3>实例名额</h3><p>普通实例与备份分别计数。启动或解锁备份仍占备份名额。达到备份上限时中止升级，已有备份会保留。</p>{!limits && <button type="button" className="button ghost" onClick={load}>重新读取实例上限</button>}{limits && <form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); setNotice(''); try { const result = await api.patch('/instance-limits', { max_instances: limits.max_instances, max_backups: limits.max_backups }); setLimits(result as NonNullable<typeof limits>); setNotice('实例上限已保存，立即生效') } catch (cause) { setError(cause instanceof Error ? cause.message : '保存实例上限失败') } finally { setBusy(false) } }}><div className="settings-grid"><label>普通实例上限<input type="number" aria-label="普通实例上限" min="1" max="1000" step="1" required disabled={busy} value={limits.max_instances} onChange={event => setLimits({ ...limits, max_instances: Number(event.target.value) })} /><small>已使用 {limits.instances_used} 个，默认 5 个。</small></label><label>备份实例上限<input type="number" aria-label="备份实例上限" min="1" max="1000" step="1" required disabled={busy} value={limits.max_backups} onChange={event => setLimits({ ...limits, max_backups: Number(event.target.value) })} /><small>已使用 {limits.backups_used} 个，默认 10 个。</small></label></div><div className="dialog-actions"><button className="button primary" disabled={busy}>{busy ? '保存中…' : '保存实例上限'}</button></div></form>}{error && <p className="form-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}</section>
+}

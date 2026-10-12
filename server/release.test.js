@@ -44,6 +44,16 @@ test('creation after a unified upgrade uses the active instance version', async 
   } finally { f.close() }
 })
 
+test('insufficient backup capacity prevents CPA version switching before stopping processes', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id); f.store.saveInstanceLimits({ max_instances: 5, max_backups: 1 })
+    let stops = 0; f.runtime.stop = async () => { stops++; throw new Error('must not stop') }
+    await assert.rejects(f.upgrade.upgrade('v2'), /实例名额/)
+    assert.equal(stops, 0); assert.equal(f.store.listInstances().length, 2); assert.equal(f.store.getInstance(f.first.id).version, 'v1'); assert.equal(fs.readFileSync(instanceBinaryPath(f.first), 'utf8'), 'binary-v1'); assert.throws(() => f.store.getUpgradeState(), /not found/)
+  } finally { f.close() }
+})
+
 test('duplicate version installation reports conflict without downloading again', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-duplicate-'))
   let downloads = 0
@@ -102,7 +112,8 @@ test('blocked upgrades prevent ordinary start, restart and desired-state recover
   const f = await upgradeFixture()
   try {
     await f.instances.start(f.first.id)
-    f.runtime.failStop = true
+    const backups = f.instances.automaticBackups.bind(f.instances)
+    f.instances.automaticBackups = async (...args) => { const result = await backups(...args); f.runtime.failStop = true; return result }
     await assert.rejects(f.upgrade.upgrade('v2'))
     assert.equal(f.store.getUpgradeState().state, 'blocked')
     f.runtime.failStop = false
@@ -248,7 +259,7 @@ test('unified upgrade skips locked children and refuses when all children are lo
     const stop = f.runtime.stop.bind(f.runtime)
     f.runtime.stop = async item => { stops++; return stop(item) }
     await f.upgrade.upgrade('v2')
-    assert.equal(stops, 1)
+    assert.equal(stops, 2) // One consistent backup, then the version switch.
     assert.equal(f.store.getInstance(f.first.id).version, 'v2')
     assert.equal(f.store.getInstance(f.second.id).version, 'v1')
     assert.equal(f.store.getInstance(f.second.id).locked, true)
@@ -302,8 +313,11 @@ test('unified upgrade stops old instances, preserves stopped intent, and starts 
   try {
     await f.instances.start(f.first.id)
     await f.upgrade.upgrade('v2')
-    const items = f.store.listInstances()
+    const items = [f.store.getInstance(f.first.id), f.store.getInstance(f.second.id)]
     assert.deepEqual(items.map(item => item.version), ['v2', 'v2'])
+    const backups = f.store.listInstances().filter(item => !items.some(source => source.id === item.id))
+    assert.equal(backups.length, 2)
+    for (const backup of backups) { assert.equal(backup.version, 'v1'); assert.equal(backup.locked, true); assert.equal(backup.desired_state, 'stopped'); assert.equal(fs.readFileSync(instanceBinaryPath(backup), 'utf8'), 'binary-v1') }
     assert.equal(items[0].desired_state, 'running')
     assert.equal(items[1].desired_state, 'stopped')
     assert.equal((await f.instances.status(f.first.id)).state, 'running')
@@ -318,7 +332,8 @@ test('unified upgrade blocks before switching when an old instance will not stop
   const f = await upgradeFixture()
   try {
     await f.instances.start(f.first.id)
-    f.runtime.failStop = true
+    const backups = f.instances.automaticBackups.bind(f.instances)
+    f.instances.automaticBackups = async (...args) => { const result = await backups(...args); f.runtime.failStop = true; return result }
     await assert.rejects(() => f.upgrade.upgrade('v2'), /old instance refused to stop/)
     assert.equal(f.store.getUpgradeState().state, UpgradeState.BLOCKED)
     assert.ok(f.store.listInstances().every(item => item.version === 'v1'))
@@ -344,7 +359,8 @@ test('unified upgrade enters blocked state when restoring the old process fails'
   try {
     await f.instances.start(f.first.id)
     f.runtime.failNewStart = true
-    f.runtime.failOldStart = true
+    const backups = f.instances.automaticBackups.bind(f.instances)
+    f.instances.automaticBackups = async (...args) => { const result = await backups(...args); f.runtime.failOldStart = true; return result }
     await assert.rejects(() => f.upgrade.upgrade('v2'), /new version failed to start/)
     assert.equal(f.store.getUpgradeState().state, UpgradeState.BLOCKED)
     assert.ok(f.store.listInstances().every(item => item.version === 'v1'))

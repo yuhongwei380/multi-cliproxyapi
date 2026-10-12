@@ -1,6 +1,6 @@
 // Edit CPA's block-style configuration without reserializing plugin settings,
 // comments, or credentials. Resolve keys within their parent, never globally.
-export function editChildConfig(source, { host, secret, port, replaceSecret = false, ensure = false }) {
+export function editChildConfig(source, { host, secret, port, replaceSecret = false, ensure = false, plugin }) {
   const newline = source.includes('\r\n') ? '\r\n' : '\n'
   const lines = source.split(/\r?\n/)
   const v8 = /^config-version:\s*["']?8["']?\s*(?:#.*)?$/m.test(source)
@@ -67,5 +67,10 @@ export function editChildConfig(source, { host, secret, port, replaceSecret = fa
   }
   if (port !== undefined) set(server, 'port', String(port))
   if (replaceSecret) set(management, 'secret-key', JSON.stringify(secret))
+  if (plugin) {
+    if (!/^[a-z][a-z0-9-]{0,99}$/.test(plugin.id)) throw new Error('invalid plugin id')
+    set(['plugins'], 'enabled', 'true')
+    set(['plugins', 'configs', plugin.id], 'enabled', 'true')
+  }
   return lines.join(newline)
 }

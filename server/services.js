@@ -127,6 +127,7 @@ export class InstanceService {
   async prepareBinary(instance) { return prepareInstanceBinary(instance, this.binaryByVersion) }
   async withInstanceLock(instanceId, fn) { return this.locks.run(instanceId, fn) }
   assertUpgradeIdle() {
+    this.pluginService?.assertIdle()
     let state
     try { state = this.store.getUpgradeState() } catch (error) { if (error.code === 'ERR_NOT_FOUND') return; throw error }
     if (!['committed', 'rolled-back'].includes(state.state)) throw new ConflictError(`upgrade state is ${state.state}; recover the upgrade first`)
@@ -183,6 +184,7 @@ export class InstanceService {
   }
   async mutate(instanceId, kind, desired, action) {
     return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
+      this.pluginService?.assertIdle()
       if (kind !== 'stop') this.assertUpgradeIdle()
       let instance = this.store.getInstance(instanceId)
       if (['stop', 'restart'].includes(kind)) this.assertUnlocked(instance)
@@ -311,6 +313,7 @@ export class DeleteService {
     if (!this.auth) throw new Error('authentication service unavailable'); this.auth.verifyAdminPassword(password); if (this.running.has(instanceId)) throw new Error('delete already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
+        this.instances.pluginService?.assertIdle()
         const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); this.store.consumeDeleteChallenge(challengeId, instanceId, instance.revision, this.clock().toISOString()); const operation = { id: id('op'), kind: 'delete', instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }; this.store.saveOperation(operation)
         try { await this.remove(instance); operation.state = 'succeeded'; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation) }
         catch (error) { operation.state = 'failed'; operation.message = error.message; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation); throw error }

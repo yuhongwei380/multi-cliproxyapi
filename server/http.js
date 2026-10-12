@@ -52,6 +52,8 @@ function auditTarget(request, pathname) {
   if (pathname === '/api/versions/upgrade') return { action: 'version.upgrade', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/uninstall') return { action: 'version.uninstall', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/upgrade/recover') return { action: 'version.recover', resource_type: 'upgrade', resource_id: 'singleton' }
+  if (pathname === '/api/plugins/deploy') return { action: 'plugin.deploy', resource_type: 'plugin-job', resource_id: '' }
+  if (pathname === '/api/plugins/recover') return { action: 'plugin.recover', resource_type: 'plugin-job', resource_id: '' }
   const match = pathname.match(/^\/api\/instances\/([^/]+)(?:\/([^/]+))?$/)
   if (!match) return null
   const suffix = match[2] || 'update'
@@ -60,7 +62,7 @@ function auditTarget(request, pathname) {
 }
 
 export class Controller {
-  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot, secureCookies, logger }) }
+  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, store, staticRoot, secureCookies, logger }) }
   token(request) { const cookies = parseCookies(request.headers.cookie || ''); return cookies[cookieName] || normalizeBearer(request.headers.authorization || '') }
   authenticated(request) { return this.auth.authenticate(this.token(request)) }
   audit(entry) { try { this.store.appendAuditLog?.(entry) } catch (error) { this.logger?.error?.(error) } }
@@ -99,6 +101,10 @@ export class Controller {
   authStatus(request, response) { const branding = this.branding?.get?.(); try { return writeJson(response, 200, { authenticated: true, username: this.authenticated(request), ...(branding ? { branding } : {}) }) } catch { return writeJson(response, 200, { authenticated: false, ...(branding ? { branding } : {}) }) } }
   async routeApi(request, response, url) {
     const route = url.pathname.replace(/^\/api/, '')
+    if (route === '/plugins' && request.method === 'GET') return writeJson(response, 200, await this.plugins.inventory())
+    if (route === '/plugins/jobs' && request.method === 'GET') return writeJson(response, 200, { items: this.plugins.jobs() })
+    if (route === '/plugins/deploy' && request.method === 'POST') return writeJson(response, 202, this.plugins.submit(await readJson(request)))
+    if (route === '/plugins/recover' && request.method === 'POST') { await this.plugins.recover(); return writeJson(response, 200, { status: 'recovered' }) }
     if (route === '/auth/password' && request.method === 'PATCH') { const body = await readJson(request); this.auth.changeAdminPassword(body.current_password, body.new_password); return writeJson(response, 200, { status: 'updated' }) }
     if (route === '/instances' && request.method === 'GET') { const items = await this.instances.list(); return writeJson(response, 200, { items: items.map(item => publicInstance(item, item.status, request)) }) }
     if (route === '/instances' && request.method === 'POST') { const input = await readJson(request); const instance = await this.instances.create({ name: input.name, port: Number(input.port), management_password: input.management_password, version: input.version }); return writeJson(response, 201, publicInstance(instance, { instance_id: instance.id, state: 'stopped', ready: false, version: instance.version }, request)) }

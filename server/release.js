@@ -167,7 +167,7 @@ function safeArchiveName(name) {
   return normalized !== '..' && !normalized.startsWith('../')
 }
 
-async function extractArchive(archive, destination) {
+export async function extractArchive(archive, destination) {
   const listing = await execFileAsync('tar', ['-tzf', archive, '--quoting-style=escape'], { maxBuffer: 8 * 1024 * 1024 })
   const names = listing.stdout.split(/\r?\n/).filter(Boolean)
   if (names.length > 10000) throw new Error('release archive contains too many entries')
@@ -303,6 +303,7 @@ export class UpgradeService {
   persist(state) { state.updated_at = this.clock().toISOString(); this.store.saveUpgradeState(state) }
   async upgrade(newVersion) {
     return this.instances.operations.run('global', async () => {
+      this.instances.pluginService?.assertIdle()
       if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable')
       const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked && instance.version !== newVersion)
       if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')

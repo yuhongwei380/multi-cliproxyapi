@@ -4,6 +4,20 @@ import { PluginPanel } from './PluginPanel'
 import { api } from './api'
 vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
+test('themed plugin picker supports keyboard selection and unchecked deployment', async () => {
+  vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [] } : { catalog: [{ id: 'cpa-key-billing', name: 'Key Billing', repository: 'haowang02/cpa-plugin-key-billing' }, { id: 'other', name: 'Other', repository: 'demo/other' }], instances: [{ id: 'one', name: '实例一', locked: false, state: 'running', plugins: [] }] })
+  render(<PluginPanel />)
+  fireEvent.click(await screen.findByLabelText('选择 实例一'))
+  const picker = screen.getByRole('combobox', { name: '插件: Key Billing' })
+  fireEvent.keyDown(picker, { key: 'ArrowDown' })
+  expect(screen.getByRole('listbox', { name: '插件' })).toBeInTheDocument()
+  fireEvent.keyDown(screen.getByRole('option', { name: 'Key Billing' }), { key: 'End' })
+  fireEvent.click(screen.getByRole('option', { name: 'Other' }))
+  expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('安装后启用')).not.toBeChecked()
+  fireEvent.click(screen.getByRole('button', { name: '统一安装 / 升级' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/deploy', { plugin: 'other', version: '', instances: ['one'], enable: false }))
+})
 test('shows locked skips, submits selected instances and explicit enable option', async () => {
   vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [] } : { catalog: [{ id: 'cpa-key-billing', name: 'Key Billing', repository: 'haowang02/cpa-plugin-key-billing' }], instances: [
     { id: 'one', name: '实例一', locked: false, state: 'running', plugins: [{ id: 'cpa-key-billing', installed: true, version: '1.3.19', enabled: true }] },

@@ -16,11 +16,43 @@ function fixture() {
   const instances = new InstanceService({ root, store, runtime, secrets: openSecretStore(path.join(root, 'secret')), units: new NoopUnitManager(), requireVersion: false })
   const library = path.join(root, 'new.so'); fs.writeFileSync(library, 'new library')
   const artifacts = { catalog: PLUGIN_CATALOG, descriptor: id => { assert.equal(id, 'cpa-key-billing'); return PLUGIN_CATALOG[0] }, prepare: async () => ({ id: 'cpa-key-billing', version: '1.3.20', sha256: crypto.createHash('sha256').update('new library').digest('hex'), file: library }) }
-  const service = new PluginService({ store, instances, runtime, artifacts, clients: async () => ({ request: async () => ({ body: JSON.stringify({ plugins: [{ id: 'cpa-key-billing', registered: true, effective_enabled: true, metadata: { version: '1.3.20' } }] }) }), health: async () => {} }) })
+  const service = new PluginService({ store, instances, runtime, artifacts, clients: async instance => ({ request: async () => ({ body: JSON.stringify({ plugins_enabled: true, plugins: [{ id: 'cpa-key-billing', path: path.join(instance.directory, 'plugins', 'cpa-key-billing.so'), enabled: true, registered: true, effective_enabled: true, metadata: { version: '1.3.20' } }] }) }), health: async () => {} }) })
   instances.pluginService = service
   return { root, store, runtime, instances, service, close() { store.close(); fs.rmSync(root, { recursive: true, force: true }) } }
 }
 async function child(f, name, port) { return f.instances.create({ name, port, management_password: 'testing' }) }
+
+for (const scenario of [
+  { name: 'fresh disabled install', global: true, enabled: false, old: false },
+  { name: 'disabled upgrade', global: true, enabled: false, old: true },
+  { name: 'globally disabled upgrade', global: false, enabled: true, old: true },
+  { name: 'enabled upgrade without explicit enable', global: true, enabled: true, old: true }
+]) test(scenario.name + ' preserves configured state', async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'unchecked', 19389); await f.instances.start(instance.id)
+    const file = path.join(instance.directory, 'plugins', 'cpa-key-billing.so')
+    if (scenario.old) { fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, 'old library') }
+    const config = fs.readFileSync(path.join(instance.directory, 'config.yaml'), 'utf8')
+    const loaded = scenario.global && scenario.enabled
+    f.service.clients = async () => ({ request: async () => ({ body: JSON.stringify({ plugins_enabled: scenario.global, plugins: !fs.existsSync(file) ? [] : [{ id: 'cpa-key-billing', path: file, enabled: scenario.enabled, registered: loaded, effective_enabled: loaded, metadata: loaded ? { version: '1.3.20' } : null }] }) }), health: async () => {} })
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id], enable: false }); await f.service.pending
+    assert.equal(job.state, 'completed'); assert.equal(job.results[0].state, loaded ? 'verified' : 'installed-disabled')
+    assert.equal(fs.readFileSync(file, 'utf8'), 'new library'); assert.equal(fs.readFileSync(path.join(instance.directory, 'config.yaml'), 'utf8'), config)
+    assert.equal((await f.runtime.status(instance)).state, 'running')
+  } finally { f.close() }
+})
+
+test('unchecked enabled upgrade still rolls back when registration fails', async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'load-failure', 19390); await f.instances.start(instance.id)
+    const file = path.join(instance.directory, 'plugins', 'cpa-key-billing.so'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, 'old library')
+    f.service.clients = async () => ({ request: async () => ({ body: JSON.stringify({ plugins_enabled: true, plugins: [{ id: 'cpa-key-billing', path: file, enabled: true, registered: false, effective_enabled: false, metadata: null }] }) }), health: async () => {} })
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id], enable: false }); await f.service.pending
+    assert.equal(job.state, 'failed'); assert.equal(job.results[0].state, 'rolled-back'); assert.match(job.message, /registration/); assert.equal(fs.readFileSync(file, 'utf8'), 'old library')
+  } finally { f.close() }
+})
 
 test('per-plugin enabling preserves four-space settings and is idempotent', () => {
   const source = 'plugins:\n    enabled: true\n    configs:\n        cpa-key-billing:\n            enabled: false\n            custom: preserved\nconfig-version: 8\n'

@@ -10,9 +10,9 @@
 .plugin-badge.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent); background: var(--red-soft); }
 .plugin-badge.progress { color: var(--blue-dark); border-color: var(--line); background: var(--blue-soft); }
 .plugin-fields { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(140px, .7fr); gap: 22px; margin: 24px 0 28px; }
-.plugin-fields > label { display: grid; gap: 8px; min-width: 0; color: var(--ink); font-size: 13px; font-weight: 680; }
-.plugin-fields input:not([type="checkbox"]), .plugin-fields select { width: 100%; min-width: 0; height: 42px; padding: 0 12px; outline: none; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-primary); color: var(--ink); font: inherit; font-weight: 450; }
-.plugin-fields input:focus, .plugin-fields select:focus { border-color: var(--primary-color); box-shadow: 0 0 0 3px rgb(143 139 133 / 14%); }
+.plugin-fields > label, .plugin-field { display: grid; gap: 8px; min-width: 0; color: var(--ink); font-size: 13px; font-weight: 680; }
+.plugin-fields input:not([type="checkbox"]) { width: 100%; min-width: 0; height: 42px; padding: 0 12px; outline: none; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-primary); color: var(--ink); font: inherit; font-weight: 450; }
+.plugin-fields input:focus:focus { border-color: var(--primary-color); box-shadow: 0 0 0 3px rgb(143 139 133 / 14%); }
 .plugin-fields input::placeholder { color: var(--quiet); }
 .plugin-fields small { color: var(--muted); font-size: 11px; font-weight: 450; overflow-wrap: anywhere; }
 .plugin-enable { display: flex; flex-direction: column; justify-content: center; gap: 10px; font-size: 13px; }
@@ -70,3 +70,13 @@
   .plugin-deploy-footer .button { width: 100%; }
   .plugin-table { min-width: 550px; }
 }
+
+.plugin-field .dropdown-picker { width: 100%; }
+.plugin-field .dropdown-trigger { height: 42px; border-radius: 8px; font-size: 13px; font-weight: 450; }
+.plugin-field .dropdown-trigger:disabled { opacity: .5; cursor: not-allowed; }
+.plugins-module .checkbox-label input[type="checkbox"] { appearance: none; display: grid; place-content: center; flex: 0 0 18px; padding: 0; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--bg-primary); cursor: pointer; }
+.plugins-module .checkbox-label input[type="checkbox"]:checked { border-color: var(--primary-active); background: var(--primary-active); }
+.plugins-module .checkbox-label input[type="checkbox"]::before { content: ""; width: 9px; height: 5px; border-left: 2px solid white; border-bottom: 2px solid white; transform: translateY(-1px) rotate(-45deg); visibility: hidden; }
+.plugins-module .checkbox-label input[type="checkbox"]:checked::before { visibility: visible; }
+.plugins-module .checkbox-label input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 3px; }
+.plugins-module .checkbox-label input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }

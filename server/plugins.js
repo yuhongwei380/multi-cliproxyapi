@@ -114,10 +114,12 @@ export class PluginService {
   async deploy(job, result, instance, artifact) {
     const files = this.paths(job, instance); const status = await this.runtime.status(instance)
     if (!['running', 'stopped', 'failed'].includes(status.state)) throw new Error(`instance state ${status.state} is not safe for deployment`)
-    if (status.state === 'running' && fs.existsSync(files.file)) {
+    if (status.state === 'running') {
       const payload = JSON.parse((await (await this.clients(instance)).request('GET', '/v0/management/plugins')).body)
       const previous = payload.plugins?.find(item => item.id === job.plugin)
-      if (typeof previous?.effective_enabled === 'boolean') result.previous_enabled = previous.effective_enabled
+      if (typeof payload.plugins_enabled !== 'boolean' || (previous && typeof previous.enabled !== 'boolean')) throw new Error('plugin configured enable state unavailable')
+      result.previous_global_enabled = payload.plugins_enabled
+      result.previous_enabled = previous?.enabled ?? false
     }
     result.was_running = status.state === 'running'; result.state = 'backing-up'; this.save(job)
     directory(files.backup)
@@ -133,9 +135,9 @@ export class PluginService {
       atomic(files.file, fs.readFileSync(artifact.file), 0o755); atomic(files.manifest, JSON.stringify({ id: job.plugin, version: artifact.version, sha256: artifact.sha256 }))
       if (job.enable) atomic(files.config, editChildConfig(fs.readFileSync(files.config, 'utf8'), { plugin: { id: job.plugin } }))
       if (result.was_running) {
-        result.state = 'verifying'; this.save(job); await this.runtime.start(instance); await this.instances.confirmStarted(instance); await this.verify(instance, job, result)
+        result.state = 'verifying'; this.save(job); await this.runtime.start(instance); await this.instances.confirmStarted(instance); result.loaded = await this.verify(instance, job, result)
       }
-      result.state = result.was_running ? 'verified' : 'installed-pending-verification'; this.save(job)
+      result.state = result.was_running ? (result.loaded ? 'verified' : 'installed-disabled') : 'installed-pending-verification'; this.save(job)
     } catch (error) {
       result.message = error.message
       try { await this.restore(job, result, instance); result.state = 'rolled-back' } catch (restoreError) { result.state = 'blocked'; result.message += `; rollback: ${restoreError.message}` }
@@ -148,9 +150,17 @@ export class PluginService {
       try {
         const payload = JSON.parse((await (await this.clients(instance)).request('GET', '/v0/management/plugins')).body)
         const plugin = payload.plugins?.find(item => item.id === job.plugin)
-        if (!plugin?.registered || plugin.metadata?.version !== job.version || (job.enable && !plugin.effective_enabled)) throw new Error('plugin registration/version/enable verification failed')
-        if (!job.enable && typeof result.previous_enabled === 'boolean' && plugin.effective_enabled !== result.previous_enabled) throw new Error('plugin enable state changed during upgrade')
-        return
+        const expectedGlobal = job.enable ? true : result.previous_global_enabled
+        const expectedEnabled = job.enable ? true : result.previous_enabled
+        if (payload.plugins_enabled !== expectedGlobal || plugin?.enabled !== expectedEnabled) throw new Error('plugin configured enable state changed during deployment')
+        const file = path.join(instance.directory, 'plugins', this.artifacts.descriptor(job.plugin).entry)
+        regular(file); regular(`${file}.json`)
+        const manifest = JSON.parse(fs.readFileSync(`${file}.json`))
+        if (!plugin?.path || path.resolve(plugin.path) !== path.resolve(file) || manifest.id !== job.plugin || manifest.version !== job.version || digest(fs.readFileSync(file)) !== manifest.sha256) throw new Error('plugin discovery/file verification failed')
+        const expectedLoaded = expectedGlobal && expectedEnabled
+        if (expectedLoaded && (!plugin.registered || plugin.metadata?.version !== job.version || !plugin.effective_enabled)) throw new Error('plugin registration/version/enable verification failed')
+        if (!expectedLoaded && plugin.effective_enabled !== false) throw new Error('disabled plugin unexpectedly enabled')
+        return expectedLoaded
       } catch (error) { last = error; if (attempt < 9) await new Promise(resolve => setTimeout(resolve, 500)) }
     }
     throw last

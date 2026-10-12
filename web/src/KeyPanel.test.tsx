@@ -67,3 +67,29 @@ test('failed binding details open automatically and the failure badge survives c
   expect(toggle).toHaveTextContent('1 个失败')
   expect(screen.queryByRole('button', { name: '解绑并撤销' })).not.toBeInTheDocument()
 })
+
+test('instance filters include multi-bound keys and allow returning to all or unbound', async () => {
+  const second = { instance_id: 'two', instance_name: 'CPA 二', status: 'pending', message: '' }
+  setup([
+    key,
+    { ...key, id: 'multi', note: '多实例 Key', bindings: [...key.bindings, second] },
+    { ...key, id: 'two-only', note: '二号 Key', bindings: [second] },
+    { ...key, id: 'unused', note: '未分配 Key', bindings: [] },
+  ])
+  const filters = within(await screen.findByRole('group', { name: '绑定实例筛选' }))
+  const first = await filters.findByRole('button', { name: 'CPA 一2' })
+  fireEvent.click(first)
+  expect(first).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('heading', { name: '测试' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '多实例 Key' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '二号 Key' })).not.toBeInTheDocument()
+  fireEvent.click(filters.getByRole('button', { name: 'CPA 二2' }))
+  expect(screen.getByRole('heading', { name: '多实例 Key' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '二号 Key' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '测试' })).not.toBeInTheDocument()
+  fireEvent.click(filters.getByRole('button', { name: '未绑定1' }))
+  expect(screen.getByRole('heading', { name: '未分配 Key' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '多实例 Key' })).not.toBeInTheDocument()
+  fireEvent.click(filters.getByRole('button', { name: '全部4' }))
+  expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(4)
+})

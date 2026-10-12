@@ -22,12 +22,15 @@ export function KeyPanel() {
   const [notice, setNotice] = useState('')
   const [revealed, setRevealed] = useState<Record<string, string>>({})
   const [expanded, setExpanded] = useState<string[]>([])
+  const [instanceFilter, setInstanceFilter] = useState('')
   const load = async () => {
     const [keys, children] = await Promise.all([api.get('/keys'), api.get('/instances')])
     setItems(keys.items ?? []); setInstances(children.items ?? [])
     const ids = new Set((keys.items ?? []).map((key: KeyRecord) => key.id))
     setRevealed(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => ids.has(id))))
     setExpanded(previous => [...new Set([...previous.filter(id => ids.has(id)), ...(keys.items ?? []).filter((key: KeyRecord) => failedBindings(key).length > 0).map((key: KeyRecord) => key.id)])])
+    const boundIds = new Set((keys.items ?? []).flatMap((key: KeyRecord) => key.bindings.map(binding => binding.instance_id)))
+    setInstanceFilter(previous => !previous || previous === 'unbound' || boundIds.has(previous) ? previous : '')
   }
   useEffect(() => { void load().catch(cause => setError(cause.message)) }, [])
   const open = (next: Dialog) => { setDialog(next); setNote(next.key?.note ?? ''); setValue(''); setPassword(''); setSelected([]); setError(''); setNotice('') }
@@ -65,13 +68,26 @@ export function KeyPanel() {
     document.body.append(field)
     try { field.select(); if (!document.execCommand('copy')) throw new Error('浏览器不支持复制，请显示 Key 后手动复制') } finally { field.remove() }
   }
+  const unboundCount = items.filter(key => !key.bindings.length).length
+  const boundInstances = new Map<string, { name: string; count: number }>()
+  items.forEach(key => key.bindings.forEach(binding => {
+    const existing = boundInstances.get(binding.instance_id)
+    boundInstances.set(binding.instance_id, { name: instances.find(instance => instance.id === binding.instance_id)?.name || binding.instance_name || binding.instance_id, count: (existing?.count ?? 0) + 1 })
+  }))
+  const filteredItems = items.filter(key => !instanceFilter || (instanceFilter === 'unbound' ? !key.bindings.length : key.bindings.some(binding => binding.instance_id === instanceFilter)))
   return <section className="module-pane key-panel" aria-label="API Key 管理">
     <div className="key-heading"><div><div className="eyebrow">API KEYS</div><h2>API Key 管理</h2><p>每个 API Key 可绑定多个 CPA 实例，下发时保留现有 Key。删除前逐实例撤销。</p></div><div className="key-actions"><button className="button ghost" disabled={busy} onClick={() => void perform(load)}>刷新</button><button className="button primary" disabled={busy} onClick={() => open({ kind: 'create' })}>创建 Key</button></div></div>
     {error && <p role="alert" className="key-error">{error}</p>}{notice && <p role="status">{notice}</p>}
+    <div className="key-filter-bar"><div className="key-filters" role="group" aria-label="绑定实例筛选">
+      <button type="button" className="key-filter" aria-pressed={!instanceFilter} onClick={() => setInstanceFilter('')}>全部<span>{items.length}</span></button>
+      <button type="button" className="key-filter" aria-pressed={instanceFilter === 'unbound'} onClick={() => setInstanceFilter('unbound')}>未绑定<span>{unboundCount}</span></button>
+      {[...boundInstances].map(([id, instance]) => <button type="button" className="key-filter" key={id} aria-pressed={instanceFilter === id} onClick={() => setInstanceFilter(id)}>{instance.name}<span>{instance.count}</span></button>)}
+    </div><span className="key-filter-count" aria-live="polite">显示 {filteredItems.length} / {items.length} 个 Key</span></div>
     {!items.length && <p>尚未创建 Key。</p>}
-    <div className="key-list">{items.map(key => <article className={`key-card${failedBindings(key).length ? ' has-failure' : ''}`} key={key.id}>
+    {items.length > 0 && !filteredItems.length && <p className="key-muted">{instanceFilter === 'unbound' ? '暂无未绑定的 Key。' : '该实例暂无绑定的 Key。'}</p>}
+    <div className="key-list">{filteredItems.map(key => <article className={`key-card${failedBindings(key).length ? ' has-failure' : ''}`} key={key.id}>
       <div className="key-row"><div className="key-identity"><div className="key-name"><h3 title={key.note || '未命名 Key'}>{key.note || '未命名 Key'}</h3>{key.locked && <span className="state-pill">已锁定</span>}{key.deleting && <span className="state-pill">待完成删除</span>}</div><code title={revealed[key.id] || key.masked_key}>{revealed[key.id] || key.masked_key}</code></div>
-        <div className="key-binding-summary">{key.bindings.length ? <button type="button" className="key-expand" aria-expanded={expanded.includes(key.id)} aria-controls={`bindings-${key.id}`} title={key.bindings.map(binding => `${binding.instance_name || binding.instance_id}：${labels[binding.status] || binding.status}`).join('；')} onClick={() => setExpanded(previous => previous.includes(key.id) ? previous.filter(id => id !== key.id) : [...previous, key.id])}>绑定实例（{key.bindings.length}）{failedBindings(key).length > 0 && <span className="key-failure-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5v4M8 11h.01" /></svg>{failedBindings(key).length} 个失败</span>}<svg className="key-expand-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg></button> : <span className="key-muted">未绑定实例</span>}</div>
+        <div className="key-binding-summary">{key.bindings.length ? <button type="button" className="key-expand key-bound" aria-expanded={expanded.includes(key.id)} aria-controls={`bindings-${key.id}`} title={key.bindings.map(binding => `${binding.instance_name || binding.instance_id}：${labels[binding.status] || binding.status}`).join('；')} onClick={() => setExpanded(previous => previous.includes(key.id) ? previous.filter(id => id !== key.id) : [...previous, key.id])}>已绑定实例（{key.bindings.length}）{failedBindings(key).length > 0 && <span className="key-failure-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5v4M8 11h.01" /></svg>{failedBindings(key).length} 个失败</span>}<svg className="key-expand-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg></button> : <span className="key-unbound">未绑定实例</span>}</div>
         <div className="key-actions key-row-actions">
         <button className="button ghost" disabled={busy} onClick={() => void perform(async () => { const response = await action(key, 'reveal'); await copyKey(response.key); setNotice('Key 已复制。') })}>复制</button>
         <button className="button ghost" disabled={busy} onClick={() => revealed[key.id] ? setRevealed(previous => { const next = { ...previous }; delete next[key.id]; return next }) : void perform(async () => { const response = await action(key, 'reveal'); setRevealed(previous => ({ ...previous, [key.id]: response.key })) })}>{revealed[key.id] ? '隐藏' : '显示'}</button>

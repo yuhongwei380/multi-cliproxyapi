@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { invalid } from './errors.js'
 import { ConflictError } from './store.js'
-import { generateSecureApiKey } from './api-key-generator.js'
+import { generateApiKey } from '../shared/api-key.js'
 
 export class KeyService {
   constructor({ store, instances, clients, secrets, auth }) { Object.assign(this, { store, instances, clients, secrets, auth }) }
@@ -16,7 +16,7 @@ export class KeyService {
   active(key) { if (key.deleting) throw new ConflictError('Key 正在撤销删除，只能重试删除') }
   async create(input) {
     return this.run(() => {
-      const secret = input.key === undefined ? generateSecureApiKey() : input.key
+      const secret = input.key === undefined ? generateApiKey() : input.key
       if (typeof secret !== 'string' || secret.length < 8 || secret.length > 512 || /\s|[\x00-\x1f\x7f]/.test(secret)) throw invalid('Key 必须为 8–512 个无空白字符')
       const note = this.note(input.note ?? '')
       const fingerprint = crypto.createHash('sha256').update(secret).digest('hex')

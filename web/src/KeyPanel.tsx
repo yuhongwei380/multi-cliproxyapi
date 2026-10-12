@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, Instance } from './api'
-import { generateSecureApiKey } from './apiKey'
+import { generateApiKey } from '../../shared/api-key.js'
 import './keys.css'
 
 type Binding = { instance_id: string; instance_name: string; status: string; message: string }
@@ -54,7 +54,7 @@ export function KeyPanel() {
     })
   }
   const generate = () => {
-    setValue(generateSecureApiKey())
+    setValue(generateApiKey())
   }
   const copyKey = async (secret: string) => {
     if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(secret); return }

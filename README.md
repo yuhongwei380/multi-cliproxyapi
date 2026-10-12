@@ -95,11 +95,9 @@ npm run package:linux
 
 ### 总控 API Key 管理
 
-侧栏“API Key 管理”支持填写备注、手动输入或安全随机生成 `sk-` Key、编辑备注、复制和临时显示完整 Key。随机生成格式统一为 `sk-` 加 48 位大小写字母和数字，总长度 51 个字符，前端按钮与服务端均使用密码学安全、无偏的随机数。手动输入继续兼容 8–512 个无空白字符。备注持久保存在总控 SQLite 数据库，Key 使用现有 AES-256-GCM 密钥库加密；列表默认脱敏，审计日志不记录完整密钥。
+侧栏“API Key 管理”支持填写备注、手动输入或安全随机生成 `sk-` Key、编辑备注、复制和临时显示完整 Key。备注持久保存在总控 SQLite 数据库，Key 使用现有 AES-256-GCM 密钥库加密；列表默认脱敏，审计日志不记录完整密钥。
 
-生成算法来自 CPA 默认的[官方管理面板源码 `src/utils/apiKey.ts`](https://github.com/router-for-me/Cli-Proxy-API-Management-Center/blob/390718ecfec90b674fed474862e497522273e129/src/utils/apiKey.ts)，读取版本为 `390718ecfec90b674fed474862e497522273e129`。`ApiKeysCardEditor` 的生成按钮调用该函数；[CPA 后端](https://github.com/router-for-me/CLIProxyAPI/blob/091ff27f31285ec4fd1dd5823b44f7f51fb8f48b/internal/api/handlers/management/config_lists.go)仅读写 Key 列表。`web/src/apiKey.ts` 原样复制该 TypeScript 文件，`server/api-key-generator.js` 仅移除两处类型标注，保留同一算法：每轮采样 `ceil(剩余位数 × 1.1)` 个安全随机字节，拒绝 248–255，按 62 字符取模，循环补足 48 位。上游 MIT 许可保存在 `LICENSES/CLIProxyAPI-Management-Center-MIT.txt`。
-
-生成算法来自 CPA 默认的[官方管理面板源码 `src/utils/apiKey.ts`](https://github.com/router-for-me/Cli-Proxy-API-Management-Center/blob/390718ecfec90b674fed474862e497522273e129/src/utils/apiKey.ts)，读取版本为 `390718ecfec90b674fed474862e497522273e129`。`ApiKeysCardEditor` 的生成按钮调用该函数；[CPA 后端](https://github.com/router-for-me/CLIProxyAPI/blob/091ff27f31285ec4fd1dd5823b44f7f51fb8f48b/internal/api/handlers/management/config_lists.go)仅读写 Key 列表。`web/src/apiKey.ts` 原样复制该 TypeScript 文件，`server/api-key-generator.js` 仅移除两处类型标注，保留同一算法：每轮采样 `ceil(剩余位数 × 1.1)` 个安全随机字节，拒绝 248–255，按 62 字符取模，循环补足 48 位。上游 MIT 许可保存在 `LICENSES/CLIProxyAPI-Management-Center-MIT.txt`。
+随机生成规则与 CPA 一致：`sk-` 加 48 位大小写字母和数字，总长 51 个字符，使用密码学安全随机字节和拒绝采样避免取模偏差。总控前端按钮与服务端创建入口共用 `shared/api-key.js`；手动输入继续兼容 8–512 个无空白字符。
 
 一个 Key 可绑定多个 CPA 实例，绑定不立即写入实例。点击“下发 Key”后逐实例读取客户端 Key 列表：相同 Key 已存在时不重复写入，否则追加，保留其他 Key，并重新读取确认。优先使用 CPA v8 的 `/v8/management/config/access/api-keys`，该路径返回 404 时兼容旧 `/v0/management/api-keys`。实例须运行且未锁定；操作与实例生命周期、升级和插件部署共用操作锁。CPA 原生面板的并发改动无法通过总控操作锁完全排除，请避免同时修改同一实例的 Key 列表。
 

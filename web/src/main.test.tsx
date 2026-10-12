@@ -194,7 +194,7 @@ test.each([false, true])('shows Kimi monthly quotas with a weekly column only wh
   render(<App />)
   await screen.findByText('kimi-1')
   expect(screen.getByText('5h额度')).toBeInTheDocument()
-  expect(screen.getByText('month limit')).toBeInTheDocument()
+  expect(screen.getByText('月额度')).toBeInTheDocument()
   expect(Boolean(screen.queryByText('周额度'))).toBe(weekly)
   expect(screen.getByRole('progressbar', { name: 'kimi-1 月额度剩余' })).toHaveAttribute('aria-valuenow', '0')
   if (weekly) expect(screen.getByRole('progressbar', { name: 'kimi-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '96')

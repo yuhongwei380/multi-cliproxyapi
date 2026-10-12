@@ -720,7 +720,7 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   const windowColumns = [
     { name: '5 小时限额', title: '5h额度', label: '5 小时额度剩余' },
     { name: '周限额', title: '周额度', label: '周额度剩余' },
-    { name: '月限额', title: 'month limit', label: '月额度剩余' },
+    { name: '月限额', title: '月额度', label: '月额度剩余' },
   ]
   const availableColumns = windowColumns.filter(column => quotas.some(quota => quota.values?.some(value => value.name === column.name)))
   const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)

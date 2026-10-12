@@ -8,6 +8,32 @@ function response(body: unknown, status = 200) { return Promise.resolve({ ok: st
 beforeEach(() => { vi.restoreAllMocks(); window.location.hash = '' })
 afterEach(() => { cleanup() })
 
+test('administrator settings load and save independent instance limits and retain errors', async () => {
+  let fail = true
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) => {
+    const route = String(url)
+    if (route.endsWith('/auth/status')) return response({ authenticated: true, username: 'admin' }) as any
+    if (route.endsWith('/instance-limits')) {
+      if (options?.method === 'PATCH' && fail) return response({ error: '上限不能低于当前已使用数量' }, 409) as any
+      return response({ max_instances: 5, max_backups: options?.method === 'PATCH' ? 20 : 10, instances_used: 2, backups_used: 3 }) as any
+    }
+    if (route.endsWith('/upgrade/state')) return response({ state: 'idle' }) as any
+    return response({ items: [] }) as any
+  })
+  const user = userEvent.setup(); render(<App />)
+  await user.click((await screen.findAllByRole('button', { name: '管理员设置' }))[0])
+  const ordinary = await screen.findByLabelText('普通实例上限')
+  const backup = screen.getByLabelText('备份实例上限')
+  expect(ordinary).toHaveValue(5); expect(backup).toHaveValue(10)
+  await user.clear(backup); await user.type(backup, '20')
+  await user.click(screen.getByRole('button', { name: '保存实例上限' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('上限不能低于当前已使用数量')
+  expect(backup).toHaveValue(20)
+  fail = false; await user.click(screen.getByRole('button', { name: '保存实例上限' }))
+  expect(await screen.findByText('实例上限已保存，立即生效')).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenCalledWith('/api/instance-limits', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ max_instances: 5, max_backups: 20 }) }))
+})
+
 test('requires login before showing instance cards', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: false }) as any)
@@ -44,6 +70,27 @@ test('uses an optional child password and provides a show/hide control', async (
   await user.click(screen.getByRole('button', { name: '显示密码' }))
   expect(password).toHaveAttribute('type', 'text')
   expect(screen.getByRole('button', { name: '隐藏密码' })).toBeInTheDocument()
+})
+
+test('backup dialog requires a new port, submits a clone and retains input on failure', async () => {
+  const source = { id: 'cpa_1', name: 'one', port: 8317, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) => {
+    const route = String(url)
+    if (route.endsWith('/auth/status')) return response({ authenticated: true, username: 'admin' }) as any
+    if (route.endsWith('/instances')) return response({ items: [source] }) as any
+    if (route.endsWith('/backup') && options?.method === 'POST') return response({ error: '备份失败，请重试' }, 409) as any
+    if (route.endsWith('/upgrade/state')) return response({ state: 'idle' }) as any
+    return response({ items: [] }) as any
+  })
+  const user = userEvent.setup(); render(<App />)
+  await user.click(await screen.findByRole('button', { name: '备份' }))
+  const dialog = screen.getByRole('dialog', { name: '备份 one' })
+  const save = within(dialog).getByRole('button', { name: '保存备份实例' }); expect(save).toBeDisabled()
+  const portInput = within(dialog).getByLabelText('新的监听端口')
+  await user.type(portInput, '8317'); expect(save).toBeDisabled(); expect(within(dialog).getByRole('alert')).toHaveTextContent('端口已被现有实例使用')
+  await user.clear(portInput); await user.type(portInput, '18322'); await user.click(save)
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('备份失败，请重试'); expect(portInput).toHaveValue(18322)
+  expect(fetchMock).toHaveBeenCalledWith('/api/instances/cpa_1/backup', expect.objectContaining({ body: JSON.stringify({ name: 'one-backup', port: 18322 }) }))
 })
 
 test('delete confirmation requires a challenge and administrator password', async () => {
@@ -425,8 +472,8 @@ test('opens administrator settings from the avatar and submits a password change
   await user.type(screen.getByLabelText('确认新管理员密码'), 'new-password')
   fetchMock.mockImplementationOnce(() => response({ status: 'updated' }) as any)
   await user.click(screen.getByRole('button', { name: '保存新密码' }))
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5))
-  const patchCall = fetchMock.mock.calls[4]
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/auth/password', expect.objectContaining({ method: 'PATCH' })))
+  const patchCall = fetchMock.mock.calls.find(call => call[0] === '/api/auth/password')!
   expect(patchCall[0]).toBe('/api/auth/password')
   expect((patchCall[1] as RequestInit).method).toBe('PATCH')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toEqual({ current_password: 'admin', new_password: 'new-password' })
@@ -467,7 +514,7 @@ test('loads and saves editable controller branding', async () => {
   fetchMock.mockImplementationOnce(() => response(saved) as any)
   await user.click(screen.getByRole('button', { name: '保存品牌设置' }))
   await waitFor(() => expect(screen.getByText(saved.banner_title)).toBeInTheDocument())
-  const patchCall = fetchMock.mock.calls[4]
+  const patchCall = fetchMock.mock.calls.find(call => call[0] === '/api/branding')!
   expect(patchCall[0]).toBe('/api/branding')
   expect((patchCall[1] as RequestInit).method).toBe('PATCH')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ brand_name: saved.brand_name, banner_title: saved.banner_title, icon: branding.icon })
@@ -500,7 +547,7 @@ test('uploads a logo and persists it with controller branding', async () => {
   fetchMock.mockImplementationOnce(() => response(saved) as any)
   await user.click(screen.getByRole('button', { name: '保存品牌设置' }))
   await waitFor(() => expect(screen.queryByRole('heading', { name: '管理员设置' })).not.toBeInTheDocument())
-  const patchCall = fetchMock.mock.calls[4]
+  const patchCall = fetchMock.mock.calls.find(call => call[0] === '/api/branding')!
   expect(patchCall[0]).toBe('/api/branding')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ logo: saved.logo })
   expect(document.querySelector('link[rel="icon"]')).toHaveAttribute('href', saved.logo)

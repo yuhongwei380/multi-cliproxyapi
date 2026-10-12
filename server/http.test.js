@@ -32,7 +32,43 @@ test('deployment record deletion requires a session, rejects active records and 
   } finally { server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); store.close() }
 })
 
+test('instance backup API requires login and returns a new stopped instance without credentials', async () => {
+  const f = await fixture()
+  try {
+    const source = await f.instances.create({ name: 'backup-api', port: await freePort(), management_password: 'backup-synthetic-secret' })
+    const route = `${f.url}/api/instances/${source.id}/backup`
+    assert.equal((await fetch(route, { method: 'POST' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    const port = await freePort()
+    const response = await fetch(route, { method: 'POST', headers, body: JSON.stringify({ name: 'backup-api-copy', port }) })
+    assert.equal(response.status, 201); const copy = await response.json()
+    assert.notEqual(copy.id, source.id); assert.equal(copy.port, port); assert.equal(copy.status.state, 'stopped'); assert.equal(copy.management_secret_ciphertext, undefined); assert.equal(copy.directory, undefined)
+    assert.equal(f.instances.decryptManagementSecret(f.store.getInstance(copy.id)), 'backup-synthetic-secret')
+    assert.ok(f.store.listAuditLogs().some(item => item.action === 'instance.backup' && item.resource_id === source.id && item.outcome === 'success'))
+    await f.instances.setLocked(source.id, true)
+    assert.equal((await fetch(route, { method: 'POST', headers, body: JSON.stringify({ name: 'locked-copy', port: await freePort() }) })).status, 409)
+  } finally { await closeFixture(f) }
+})
+
 async function freePort() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
+
+test('instance limit settings require authentication, validate changes and audit saves', async () => {
+  const f = await fixture()
+  try {
+    const route = `${f.url}/api/instance-limits`
+    assert.equal((await fetch(route)).status, 401)
+    assert.equal((await fetch(route, { method: 'PATCH' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    assert.deepEqual(await (await fetch(route, { headers })).json(), { max_instances: 5, max_backups: 10, instances_used: 0, backups_used: 0 })
+    assert.equal((await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ max_instances: 0, max_backups: 10 }) })).status, 400)
+    assert.equal((await fetch(route, { method: 'PATCH', headers: { ...headers, origin: 'https://evil.example' }, body: JSON.stringify({ max_instances: 8, max_backups: 20 }) })).status, 403)
+    const saved = await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ max_instances: 8, max_backups: 20 }) })
+    assert.equal(saved.status, 200); assert.equal((await saved.json()).max_backups, 20)
+    assert.ok(f.store.listAuditLogs().some(item => item.action === 'instance-limits.update' && item.outcome === 'success'))
+  } finally { await closeFixture(f) }
+})
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const branding = new BrandingService({ store }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, branding, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, branding, server, url: `http://127.0.0.1:${server.address().port}` }
 }

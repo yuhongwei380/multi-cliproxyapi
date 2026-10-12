@@ -47,6 +47,7 @@ function auditTarget(request, pathname) {
   if (pathname === '/api/auth/password') return { action: 'auth.password.change', resource_type: 'administrator', resource_id: 'admin' }
   if (pathname === '/api/branding') return { action: 'branding.update', resource_type: 'branding', resource_id: 'singleton' }
   if (pathname === '/api/instances') return { action: 'instance.create', resource_type: 'instance', resource_id: '' }
+  if (pathname === '/api/instance-limits') return { action: 'instance-limits.update', resource_type: 'instance-limits', resource_id: 'singleton' }
   if (pathname === '/api/quota/settings') return { action: 'quota.settings.update', resource_type: 'quota-settings', resource_id: 'singleton' }
   if (pathname === '/api/versions/install') return { action: 'version.install', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/upgrade') return { action: 'version.upgrade', resource_type: 'version', resource_id: '' }
@@ -103,6 +104,8 @@ export class Controller {
   authStatus(request, response) { const branding = this.branding?.get?.(); try { return writeJson(response, 200, { authenticated: true, username: this.authenticated(request), ...(branding ? { branding } : {}) }) } catch { return writeJson(response, 200, { authenticated: false, ...(branding ? { branding } : {}) }) } }
   async routeApi(request, response, url) {
     const route = url.pathname.replace(/^\/api/, '')
+    if (route === '/instance-limits' && request.method === 'GET') return writeJson(response, 200, this.instances.getLimits())
+    if (route === '/instance-limits' && request.method === 'PATCH') return writeJson(response, 200, await this.instances.updateLimits(await readJson(request)))
     if (route === '/plugins' && request.method === 'GET') return writeJson(response, 200, await this.plugins.inventory())
     if (route === '/plugins/jobs' && request.method === 'GET') return writeJson(response, 200, { items: this.plugins.jobs() })
     const pluginRecord = route.match(/^\/plugins\/jobs\/([^/]+)$/)
@@ -133,6 +136,7 @@ export class Controller {
     if (parts.length === 1 && request.method === 'PATCH') { const body = await readJson(request); const instance = await this.instances.update(instanceId, { name: body.name, port: body.port === undefined ? undefined : Number(body.port), management_password: body.management_password, expected_revision: Number(body.expected_revision) || 0 }); const status = await this.instances.status(instanceId); return writeJson(response, 200, publicInstance(instance, status, request)) }
     if (parts.length !== 2) return writeJson(response, 404, { error: 'not found' })
     const action = parts[1]
+    if (action === 'backup' && request.method === 'POST') { const body = await readJson(request); const instance = await this.instances.backup(instanceId, { name: body.name, port: Number(body.port) }); return writeJson(response, 201, publicInstance(instance, { instance_id: instance.id, state: 'stopped', ready: false, version: instance.version }, request)) }
     if (['lock', 'unlock'].includes(action) && request.method === 'POST') { if (action === 'unlock') { const body = await readJson(request); this.auth.verifyAdminPassword(body.admin_password) } const instance = await this.instances.setLocked(instanceId, action === 'lock'); return writeJson(response, 200, publicInstance(instance, await this.instances.status(instanceId), request)) }
     if (['start', 'stop', 'restart'].includes(action) && request.method === 'POST') { await this.instances[action](instanceId); return writeJson(response, 202, { status: action === 'start' ? 'starting' : action === 'stop' ? 'stopping' : 'restarting' }) }
     if (action === 'quotas') { if (request.method === 'GET') return writeJson(response, 200, { items: await this.quota.list(instanceId) }); if (request.method === 'POST') { await this.quota.refreshInstance(instanceId); return writeJson(response, 202, { status: 'refreshed', items: await this.quota.list(instanceId) }) } }

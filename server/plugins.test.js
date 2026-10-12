@@ -22,8 +22,33 @@ function fixture() {
 }
 async function child(f, name, port) { return f.instances.create({ name, port, management_password: 'testing' }) }
 
+test('insufficient automatic backup capacity prevents all plugin writes and restarts', async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'capacity', 19391); await f.instances.start(instance.id)
+    await f.instances.backup(instance.id, { name: 'existing-backup', port: 19491 })
+    f.store.saveInstanceLimits({ max_instances: 5, max_backups: 1 })
+    const config = fs.readFileSync(path.join(instance.directory, 'config.yaml'))
+    let stops = 0; f.runtime.stop = async () => { stops++; throw new Error('must not stop') }
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id], enable: true }); await f.service.pending
+    assert.equal(job.state, 'failed'); assert.match(job.message, /实例名额/); assert.equal(stops, 0); assert.equal(f.store.listInstances().length, 2); assert.deepEqual(fs.readFileSync(path.join(instance.directory, 'config.yaml')), config); assert.equal(fs.existsSync(path.join(instance.directory, 'plugins', 'cpa-key-billing.so')), false)
+  } finally { f.close() }
+})
+
+test('a later backup failure leaves earlier backups intact and prevents deployment to every target', async () => {
+  const f = fixture()
+  try {
+    const first = await child(f, 'before-failure', 19392); const second = await child(f, 'bad-backup', 19393)
+    fs.rmSync(path.join(second.directory, 'config.yaml'))
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [first.id, second.id], enable: true }); await f.service.pending
+    assert.equal(job.state, 'failed'); assert.equal(job.results[0].state, 'cancelled'); assert.equal(job.results[1].state, 'failed')
+    assert.equal(f.store.getInstance(job.results[0].backup_id).locked, true)
+    for (const source of [first, second]) assert.equal(fs.existsSync(path.join(source.directory, 'plugins', 'cpa-key-billing.so')), false)
+  } finally { f.close() }
+})
+
 for (const scenario of [
-  { name: 'fresh disabled install', global: true, enabled: false, old: false },
+  { name: 'fresh disabled install', global: true, enabled: false, old: false, relative: true },
   { name: 'disabled upgrade', global: true, enabled: false, old: true },
   { name: 'globally disabled upgrade', global: false, enabled: true, old: true },
   { name: 'enabled upgrade without explicit enable', global: true, enabled: true, old: true }
@@ -35,7 +60,7 @@ for (const scenario of [
     if (scenario.old) { fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, 'old library') }
     const config = fs.readFileSync(path.join(instance.directory, 'config.yaml'), 'utf8')
     const loaded = scenario.global && scenario.enabled
-    f.service.clients = async () => ({ request: async () => ({ body: JSON.stringify({ plugins_enabled: scenario.global, plugins: !fs.existsSync(file) ? [] : [{ id: 'cpa-key-billing', path: file, enabled: scenario.enabled, registered: loaded, effective_enabled: loaded, metadata: loaded ? { version: '1.3.20' } : null }] }) }), health: async () => {} })
+    f.service.clients = async () => ({ request: async () => ({ body: JSON.stringify({ plugins_enabled: scenario.global, plugins: !fs.existsSync(file) ? [] : [{ id: 'cpa-key-billing', path: scenario.relative ? 'plugins/cpa-key-billing.so' : file, enabled: scenario.enabled, registered: loaded, effective_enabled: loaded, metadata: loaded ? { version: '1.3.20' } : null }] }) }), health: async () => {} })
     const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id], enable: false }); await f.service.pending
     assert.equal(job.state, 'completed'); assert.equal(job.results[0].state, loaded ? 'verified' : 'installed-disabled')
     assert.equal(fs.readFileSync(file, 'utf8'), 'new library'); assert.equal(fs.readFileSync(path.join(instance.directory, 'config.yaml'), 'utf8'), config)
@@ -68,6 +93,9 @@ test('deployment skips locked instances and preserves stopped state and config',
     const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [stopped.id, locked.id] }); await f.service.pending
     assert.equal(job.state, 'completed'); assert.deepEqual(job.results.map(item => item.state), ['installed-pending-verification', 'skipped-locked'])
     assert.equal((await f.runtime.status(stopped)).state, 'stopped'); assert.equal(fs.readFileSync(path.join(stopped.directory, 'config.yaml'), 'utf8'), config)
+    const backup = f.store.getInstance(job.results[0].backup_id)
+    assert.equal(backup.locked, true); assert.equal(backup.desired_state, 'stopped'); assert.notEqual(backup.port, stopped.port)
+    assert.equal(fs.existsSync(path.join(backup.directory, 'plugins', 'cpa-key-billing.so')), false)
     assert.equal(fs.existsSync(path.join(locked.directory, 'plugins', 'cpa-key-billing.so')), false)
     assert.equal((await f.service.inventory()).instances[0].plugins[0].enabled, null)
   } finally { f.close() }
@@ -93,6 +121,7 @@ test('failed verification restores old library/config and halts subsequent insta
     assert.equal(job.state, 'failed'); assert.equal(job.results[0].state, 'rolled-back'); assert.equal(fs.readFileSync(file, 'utf8'), 'old library'); assert.equal(fs.readFileSync(path.join(first.directory, 'config.yaml'), 'utf8'), config)
     assert.equal((await f.runtime.status(first)).state, 'running'); assert.equal(fs.existsSync(path.join(second.directory, 'plugins', 'cpa-key-billing.so')), false)
     assert.equal(job.results[1].state, 'cancelled')
+    assert.equal(fs.readFileSync(path.join(f.store.getInstance(job.results[0].backup_id).directory, 'plugins', 'cpa-key-billing.so'), 'utf8'), 'old library')
   } finally { f.close() }
 })
 test('interrupted deployment recovers from durable backups, with retry after rollback failure', async () => {

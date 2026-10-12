@@ -85,6 +85,11 @@ export class PluginService {
     job.state = 'running'; this.save(job)
     try {
       const artifact = await this.artifacts.prepare(job.plugin, job.version); job.version = artifact.version; this.save(job)
+      await this.instances.automaticBackups(job.results.filter(result => result.state === 'pending').map(result => result.id), `plugin ${job.plugin} ${job.version}`, (sourceId, backup) => {
+        const result = job.results.find(item => item.id === sourceId)
+        result.backup_id = backup.id; result.backup_name = backup.name; result.backup_port = backup.port; result.state = 'backup-ready'; this.save(job)
+      }, sourceId => { const result = job.results.find(item => item.id === sourceId); result.state = 'backing-up'; this.save(job) })
+      for (const result of job.results) if (result.state === 'backup-ready') result.state = 'pending'
       for (const result of job.results) {
         if (result.state !== 'pending') continue
         await this.instances.withInstanceLock(result.id, async () => {
@@ -97,7 +102,7 @@ export class PluginService {
     } catch (error) {
       job.state = job.results.some(item => item.state === 'blocked') ? 'blocked' : 'failed'; job.message = error.message
       for (const result of job.results) {
-        if (result.state === 'pending') result.state = 'cancelled'
+        if (['pending', 'backup-ready'].includes(result.state)) result.state = 'cancelled'
         else if (result.state === 'backing-up') { result.state = 'failed'; result.message = error.message }
       }
     }
@@ -156,7 +161,7 @@ export class PluginService {
         const file = path.join(instance.directory, 'plugins', this.artifacts.descriptor(job.plugin).entry)
         regular(file); regular(`${file}.json`)
         const manifest = JSON.parse(fs.readFileSync(`${file}.json`))
-        if (!plugin?.path || path.resolve(plugin.path) !== path.resolve(file) || manifest.id !== job.plugin || manifest.version !== job.version || digest(fs.readFileSync(file)) !== manifest.sha256) throw new Error('plugin discovery/file verification failed')
+        if (!plugin?.path || path.resolve(instance.directory, plugin.path) !== path.resolve(file) || manifest.id !== job.plugin || manifest.version !== job.version || digest(fs.readFileSync(file)) !== manifest.sha256) throw new Error('plugin discovery/file verification failed')
         const expectedLoaded = expectedGlobal && expectedEnabled
         if (expectedLoaded && (!plugin.registered || plugin.metadata?.version !== job.version || !plugin.effective_enabled)) throw new Error('plugin registration/version/enable verification failed')
         if (!expectedLoaded && plugin.effective_enabled !== false) throw new Error('disabled plugin unexpectedly enabled')
@@ -184,7 +189,7 @@ export class PluginService {
           if (['prepared', 'installing', 'verifying', 'restoring', 'blocked'].includes(result.state)) {
             try { await this.instances.withInstanceLock(result.id, () => this.restore(job, result, this.store.getInstance(result.id))); result.state = 'rolled-back' } catch (error) { blocked = true; result.state = 'blocked'; result.message = error.message }
           } else if (result.state === 'backing-up') result.state = 'cancelled'
-          else if (result.state === 'pending') result.state = 'cancelled'
+          else if (['pending', 'backup-ready'].includes(result.state)) result.state = 'cancelled'
         }
         job.state = blocked ? 'blocked' : 'failed'; job.message = blocked ? 'rollback requires attention; retry recovery' : 'interrupted deployment recovered; submit a new deployment to continue'; this.save(job)
       }

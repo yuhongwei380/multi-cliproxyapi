@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { backupMetadata } from './instance-backup.js'
 
 export class NotFoundError extends Error {
   constructor(message = 'not found') { super(message); this.code = 'ERR_NOT_FOUND'; this.status = 404 }
@@ -150,6 +151,13 @@ export class Store {
     // Add the columns explicitly so an upgrade keeps the current settings row.
     const instanceColumns = new Set(this.db.prepare('PRAGMA table_info(instances)').all().map(row => row.name))
     if (!instanceColumns.has('locked')) this.db.exec('ALTER TABLE instances ADD COLUMN locked INTEGER NOT NULL DEFAULT 0')
+    if (!instanceColumns.has('is_backup')) {
+      this.db.exec('ALTER TABLE instances ADD COLUMN is_backup INTEGER NOT NULL DEFAULT 0')
+      for (const instance of this.db.prepare('SELECT id,directory FROM instances').all()) {
+        if (backupMetadata(instance)) this.db.prepare('UPDATE instances SET is_backup=1 WHERE id=?').run(instance.id)
+      }
+    }
+    this.db.exec('CREATE TABLE IF NOT EXISTS instance_limits (id INTEGER PRIMARY KEY CHECK(id=1), max_instances INTEGER NOT NULL, max_backups INTEGER NOT NULL)')
     const quotaColumns = new Set(this.db.prepare('PRAGMA table_info(quota_settings)').all().map(row => row.name))
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
@@ -165,6 +173,10 @@ export class Store {
   }
 
   close() { this.db?.close(); this.db = null }
+  getInstanceLimits() { return this.db.prepare('SELECT max_instances,max_backups FROM instance_limits WHERE id=1').get() || null }
+  saveInstanceLimits(value) {
+    this.db.prepare('INSERT INTO instance_limits VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET max_instances=excluded.max_instances,max_backups=excluded.max_backups').run(value.max_instances, value.max_backups)
+  }
   init() {}
 
   getAdminHash(username) {
@@ -190,14 +202,14 @@ export class Store {
     return {
       id: row.id, name: row.name, port: Number(row.port), directory: row.directory,
       management_secret_ciphertext: row.management_secret_ciphertext,
-      locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
+      is_backup: Boolean(row.is_backup), locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
       created_at: row.created_at, updated_at: row.updated_at
     }
   }
   createInstance(instance) {
     try {
-      this.db.prepare(`INSERT INTO instances(id,name,port,directory,management_secret_ciphertext,desired_state,version,revision,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(instance.id, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at)
+      this.db.prepare(`INSERT INTO instances(id,name,port,directory,management_secret_ciphertext,desired_state,version,revision,created_at,updated_at,locked,is_backup)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(instance.id, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at, instance.locked ? 1 : 0, instance.is_backup ? 1 : 0)
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) throw new ConflictError()
       throw error

@@ -1050,6 +1050,12 @@ body { background: var(--bg-secondary); }
 .instance-card .card-actions .button:first-child { min-width: 0; }
 .instance-card .card-actions .delete-instance { margin-left: 0; }
 
+/* Keep the added backup action readable on narrow instance cards. */
+.instance-card .card-top { flex-wrap: wrap; }
+.instance-card .instance-title { flex: 1 1 220px; }
+.instance-card .card-actions { flex-wrap: wrap; }
+.instance-card .card-actions .button { flex: 1 0 70px; }
+
 /* The quota dialog uses its extra width to keep two account snapshots visible. */
 .quota-detail-dialog {
   width: min(980px, calc(100vw - 32px));

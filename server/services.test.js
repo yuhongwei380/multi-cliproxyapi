@@ -37,6 +37,35 @@ import net from 'node:net'
 async function port() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-service-')); const store = new Store(path.join(root, 'control.db')); const secrets = openSecretStore(path.join(root, 'secrets.key')); const runtime = new FakeRuntime(); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); return { root, store, secrets, runtime, instances } }
 
+test('v8 child config remains valid across start, restart, port and password changes', async () => {
+  const f = fixture()
+  try {
+    const item = await f.instances.create({ name: 'v8-plugin', port: await port() })
+    const file = path.join(item.directory, 'config.yaml')
+    const original = `plugins:\n    enabled: true\nserver:\n    host: 0.0.0.0\n    port: ${item.port}\nmanagement:\n    allow-remote: true\n    secret-key: "admin"\n    disable-control-panel: false\nconfig-version: 8\n`
+    fs.writeFileSync(file, original)
+    await f.instances.start(item.id)
+    await f.instances.restart(item.id)
+    assert.equal(fs.readFileSync(file, 'utf8'), original)
+    const nextPort = await port()
+    await f.instances.update(item.id, { port: nextPort, management_password: 'new-password' })
+    assert.equal(fs.readFileSync(file, 'utf8'), original.replace(`port: ${item.port}`, `port: ${nextPort}`).replace('"admin"', '"new-password"'))
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('mixed-indent plugin config fails before runtime startup without modifying the file', async () => {
+  const f = fixture()
+  try {
+    const item = await f.instances.create({ name: 'broken-plugin', port: await port() })
+    const file = path.join(item.directory, 'config.yaml')
+    const original = fs.readFileSync(file, 'utf8').replace('  enabled: true', '    enabled: true\n  enabled: true')
+    fs.writeFileSync(file, original)
+    await assert.rejects(f.instances.start(item.id), /inconsistent indentation/)
+    assert.equal(fs.readFileSync(file, 'utf8'), original)
+    assert.equal((await f.runtime.status(item)).state, 'stopped')
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('management readiness clears after a failed probe without mutating runtime state', async () => {
   const f = fixture()
   try {

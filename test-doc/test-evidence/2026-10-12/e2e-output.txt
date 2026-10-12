@@ -1,0 +1,10 @@
+PASS v8 config start with manually installed plugin {'version': '1.3.20'}
+PASS three controller-driven child restarts preserve config {'config_sha256': 'b171a9d4572c1100976b7b1c9878d50897f747ce6934539cd1cda1a9b18111d1'}
+PASS controller restart preserves child PID and config {'pid': '785729'}
+PASS controller restart leaves manually stopped child stopped {}
+PASS stopped v8 child starts from controller {}
+PASS v8 nested port update works with plugin enabled {'port': 18323}
+PASS v8 management password update rejects old secret {}
+PASS controller reports running and management ready {}
+PASS temporary bridge refuses unrelated service command {}
+ALL_PASSED 9

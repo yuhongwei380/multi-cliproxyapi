@@ -9,6 +9,7 @@ import { checkPassword, hashPassword, hashToken, newToken } from './security.js'
 import { NotFoundError, ConflictError } from './store.js'
 import { unsupported } from './cpa.js'
 import { prepareInstanceBinary } from './instance-binary.js'
+import { editChildConfig } from './child-config.js'
 
 export const ErrInvalidCredentials = Object.assign(new Error('invalid credentials'), { code: 'ERR_INVALID_CREDENTIALS', status: 401 })
 export const ErrRateLimited = Object.assign(new Error('too many authentication attempts'), { code: 'ERR_RATE_LIMITED', status: 429 })
@@ -172,91 +173,10 @@ export class InstanceService {
     const file = path.join(instance.directory, 'config.yaml')
     const original = fs.readFileSync(file, 'utf8')
     const secret = this.decryptManagementSecret(instance)
-    const lines = original.split(/\r?\n/)
-    let found = false
-    let changed = false
-    let hostFound = false
-    let allowRemoteFound = false
-    let controlPanelFound = false
-    const updated = lines.map(line => {
-      if (/^host:\s*/.test(line)) {
-        hostFound = true
-        const expected = `host: ${DEFAULT_CHILD_BIND_HOST}`
-        if (line !== expected) changed = true
-        return expected
-      }
-      if (/^  allow-remote:\s*/.test(line)) {
-        allowRemoteFound = true
-        if (line !== '  allow-remote: true') changed = true
-        return '  allow-remote: true'
-      }
-      if (/^  disable-control-panel:\s*/.test(line)) {
-        controlPanelFound = true
-        if (line !== '  disable-control-panel: false') changed = true
-        return '  disable-control-panel: false'
-      }
-      const match = line.match(/^  secret-key:\s*(.*)$/)
-      if (!match) return line
-      found = true
-      const value = match[1].trim()
-      if (!value || value === '""' || value === "''") {
-        changed = true
-        return `  secret-key: ${JSON.stringify(secret)}`
-      }
-      return line
-    })
-    if (!hostFound) {
-      updated.unshift(`host: ${DEFAULT_CHILD_BIND_HOST}`)
-      changed = true
-    }
-    let remoteManagement = updated.findIndex(line => /^remote-management:\s*$/.test(line))
-    if (remoteManagement < 0) {
-      while (updated.length && updated.at(-1) === '') updated.pop()
-      remoteManagement = updated.length
-      updated.push('remote-management:')
-      changed = true
-    }
-    if (!allowRemoteFound) {
-      updated.splice(remoteManagement + 1, 0, '  allow-remote: true')
-      allowRemoteFound = true
-      changed = true
-    }
-    if (!found) {
-      const allowRemote = updated.findIndex(line => /^  allow-remote:\s*/.test(line))
-      updated.splice(allowRemote + 1, 0, `  secret-key: ${JSON.stringify(secret)}`)
-      changed = true
-    }
-    if (!controlPanelFound) {
-      const secretKey = updated.findIndex(line => /^  secret-key:\s*/.test(line))
-      updated.splice(secretKey + 1, 0, '  disable-control-panel: false')
-      changed = true
-    }
-    // CPA's upstream example disables dynamic plugins by default. The
-    // controller's managed instances opt in explicitly so plugin-backed
-    // providers and management extensions are available after creation.
-    const pluginsHeader = updated.findIndex(line => /^plugins:\s*$/.test(line))
-    if (pluginsHeader < 0) {
-      while (updated.length && updated.at(-1) === '') updated.pop()
-      updated.push('plugins:', '  enabled: true')
-      changed = true
-    } else {
-      let pluginsEnd = updated.length
-      let enabledIndex = -1
-      for (let index = pluginsHeader + 1; index < updated.length; index += 1) {
-        const line = updated[index]
-        if (/^\S/.test(line) && line.trim() && !line.startsWith('#')) { pluginsEnd = index; break }
-        if (/^  enabled:\s*/.test(line)) { enabledIndex = index; break }
-      }
-      if (enabledIndex >= 0) {
-        if (updated[enabledIndex] !== '  enabled: true') { updated[enabledIndex] = '  enabled: true'; changed = true }
-      } else {
-        updated.splice(pluginsEnd, 0, '  enabled: true')
-        changed = true
-      }
-    }
-    if (!changed) return false
+    const updated = editChildConfig(original, { host: DEFAULT_CHILD_BIND_HOST, secret, ensure: true })
+    if (updated === original) return false
     const temporary = `${file}.tmp`
-    fs.writeFileSync(temporary, updated.join('\n'), { mode: 0o600 })
+    fs.writeFileSync(temporary, updated, { mode: 0o600 })
     fs.renameSync(temporary, file)
     fs.chmodSync(file, 0o600)
     return true
@@ -327,15 +247,12 @@ export class InstanceService {
         if (status.state === ObservedState.UNKNOWN) throw new ConflictError(`cannot update instance while state is ${status.state}`)
         wasRunning = isActive(status.state); if (wasRunning) { await this.runtime.stop(current); const stopped = await this.runtime.status(current); if (!isStopped(stopped.state)) throw new ConflictError('instance did not stop before port change') }
         try {
-          const lines = originalConfig.toString().split(/\r?\n/); let replacedPort = false; let replacedSecret = false
-          const updated = lines.map(line => {
-            if (portChanged && /^port:\s*/.test(line)) { replacedPort = true; return `port: ${input.port}` }
-            if (passwordChanged && /^  secret-key:\s*/.test(line)) { replacedSecret = true; return `  secret-key: ${JSON.stringify(input.management_password)}` }
-            return line
+          const updated = editChildConfig(originalConfig.toString(), {
+            port: portChanged ? input.port : undefined,
+            secret: input.management_password,
+            replaceSecret: passwordChanged
           })
-          if (portChanged && !replacedPort) updated.unshift(`port: ${input.port}`)
-          if (passwordChanged && !replacedSecret) { const index = updated.findIndex(line => /^  allow-remote:\s*/.test(line)); updated.splice(index >= 0 ? index + 1 : 0, 0, `  secret-key: ${JSON.stringify(input.management_password)}`) }
-          const temporary = path.join(current.directory, 'config.yaml.tmp'); fs.writeFileSync(temporary, updated.join('\n'), { mode: 0o600 }); fs.renameSync(temporary, path.join(current.directory, 'config.yaml')); if (portChanged) next.port = input.port
+          const temporary = path.join(current.directory, 'config.yaml.tmp'); fs.writeFileSync(temporary, updated, { mode: 0o600 }); fs.renameSync(temporary, path.join(current.directory, 'config.yaml')); if (portChanged) next.port = input.port
         }
         catch (error) { fs.writeFileSync(path.join(current.directory, 'config.yaml'), originalConfig, { mode: 0o600 }); if (wasRunning) await this.startRuntime(current); throw error }
       }

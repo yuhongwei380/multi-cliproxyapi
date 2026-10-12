@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { KeyPanel } from './KeyPanel'
 import { api } from './api'
 vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
-afterEach(() => { cleanup(); vi.resetAllMocks() })
+afterEach(() => { cleanup(); vi.resetAllMocks(); vi.restoreAllMocks() })
 
 const key = { id: 'key-one', note: '测试', masked_key: 'sk-…1234', locked: false, deleting: false, bindings: [{ instance_id: 'one', instance_name: 'CPA 一', status: 'deployed', message: '' }] }
 function setup(items = [key]) {
@@ -19,7 +19,23 @@ test('creates a server generated key with a persisted note, or a securely genera
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys', { note: '集成测试' }))
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   fireEvent.click(screen.getByRole('button', { name: '创建 Key' })); fireEvent.click(screen.getByRole('button', { name: '生成' }))
-  expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toMatch(/^sk-[0-9a-f]{64}$/)
+  const first = (screen.getByLabelText('API Key') as HTMLInputElement).value
+  expect(first).toMatch(/^sk-[A-Za-z0-9]{48}$/)
+  fireEvent.click(screen.getByRole('button', { name: '生成' }))
+  expect((screen.getByLabelText('API Key') as HTMLInputElement).value).not.toBe(first)
+})
+
+test('key generation rejects biased bytes and refills until 48 characters', () => {
+  const random = vi.spyOn(crypto, 'getRandomValues').mockImplementationOnce(bytes => {
+    (bytes as Uint8Array).fill(255); return bytes
+  }).mockImplementation(bytes => {
+    const values = bytes as Uint8Array
+    values.fill(0); values[0] = 61; values[1] = 62; values[2] = 247
+    return bytes
+  })
+  setup([]); fireEvent.click(screen.getByRole('button', { name: '创建 Key' })); fireEvent.click(screen.getByRole('button', { name: '生成' }))
+  expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe('sk-9A9' + 'A'.repeat(45))
+  expect(random).toHaveBeenCalledTimes(2)
 })
 
 test('binding selects only new children and does not implicitly deploy', async () => {

@@ -62,7 +62,7 @@ test('creation encrypts secrets, masks listings, rejects duplicates and persists
   assert.ok(!JSON.stringify(f.service.list()).includes(secret)); assert.ok(!JSON.stringify(f.store.getManagedKey(key.id)).includes(secret))
   await assert.rejects(f.service.create({ key: secret }), /已存在/)
   assert.equal((await f.service.reveal(key.id)).key, secret)
-  const generated = await f.service.create({}); assert.match((await f.service.reveal(generated.id)).key, /^sk-[A-Za-z0-9_-]{43}$/)
+  const generated = await f.service.create({}); assert.match((await f.service.reveal(generated.id)).key, /^sk-[A-Za-z0-9]{48}$/)
   await assert.rejects(f.service.create({ key: 'bad key with space' }))
 })
 

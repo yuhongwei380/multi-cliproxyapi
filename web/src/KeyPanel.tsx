@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, Instance } from './api'
+import { generateSecureApiKey } from './apiKey'
 import './keys.css'
 
 type Binding = { instance_id: string; instance_name: string; status: string; message: string }
@@ -53,8 +54,7 @@ export function KeyPanel() {
     })
   }
   const generate = () => {
-    const bytes = crypto.getRandomValues(new Uint8Array(32))
-    setValue('sk-' + Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''))
+    setValue(generateSecureApiKey())
   }
   const copyKey = async (secret: string) => {
     if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(secret); return }

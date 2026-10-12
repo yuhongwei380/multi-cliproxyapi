@@ -77,7 +77,7 @@ try {
   await client(first).writeClientKeys(detected.path, [baseline])
   pass('two independent real CPA processes start and expose Key APIs')
   const generated = await api('/keys', { note: '随机生成验收' }, 201)
-  assert.match((await api(`/keys/${generated.id}/reveal`, {})).key, /^sk-[A-Za-z0-9_-]{43}$/)
+  assert.match((await api(`/keys/${generated.id}/reveal`, {})).key, /^sk-[A-Za-z0-9]{48}$/)
   assert.equal((await api(`/keys/${generated.id}/delete`, {})).deleted, true)
   const key = await api('/keys', { key: secret, note: '真实 CPA 下发测试' }, 201)
   await api('/keys', { key: secret }, 409)

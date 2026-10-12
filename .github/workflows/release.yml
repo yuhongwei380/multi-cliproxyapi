@@ -47,6 +47,7 @@ jobs:
           checksum="${binary}.sha256"
           test -x "$binary"
           (cd release && sha256sum --check multi-cliproxyapi-linux-x64.sha256)
+          test -s release/CLIProxyAPI-Management-Center-MIT.txt
           for script in install.sh start.sh stop.sh uninstall.sh; do
             test -x "release/$script"
           done
@@ -61,7 +62,7 @@ jobs:
           tar -C release -czf "release/$archive" \
             multi-cliproxyapi-linux-x64 \
             multi-cliproxyapi-linux-x64.sha256 \
-            README.md install.sh start.sh stop.sh uninstall.sh
+            README.md CLIProxyAPI-Management-Center-MIT.txt install.sh start.sh stop.sh uninstall.sh
           (
             cd release
             sha256sum "$archive" > "$archive.sha256"
@@ -81,6 +82,7 @@ jobs:
             "${archive}.sha256"
             release/multi-cliproxyapi-linux-x64
             release/multi-cliproxyapi-linux-x64.sha256
+            release/CLIProxyAPI-Management-Center-MIT.txt
           )
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${assets[@]}" --clobber

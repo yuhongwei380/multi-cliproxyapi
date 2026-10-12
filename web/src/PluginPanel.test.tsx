@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { PluginPanel } from './PluginPanel'
 import { api } from './api'
-vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
+vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 test('shows locked skips, submits selected instances and explicit enable option', async () => {
   vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [] } : { catalog: [{ id: 'cpa-key-billing', name: 'Key Billing', repository: 'haowang02/cpa-plugin-key-billing' }], instances: [
@@ -23,4 +23,31 @@ test('blocked deployment prevents another rollout and offers rollback recovery',
   expect((screen.getByRole('button', { name: '统一安装 / 升级' }) as HTMLButtonElement).disabled).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: '重试回滚' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/recover'))
+})
+test('record deletion requires confirmation and refreshes history after success', async () => {
+  let items = [{ id: 'done', plugin: 'cpa-key-billing', version: '1.3.20', state: 'completed', message: '', results: [], created_at: '2026-10-12T03:00:00Z' }]
+  vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items } : { catalog: [], instances: [] })
+  vi.mocked(api.delete).mockImplementation(async () => { items = []; return { status: 'deleted' } })
+  render(<PluginPanel />)
+  fireEvent.click(await screen.findByRole('button', { name: '删除部署记录 done' }))
+  expect(api.delete).not.toHaveBeenCalled()
+  expect(screen.getByRole('dialog', { name: '删除部署记录？' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '取消' }))
+  expect(api.delete).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: '删除部署记录 done' }))
+  fireEvent.click(screen.getByRole('button', { name: '确认删除记录' }))
+  await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/plugins/jobs/done'))
+  expect(await screen.findByText('暂无部署记录')).toBeInTheDocument()
+})
+test('running and blocked records cannot be deleted, and failure keeps the record', async () => {
+  vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: ['running', 'blocked', 'failed'].map(state => ({ id: state, plugin: 'cpa-key-billing', version: '1.3.20', state, message: '', results: [] })) } : { catalog: [], instances: [] })
+  vi.mocked(api.delete).mockRejectedValue(new Error('删除失败，请重试'))
+  render(<PluginPanel />)
+  expect(await screen.findByRole('button', { name: '删除部署记录 running' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '删除部署记录 blocked' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: '删除部署记录 failed' }))
+  fireEvent.click(screen.getByRole('button', { name: '确认删除记录' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('删除失败，请重试')
+  expect(screen.getByRole('dialog')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '删除部署记录 failed' })).toBeInTheDocument()
 })

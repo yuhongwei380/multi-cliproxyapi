@@ -60,6 +60,7 @@ test('failed verification restores old library/config and halts subsequent insta
     const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [first.id, second.id], enable: true }); await f.service.pending
     assert.equal(job.state, 'failed'); assert.equal(job.results[0].state, 'rolled-back'); assert.equal(fs.readFileSync(file, 'utf8'), 'old library'); assert.equal(fs.readFileSync(path.join(first.directory, 'config.yaml'), 'utf8'), config)
     assert.equal((await f.runtime.status(first)).state, 'running'); assert.equal(fs.existsSync(path.join(second.directory, 'plugins', 'cpa-key-billing.so')), false)
+    assert.equal(job.results[1].state, 'cancelled')
   } finally { f.close() }
 })
 test('interrupted deployment recovers from durable backups, with retry after rollback failure', async () => {
@@ -80,4 +81,30 @@ test('checksum failure occurs before touching an instance and cache tampering is
     const cache = path.join(root, 'cpa-key-billing-1.3.20'); fs.mkdirSync(cache); const bytes = Buffer.alloc(64); bytes.write('ELF', 1); bytes[0] = 127; bytes[4] = 2; bytes[5] = 1; bytes.writeUInt16LE(3, 16); bytes.writeUInt16LE(62, 18); fs.writeFileSync(path.join(cache, 'cpa-key-billing.so'), bytes); fs.writeFileSync(path.join(cache, 'manifest.json'), JSON.stringify({ id: 'cpa-key-billing', version: '1.3.20', sha256: 'bad' }))
     await assert.rejects(artifacts.prepare('cpa-key-billing', '1.3.20'), /integrity mismatch/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+test('backup failure reports the instance failure before any runtime or library mutation', async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'missing-config', 19387); fs.rmSync(path.join(instance.directory, 'config.yaml'))
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id] }); await f.service.pending
+    assert.equal(job.state, 'failed'); assert.equal(job.results[0].state, 'failed'); assert.match(job.results[0].message, /config missing/)
+    assert.equal((await f.runtime.status(instance)).state, 'stopped'); assert.equal(fs.existsSync(path.join(instance.directory, 'plugins', 'cpa-key-billing.so')), false)
+  } finally { f.close() }
+})
+test('deleting terminal deployment records preserves plugin files, config and backups', async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'delete-history', 19388)
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id] }); await f.service.pending
+    const files = f.service.paths(job, instance); const config = fs.readFileSync(files.config); const library = fs.readFileSync(files.file)
+    f.service.deleteRecord(job.id)
+    assert.equal(f.service.jobs().length, 0); assert.deepEqual(fs.readFileSync(files.config), config); assert.deepEqual(fs.readFileSync(files.file), library); assert.ok(fs.existsSync(path.join(files.backup, 'config')))
+    assert.equal((await f.runtime.status(instance)).state, 'stopped')
+    assert.throws(() => f.service.deleteRecord(job.id), { status: 404 })
+    for (const state of ['queued', 'running', 'blocked']) {
+      const protectedJob = { id: crypto.randomUUID(), state, results: [] }; f.store.savePluginJob(protectedJob)
+      assert.throws(() => f.service.deleteRecord(protectedJob.id), { status: 409 }); assert.ok(f.service.jobs().some(item => item.id === protectedJob.id))
+    }
+    const failed = { id: crypto.randomUUID(), state: 'failed', results: [] }; f.store.savePluginJob(failed); f.service.deleteRecord(failed.id); assert.ok(!f.service.jobs().some(item => item.id === failed.id))
+  } finally { f.close() }
 })

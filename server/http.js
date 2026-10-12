@@ -54,6 +54,8 @@ function auditTarget(request, pathname) {
   if (pathname === '/api/upgrade/recover') return { action: 'version.recover', resource_type: 'upgrade', resource_id: 'singleton' }
   if (pathname === '/api/plugins/deploy') return { action: 'plugin.deploy', resource_type: 'plugin-job', resource_id: '' }
   if (pathname === '/api/plugins/recover') return { action: 'plugin.recover', resource_type: 'plugin-job', resource_id: '' }
+  const pluginRecord = pathname.match(/^\/api\/plugins\/jobs\/([^/]+)$/)
+  if (pluginRecord && request.method === 'DELETE') return { action: 'plugin.record.delete', resource_type: 'plugin-job', resource_id: decodeURIComponent(pluginRecord[1]) }
   const match = pathname.match(/^\/api\/instances\/([^/]+)(?:\/([^/]+))?$/)
   if (!match) return null
   const suffix = match[2] || 'update'
@@ -103,6 +105,8 @@ export class Controller {
     const route = url.pathname.replace(/^\/api/, '')
     if (route === '/plugins' && request.method === 'GET') return writeJson(response, 200, await this.plugins.inventory())
     if (route === '/plugins/jobs' && request.method === 'GET') return writeJson(response, 200, { items: this.plugins.jobs() })
+    const pluginRecord = route.match(/^\/plugins\/jobs\/([^/]+)$/)
+    if (pluginRecord && request.method === 'DELETE') { this.plugins.deleteRecord(decodeURIComponent(pluginRecord[1])); return writeJson(response, 200, { status: 'deleted' }) }
     if (route === '/plugins/deploy' && request.method === 'POST') return writeJson(response, 202, this.plugins.submit(await readJson(request)))
     if (route === '/plugins/recover' && request.method === 'POST') { await this.plugins.recover(); return writeJson(response, 200, { status: 'recovered' }) }
     if (route === '/auth/password' && request.method === 'PATCH') { const body = await readJson(request); this.auth.changeAdminPassword(body.current_password, body.new_password); return writeJson(response, 200, { status: 'updated' }) }

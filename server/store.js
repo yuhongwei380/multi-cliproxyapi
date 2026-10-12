@@ -322,6 +322,12 @@ export class Store {
   clearUpgradeState() { this.db.prepare('DELETE FROM upgrade_state WHERE id=?').run('singleton') }
   savePluginJob(job) { this.db.prepare('INSERT INTO plugin_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(job.id, json(job)) }
   listPluginJobs() { return this.db.prepare('SELECT payload FROM plugin_jobs ORDER BY rowid DESC LIMIT 100').all().map(row => parse(row.payload, {})) }
+  deletePluginJob(id) {
+    const result = this.db.prepare("DELETE FROM plugin_jobs WHERE id=? AND json_extract(payload, '$.state') IN ('completed','failed')").run(id)
+    if (Number(result.changes) === 1) return
+    if (!this.db.prepare('SELECT id FROM plugin_jobs WHERE id=?').get(id)) throw new NotFoundError('plugin deployment record not found')
+    throw new ConflictError('only completed or failed plugin deployment records can be deleted')
+  }
 
   createDeleteChallenge(challenge) {
     this.db.prepare('INSERT INTO delete_challenges(id,instance_id,revision,expires_at,used) VALUES(?,?,?,?,0)').run(challenge.id, challenge.instance_id, challenge.revision, challenge.expires_at)

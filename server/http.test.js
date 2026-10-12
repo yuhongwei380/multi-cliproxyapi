@@ -12,6 +12,25 @@ import { Installer, UpgradeService, VersionService } from './release.js'
 import { Controller, createHttpServer } from './http.js'
 import { instanceView } from './domain.js'
 import { BrandingService } from './branding.js'
+import { PluginService } from './plugins.js'
+
+test('deployment record deletion requires a session, rejects active records and records audit', async () => {
+  const store = new Store(':memory:'); const auth = new AuthService(store); auth.initializeAdmin('test-record-admin')
+  const plugins = new PluginService({ store }); const controller = new Controller({ auth, plugins, store, logger: { error() {} } }); const server = createHttpServer(controller)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const base = `http://127.0.0.1:${server.address().port}/api`
+  try {
+    store.savePluginJob({ id: 'finished', state: 'completed' }); store.savePluginJob({ id: 'recovering', state: 'blocked' })
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE' })).status, 401)
+    const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'test-record-admin' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0] }
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers: { ...headers, origin: 'https://evil.example' } })).status, 403)
+    assert.equal((await fetch(`${base}/plugins/jobs/recovering`, { method: 'DELETE', headers })).status, 409)
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers })).status, 200)
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers })).status, 404)
+    assert.ok(store.listAuditLogs().some(item => item.action === 'plugin.record.delete' && item.resource_id === 'finished' && item.outcome === 'success'))
+    assert.deepEqual(store.listPluginJobs().map(item => item.id), ['recovering'])
+  } finally { server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); store.close() }
+})
 
 async function freePort() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 async function fixture() {

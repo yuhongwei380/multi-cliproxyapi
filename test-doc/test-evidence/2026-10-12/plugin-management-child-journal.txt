@@ -1,0 +1,127 @@
+Oct 12 11:19:19 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:19:19 op-make-yhw-52 cli-proxy-api[791717]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:19:19 op-make-yhw-52 cli-proxy-api[791717]: [2026-10-12 11:19:19] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:19:19 op-make-yhw-52 cli-proxy-api[791717]: [2026-10-12 11:19:19] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:19:19 op-make-yhw-52 cli-proxy-api[791717]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:19:19 op-make-yhw-52 cli-proxy-api[791717]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:20:00 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:20:00 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:20:00 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:20:00 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:20:00 op-make-yhw-52 cli-proxy-api[791951]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:20:00 op-make-yhw-52 cli-proxy-api[791951]: [2026-10-12 11:20:00] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:20:00 op-make-yhw-52 cli-proxy-api[791951]: [2026-10-12 11:20:00] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.19 path=plugins/cpa-key-billing.so
+Oct 12 11:20:00 op-make-yhw-52 cli-proxy-api[791951]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:20:00 op-make-yhw-52 cli-proxy-api[791951]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:20:30 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:20:30 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:20:30 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:16 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:16 op-make-yhw-52 cli-proxy-api[792310]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:21:16 op-make-yhw-52 cli-proxy-api[792310]: [2026-10-12 11:21:16] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:21:16 op-make-yhw-52 cli-proxy-api[792310]: [2026-10-12 11:21:16] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.19 path=plugins/cpa-key-billing.so
+Oct 12 11:21:16 op-make-yhw-52 cli-proxy-api[792310]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:21:16 op-make-yhw-52 cli-proxy-api[792310]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:21:18 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:21:18 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:21:18 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:18 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:18 op-make-yhw-52 cli-proxy-api[792352]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:21:18 op-make-yhw-52 cli-proxy-api[792352]: [2026-10-12 11:21:18] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:21:18 op-make-yhw-52 cli-proxy-api[792352]: [2026-10-12 11:21:18] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:21:18 op-make-yhw-52 cli-proxy-api[792352]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:21:18 op-make-yhw-52 cli-proxy-api[792352]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:21:18 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:19 op-make-yhw-52 cli-proxy-api[792393]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:21:19 op-make-yhw-52 cli-proxy-api[792393]: [2026-10-12 11:21:19] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:21:19 op-make-yhw-52 cli-proxy-api[792393]: [2026-10-12 11:21:19] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:21:19 op-make-yhw-52 cli-proxy-api[792393]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:21:19 op-make-yhw-52 cli-proxy-api[792393]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:19 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:20 op-make-yhw-52 cli-proxy-api[792433]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:21:20 op-make-yhw-52 cli-proxy-api[792433]: [2026-10-12 11:21:20] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:21:20 op-make-yhw-52 cli-proxy-api[792433]: [2026-10-12 11:21:20] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.19 path=plugins/cpa-key-billing.so
+Oct 12 11:21:20 op-make-yhw-52 cli-proxy-api[792433]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:21:20 op-make-yhw-52 cli-proxy-api[792433]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:21:25 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:21:25 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:21:25 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:25 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:25 op-make-yhw-52 cli-proxy-api[792476]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:21:25 op-make-yhw-52 cli-proxy-api[792476]: [2026-10-12 11:21:25] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:21:25 op-make-yhw-52 cli-proxy-api[792476]: [2026-10-12 11:21:25] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:21:25 op-make-yhw-52 cli-proxy-api[792476]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:21:25 op-make-yhw-52 cli-proxy-api[792476]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:21:26 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:21:26 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:21:26 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:31 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:21:31 op-make-yhw-52 cli-proxy-api[792549]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:21:31 op-make-yhw-52 cli-proxy-api[792549]: [2026-10-12 11:21:31] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:21:31 op-make-yhw-52 cli-proxy-api[792549]: [2026-10-12 11:21:31] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:21:31 op-make-yhw-52 cli-proxy-api[792549]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:21:31 op-make-yhw-52 cli-proxy-api[792549]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:21:34 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:21:34 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:21:34 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:31 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:31 op-make-yhw-52 cli-proxy-api[794643]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:28:31 op-make-yhw-52 cli-proxy-api[794643]: [2026-10-12 11:28:31] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:28:31 op-make-yhw-52 cli-proxy-api[794643]: [2026-10-12 11:28:31] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.19 path=plugins/cpa-key-billing.so
+Oct 12 11:28:31 op-make-yhw-52 cli-proxy-api[794643]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:28:31 op-make-yhw-52 cli-proxy-api[794643]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:28:32 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:28:32 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:28:32 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:32 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794687]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794687]: [2026-10-12 11:28:33] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794687]: [2026-10-12 11:28:33] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794687]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794687]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:28:33 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:28:33 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:28:33 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:33 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794727]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794727]: [2026-10-12 11:28:33] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:28:33 op-make-yhw-52 cli-proxy-api[794727]: [2026-10-12 11:28:33] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794727]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794727]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:28:34 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:28:34 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:28:34 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:34 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794772]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794772]: [2026-10-12 11:28:34] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794772]: [2026-10-12 11:28:34] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.19 path=plugins/cpa-key-billing.so
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794772]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:28:34 op-make-yhw-52 cli-proxy-api[794772]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:28:39 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:28:39 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:28:39 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:39 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Consumed 1.041s CPU time.
+Oct 12 11:28:40 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:40 op-make-yhw-52 cli-proxy-api[794813]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:28:40 op-make-yhw-52 cli-proxy-api[794813]: [2026-10-12 11:28:40] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:28:40 op-make-yhw-52 cli-proxy-api[794813]: [2026-10-12 11:28:40] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:28:40 op-make-yhw-52 cli-proxy-api[794813]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:28:40 op-make-yhw-52 cli-proxy-api[794813]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:28:40 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:28:40 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:28:40 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:46 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 11:28:46 op-make-yhw-52 cli-proxy-api[794873]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 11:28:46 op-make-yhw-52 cli-proxy-api[794873]: [2026-10-12 11:28:46] [--------] [info ] [host.go:360] pluginhost: plugin loaded plugin_id=cpa-key-billing path=plugins/cpa-key-billing.so
+Oct 12 11:28:46 op-make-yhw-52 cli-proxy-api[794873]: [2026-10-12 11:28:46] [--------] [info ] [host.go:383] pluginhost: plugin registered plugin_id=cpa-key-billing plugin_name=cpa-key-billing version=1.3.20 path=plugins/cpa-key-billing.so
+Oct 12 11:28:46 op-make-yhw-52 cli-proxy-api[794873]: API server started successfully on: 0.0.0.0:18322
+Oct 12 11:28:46 op-make-yhw-52 cli-proxy-api[794873]: server clients and configuration updated: 0 clients (0 auth entries + 0 Gemini API keys + 0 Interactions API keys + 0 Claude API keys + 0 Codex keys + 0 xAI keys + 0 Meta API keys + 0 Vertex-compat + 0 OpenAI-compat)
+Oct 12 11:28:49 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 11:28:49 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 11:28:49 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.

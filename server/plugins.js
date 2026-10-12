@@ -55,6 +55,7 @@ export class PluginService {
   constructor({ store, instances, runtime, clients, artifacts }) { Object.assign(this, { store, instances, runtime, clients, artifacts }); this.pending = null }
   assertIdle() { if (this.store.listPluginJobs().some(active)) throw new ConflictError('plugin deployment requires completion or recovery first') }
   jobs() { return this.store.listPluginJobs() }
+  deleteRecord(id) { this.store.deletePluginJob(id) }
   save(job) { job.updated_at = new Date().toISOString(); this.store.savePluginJob(job) }
   async inventory() {
     const items = []
@@ -93,10 +94,18 @@ export class PluginService {
         })
       }
       job.state = 'completed'
-    } catch (error) { job.state = job.results.some(item => item.state === 'blocked') ? 'blocked' : 'failed'; job.message = error.message }
+    } catch (error) {
+      job.state = job.results.some(item => item.state === 'blocked') ? 'blocked' : 'failed'; job.message = error.message
+      for (const result of job.results) {
+        if (result.state === 'pending') result.state = 'cancelled'
+        else if (result.state === 'backing-up') { result.state = 'failed'; result.message = error.message }
+      }
+    }
     this.save(job)
   }
   paths(job, instance) {
+    if (!/^[a-f0-9-]{36}$/.test(job.id) || path.resolve(instance.directory) !== path.resolve(this.instances.root, 'instances', instance.id)) throw new Error('unsafe plugin deployment path')
+    const stat = fs.lstatSync(instance.directory); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('instance directory must be a real directory')
     const descriptor = this.artifacts.descriptor(job.plugin)
     const plugins = path.join(instance.directory, 'plugins'); const backups = path.join(instance.directory, '.plugin-backups'); directory(plugins); directory(backups)
     const backup = path.join(backups, job.id); const file = path.join(plugins, descriptor.entry)
@@ -165,6 +174,7 @@ export class PluginService {
           if (['prepared', 'installing', 'verifying', 'restoring', 'blocked'].includes(result.state)) {
             try { await this.instances.withInstanceLock(result.id, () => this.restore(job, result, this.store.getInstance(result.id))); result.state = 'rolled-back' } catch (error) { blocked = true; result.state = 'blocked'; result.message = error.message }
           } else if (result.state === 'backing-up') result.state = 'cancelled'
+          else if (result.state === 'pending') result.state = 'cancelled'
         }
         job.state = blocked ? 'blocked' : 'failed'; job.message = blocked ? 'rollback requires attention; retry recovery' : 'interrupted deployment recovered; submit a new deployment to continue'; this.save(job)
       }

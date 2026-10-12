@@ -79,6 +79,7 @@ export type API = {
   get: (path: string) => Promise<any>
   post: (path: string, body?: unknown) => Promise<any>
   patch: (path: string, body: unknown) => Promise<any>
+  delete: (path: string) => Promise<any>
 }
 
 async function request(path: string, options: RequestInit = {}) {
@@ -101,5 +102,6 @@ async function request(path: string, options: RequestInit = {}) {
 export const api: API = {
   get: path => request(path),
   post: (path, body) => request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
-  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) })
+  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  delete: path => request(path, { method: 'DELETE' })
 }

@@ -1,0 +1,9 @@
+controller state: inactive
+child state: inactive
+controller startup: disabled
+removed: /etc/systemd/system/cpa-plugin-e2e-bridge.service
+removed: /etc/systemd/system/multi-cliproxyapi.service.d/e2e.conf
+removed: /run/cpa-plugin-e2e-systemctl.sock
+removed: /usr/local/lib/multi-cliproxyapi/e2e-root
+removed: /usr/local/lib/multi-cliproxyapi/e2e-runtime
+removed: /opt/mutli-cliproxycpa-data/plugin-cache/cpa-key-billing-1.3.18

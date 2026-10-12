@@ -1,0 +1,9 @@
+Oct 12 10:33:48 op-make-yhw-52 systemd[1]: Stopping CLIProxyAPI instance cpa-812f1d284bb14a0ba06d...
+Oct 12 10:33:48 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.
+Oct 12 10:33:48 op-make-yhw-52 systemd[1]: Stopped CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 10:33:48 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Consumed 1.865s CPU time.
+Oct 12 10:33:49 op-make-yhw-52 systemd[1]: Started CLIProxyAPI instance cpa-812f1d284bb14a0ba06d.
+Oct 12 10:33:49 op-make-yhw-52 cli-proxy-api[785374]: CLIProxyAPI Version: 8.0.23, Commit: d318bcc3, BuiltAt: 2026-10-09T14:33:31Z
+Oct 12 10:33:49 op-make-yhw-52 cli-proxy-api[785374]: [2026-10-12 10:33:49] [--------] [warn ] [main.go:903] failed to parse plugin bootstrap config: parse config payload: yaml: line 6: did not find expected key
+Oct 12 10:33:49 op-make-yhw-52 cli-proxy-api[785374]: [2026-10-12 10:33:49] [--------] [error] [main.go:598] failed to load config: failed to parse config file: yaml: line 6: did not find expected key
+Oct 12 10:33:49 op-make-yhw-52 systemd[1]: multi-cpa@cpa-812f1d284bb14a0ba06d.service: Deactivated successfully.

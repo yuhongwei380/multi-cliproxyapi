@@ -1,0 +1,24 @@
+host: 0.0.0.0
+plugins:
+    enabled: true
+    configs:
+        cpa-key-billing:
+            enabled: true
+  enabled: true
+server:
+    host: 0.0.0.0
+    port: 18322
+management:
+    allow-remote: true
+    secret-key: REDACTED
+    disable-control-panel: false
+oauth:
+    auth-dir: "/opt/mutli-cliproxycpa-data/instances/cpa-812f1d284bb14a0ba06d/auths"
+observability:
+    logs:
+        logging-to-file: true
+config-version: 8
+remote-management:
+  allow-remote: true
+  secret-key: REDACTED
+  disable-control-panel: false

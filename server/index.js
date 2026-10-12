@@ -14,6 +14,7 @@ import { AuthService, InstanceService, DeleteService, QuotaService } from './ser
 import { Controller, createHttpServer } from './http.js'
 import { ManagementAssets } from './management-assets.js'
 import { BrandingService } from './branding.js'
+import { PluginService, PluginArtifacts } from './plugins.js'
 import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL, normalizeLogLevel, ServiceLogger } from './logging.js'
 
 export const DEFAULT_ADMIN_PASSWORD = 'admin'
@@ -71,8 +72,10 @@ export function createApplication(config, overrides = {}) {
   const clients = async instance => { const secret = instances.decryptManagementSecret(instance); return new HTTPClient({ baseUrl: `http://127.0.0.1:${instance.port}`, managementSecret: secret, quotaPath: config.quotaPath, maxRetries: 4, retryBaseMs: 150 }) }
   instances.healthCheck = async instance => { const client = await clients(instance); await client.health() }
   const quota = overrides.quota || new QuotaService({ store, instances, clients, secrets }); const source = overrides.source || new DirectGitHubSource(); const installer = overrides.installer || new Installer({ source, root: versionsRoot, store }); const activator = overrides.activator || units; const upgrade = overrides.upgrade || new UpgradeService({ store, instances, runtime, activator, units, prepareVersion: binaryByVersion }); const versionService = overrides.versionService || new VersionService({ store, instances, installer }); const branding = overrides.branding || new BrandingService({ store });
-  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
-  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, controller }
+  const plugins = overrides.plugins || new PluginService({ store, instances, runtime, clients, artifacts: new PluginArtifacts({ root: path.join(config.dataDir, 'plugin-cache') }) })
+  instances.pluginService = plugins
+  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
+  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, plugins, controller }
 }
 
 async function ensureInitialVersion(app, config, logger) {
@@ -127,6 +130,7 @@ export async function start(config = readConfig()) {
     })
     await ensureInitialVersion(app, config, logger)
     await app.upgrade.recover().catch(error => { logger.error(`upgrade recovery requires attention: ${error.message}`); runtimeLog('error', `upgrade recovery requires attention: ${error.message}`) })
+    await app.plugins.recover().catch(error => logger.error(`plugin recovery requires attention: ${error.message}`))
     await app.instances.reconcileDesired().catch(error => { logger.error(`desired-state recovery: ${error.message}`); runtimeLog('error', `desired-state recovery: ${error.message}`) })
     ready = true
     scheduler = app.quota.run(abort.signal).catch(error => {
@@ -150,6 +154,7 @@ export async function start(config = readConfig()) {
     abort.abort()
     const closed = new Promise(resolve => server.close(() => resolve()))
     await scheduler
+    await app.plugins.pending
     await closed
     app.store.close()
   })()

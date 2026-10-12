@@ -30,6 +30,7 @@ export class Store {
     this.file = file
     this.db = new DatabaseSync(file)
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
+    this.db.exec('CREATE TABLE IF NOT EXISTS plugin_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS admins (
         username TEXT PRIMARY KEY,
@@ -319,6 +320,8 @@ export class Store {
     return { id: row.id, state: row.state, old_version: row.old_version || '', new_version: row.new_version || '', original_running: parse(row.original_running_json, []), original_desired: parse(row.original_desired_json, {}), instance_stages: parse(row.instance_stages_json, {}), message: row.message || '', updated_at: row.updated_at }
   }
   clearUpgradeState() { this.db.prepare('DELETE FROM upgrade_state WHERE id=?').run('singleton') }
+  savePluginJob(job) { this.db.prepare('INSERT INTO plugin_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(job.id, json(job)) }
+  listPluginJobs() { return this.db.prepare('SELECT payload FROM plugin_jobs ORDER BY rowid DESC LIMIT 100').all().map(row => parse(row.payload, {})) }
 
   createDeleteChallenge(challenge) {
     this.db.prepare('INSERT INTO delete_challenges(id,instance_id,revision,expires_at,used) VALUES(?,?,?,?,0)').run(challenge.id, challenge.instance_id, challenge.revision, challenge.expires_at)

@@ -9,6 +9,27 @@ import { InstanceService } from './services.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
 import { openSecretStore } from './security.js'
 import { relocateBackupConfig, backupMetadata } from './instance-backup.js'
+import { KeyService } from './keys.js'
+
+test('manual and automatic backups inherit managed Key bindings for later revocation', async () => {
+  const f = fixture()
+  try {
+    const source = await f.instances.create({ name: 'key-source', port: await port() })
+    const keys = new KeyService({ store: f.store, instances: f.instances, secrets: f.instances.secrets })
+    const key = await keys.create({ key: 'sk-backup-test12345' })
+    await keys.mutate(key.id, 'bind', { instances: [source.id] })
+    fs.appendFileSync(path.join(source.directory, 'config.yaml'), '\napi-keys:\n  - sk-backup-test12345\n')
+    const manual = await f.instances.backup(source.id, { name: 'manual', port: await port() })
+    const [automatic] = await f.instances.operations.run('global', () => f.instances.automaticBackups([source.id], 'test'))
+    const bindings = f.store.keyBindings(key.id)
+    assert.equal(bindings.length, 3)
+    for (const copy of [manual, automatic]) {
+      assert.equal(bindings.find(item => item.instance_id === copy.id).status, 'copied')
+      assert.match(fs.readFileSync(path.join(copy.directory, 'config.yaml'), 'utf8'), /sk-backup-test12345/)
+      assert.throws(() => f.store.assertNoKeyBindings(copy.id), /仍绑定/)
+    }
+  } finally { f.close() }
+})
 
 async function port() { return new Promise(resolve => { const server = net.createServer(); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 function fixture() {

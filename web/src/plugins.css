@@ -73,10 +73,3 @@
 
 .plugin-field .dropdown-picker { width: 100%; }
 .plugin-field .dropdown-trigger { height: 42px; border-radius: 8px; font-size: 13px; font-weight: 450; }
-.plugin-field .dropdown-trigger:disabled { opacity: .5; cursor: not-allowed; }
-.plugins-module .checkbox-label input[type="checkbox"] { appearance: none; display: grid; place-content: center; flex: 0 0 18px; padding: 0; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--bg-primary); cursor: pointer; }
-.plugins-module .checkbox-label input[type="checkbox"]:checked { border-color: var(--primary-active); background: var(--primary-active); }
-.plugins-module .checkbox-label input[type="checkbox"]::before { content: ""; width: 9px; height: 5px; border-left: 2px solid white; border-bottom: 2px solid white; transform: translateY(-1px) rotate(-45deg); visibility: hidden; }
-.plugins-module .checkbox-label input[type="checkbox"]:checked::before { visibility: visible; }
-.plugins-module .checkbox-label input[type="checkbox"]:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 3px; }
-.plugins-module .checkbox-label input[type="checkbox"]:disabled { opacity: .5; cursor: not-allowed; }

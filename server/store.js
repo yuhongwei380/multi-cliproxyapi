@@ -33,6 +33,17 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
     this.db.exec('CREATE TABLE IF NOT EXISTS plugin_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS managed_keys (
+        id TEXT PRIMARY KEY, note TEXT NOT NULL, ciphertext TEXT NOT NULL,
+        fingerprint TEXT NOT NULL UNIQUE, locked INTEGER NOT NULL DEFAULT 0,
+        deleting INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS key_bindings (
+        key_id TEXT NOT NULL REFERENCES managed_keys(id) ON DELETE CASCADE,
+        instance_id TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL,
+        PRIMARY KEY(key_id,instance_id)
+      );
+      CREATE INDEX IF NOT EXISTS key_bindings_instance_idx ON key_bindings(instance_id);
       CREATE TABLE IF NOT EXISTS admins (
         username TEXT PRIMARY KEY,
         password_hash TEXT NOT NULL
@@ -178,6 +189,20 @@ export class Store {
     this.db.prepare('INSERT INTO instance_limits VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET max_instances=excluded.max_instances,max_backups=excluded.max_backups').run(value.max_instances, value.max_backups)
   }
   init() {}
+  listManagedKeys() { return this.db.prepare('SELECT * FROM managed_keys ORDER BY created_at DESC, id').all().map(row => ({ ...row, locked: Boolean(row.locked), deleting: Boolean(row.deleting) })) }
+  getManagedKey(id) { const key = this.db.prepare('SELECT * FROM managed_keys WHERE id=?').get(id); if (!key) throw new NotFoundError('Key 不存在'); return { ...key, locked: Boolean(key.locked), deleting: Boolean(key.deleting) } }
+  createManagedKey(key) {
+    try { this.db.prepare('INSERT INTO managed_keys(id,note,ciphertext,fingerprint,locked,deleting,created_at) VALUES(?,?,?,?,?,?,?)').run(key.id,key.note,key.ciphertext,key.fingerprint,0,0,key.created_at) }
+    catch (error) { if (this.db.prepare('SELECT id FROM managed_keys WHERE fingerprint=?').get(key.fingerprint)) throw new ConflictError('Key 已存在'); throw error }
+  }
+  saveManagedKey(key) { this.db.prepare('UPDATE managed_keys SET note=?,locked=?,deleting=? WHERE id=?').run(key.note,key.locked ? 1 : 0,key.deleting ? 1 : 0,key.id) }
+  deleteManagedKey(id) { if (this.keyBindings(id).length) throw new ConflictError('Key 仍有未撤销绑定'); this.db.prepare('DELETE FROM managed_keys WHERE id=?').run(id) }
+  keyBindings(id) { return this.db.prepare('SELECT b.*,i.name AS instance_name FROM key_bindings b LEFT JOIN instances i ON i.id=b.instance_id WHERE key_id=? ORDER BY instance_id').all(id) }
+  bindKey(id, instanceId) { this.db.prepare("INSERT OR IGNORE INTO key_bindings(key_id,instance_id,status,message) VALUES(?,?,'pending','')").run(id,instanceId) }
+  saveKeyBinding(id, instanceId, status, message) { this.db.prepare('UPDATE key_bindings SET status=?,message=? WHERE key_id=? AND instance_id=?').run(status,message,id,instanceId) }
+  unbindKey(id, instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE key_id=? AND instance_id=?').run(id,instanceId) }
+  assertNoKeyBindings(instanceId) { if (this.db.prepare('SELECT 1 FROM key_bindings WHERE instance_id=? LIMIT 1').get(instanceId)) throw new ConflictError('实例仍绑定总控 Key，请先解绑并撤销') }
+  inheritKeyBindings(sourceId, targetId) { this.db.prepare("INSERT INTO key_bindings(key_id,instance_id,status,message) SELECT key_id,?,'copied','备份继承的 Key，启动后可验证或撤销' FROM key_bindings WHERE instance_id=?").run(targetId,sourceId) }
 
   getAdminHash(username) {
     const row = this.db.prepare('SELECT password_hash FROM admins WHERE username = ?').get(username)
@@ -231,6 +256,7 @@ export class Store {
     }
   }
   deleteInstance(id) {
+    this.assertNoKeyBindings(id)
     const result = this.db.prepare('DELETE FROM instances WHERE id = ?').run(id)
     if (Number(result.changes) !== 1) throw new NotFoundError('instance not found')
   }

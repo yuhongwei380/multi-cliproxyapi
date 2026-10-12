@@ -1,0 +1,16 @@
+.key-panel { padding: 24px; }
+.key-heading, .key-binding { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.key-heading h2, .key-heading h3 { margin: 8px 0; }
+.key-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.key-list { display: grid; gap: 16px; margin-top: 24px; }
+.key-card { border: 1px solid var(--line); border-radius: 16px; padding: 20px; background: var(--floating-surface); }
+.key-card code { overflow-wrap: anywhere; }
+.key-binding { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.key-binding .state-pill { margin-left: 12px; }
+.key-binding small { display: block; margin-top: 8px; }
+.key-error { color: var(--red, #ac3028); }
+.key-muted, .key-panel small { color: var(--muted); }
+.key-dialog { max-height: 85vh; overflow-y: auto; }
+.key-input { display: flex; gap: 8px; }
+.key-input input { min-width: 0; flex: 1; }
+.key-choices { display: grid; gap: 12px; max-height: 45vh; overflow-y: auto; }

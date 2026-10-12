@@ -57,6 +57,28 @@ export class HTTPClient {
       await sleep(delay, signal)
     }
   }
+  async readClientKeys() {
+    for (const requestPath of ['/v8/management/config/access/api-keys', '/v0/management/api-keys']) {
+      const result = await this.request('GET', requestPath)
+      if (result.status === 404) continue
+      if ([401, 403].includes(result.status)) throw authentication()
+      if (result.status < 200 || result.status >= 300) throw new CPAError('CPA key read failed')
+      let payload; try { payload = JSON.parse(result.body) } catch { throw new CPAError('Invalid CPA key response') }
+      // CPA 8.0.23 serializes an empty legacy key list as null, not [].
+      const rawKeys = requestPath.startsWith('/v8/') ? payload : payload?.['api-keys']
+      const keys = rawKeys === null ? [] : rawKeys
+      if (payload?.error) throw new CPAError('Invalid CPA key response')
+      if (!Array.isArray(keys) || keys.some(value => typeof value !== 'string')) throw new CPAError('Invalid CPA key list')
+      return { path: requestPath, keys }
+    }
+    throw unsupported('CPA client key API unavailable')
+  }
+  async writeClientKeys(requestPath, keys) {
+    if (!['/v8/management/config/access/api-keys', '/v0/management/api-keys'].includes(requestPath)) throw new CPAError('Invalid CPA key path')
+    // Ambiguous mutation failures must be reconciled by reading, never blindly retried.
+    const result = await this.singleRequest('PUT', requestPath, undefined, keys)
+    if (result.status < 200 || result.status >= 300) throw new CPAError('CPA key write failed')
+  }
   async health(signal) {
     const result = await this.request('GET', '/v0/management/config', signal)
     if (result.status === 401 || result.status === 403) throw authentication()

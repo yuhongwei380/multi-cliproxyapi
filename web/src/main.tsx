@@ -7,9 +7,10 @@ import './app.css'
 import './management-link.css'
 import { Dropdown, DropdownOption } from './Dropdown'
 import { PluginPanel } from './PluginPanel'
+import { KeyPanel } from './KeyPanel'
 
 type Modal = 'create' | 'backup' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
-type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'plugins' | 'runtime-logs' | 'audit-logs'
+type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'plugins' | 'keys' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
   refresh_interval_minutes: 360,
@@ -41,6 +42,7 @@ const MODULE_LABELS: Record<Module, string> = {
   quotas: '配额观察',
   versions: '版本管理',
   plugins: '插件管理',
+  keys: 'API Key 管理',
   'runtime-logs': '运行日志',
   'audit-logs': '审计日志'
 }
@@ -49,6 +51,7 @@ const LOGO_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif'
 const MAX_LOGO_BYTES = 256 * 1024
 
 function moduleFromHash(hash: string): Module {
+  if (hash === '#keys') return 'keys'
   if (hash === '#plugins') return 'plugins'
   const value = hash.replace(/^#/, '')
   if (value === 'instances' || value === 'quotas' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
@@ -295,6 +298,7 @@ function App() {
         <NavigationLink module="instances" activeModule={activeModule} onNavigate={navigate} icon="◈" ariaLabel="CLIProxyAPI 实例管理（实例运行轨）">CLIProxyAPI 实例管理<span className="nav-count">{instances.length}</span></NavigationLink>
         <NavigationLink module="versions" activeModule={activeModule} onNavigate={navigate} icon="↥">版本管理</NavigationLink>
         <NavigationLink module="plugins" activeModule={activeModule} onNavigate={navigate} icon="◇">插件管理</NavigationLink>
+        <NavigationLink module="keys" activeModule={activeModule} onNavigate={navigate} icon="⚿">API Key 管理</NavigationLink>
       </nav>
       <div className="sidebar-caption nav-section-caption">观测</div>
       <nav className="sidebar-nav">
@@ -329,6 +333,7 @@ function App() {
         {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
         {activeModule === 'plugins' && <PluginPanel />}
+        {activeModule === 'keys' && <KeyPanel />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
       <footer className="content-copyright" aria-label="版权信息"><span>{branding.copyright}</span><span className="content-version">v{APP_VERSION}</span></footer>

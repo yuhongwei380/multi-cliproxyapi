@@ -6,6 +6,7 @@
 .key-list:empty { display: none; }
 .key-card { padding: 12px 16px; }
 .key-card + .key-card { border-top: 1px solid var(--line); }
+.key-card.has-failure { background: var(--red-soft); box-shadow: inset 3px 0 var(--red); }
 .key-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; align-items: center; gap: 16px; }
 .key-identity { min-width: 0; }
 .key-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -16,12 +17,19 @@
 .key-expand { display: flex; align-items: center; gap: 6px; padding: 5px 0; border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
 .key-expand:hover { color: var(--primary-active); }
 .key-expand:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 3px; border-radius: 4px; }
+.key-expand-chevron { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.key-expand[aria-expanded="true"] .key-expand-chevron { transform: rotate(180deg); }
+.key-failure-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid var(--red); border-radius: 6px; background: var(--floating-surface); color: var(--red); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.key-failure-badge svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
 .key-row-actions { gap: 6px; }
 .key-row-actions .button, .key-binding .button { min-height: 30px; padding: 5px 9px; border-radius: 7px; font-size: 12px; }
 .key-binding-details { margin-top: 10px; }
 .key-binding { border-top: 1px dashed var(--line); padding: 8px 0; gap: 10px; font-size: 12px; }
 .key-binding .state-pill { margin-left: 12px; }
 .key-binding small { display: block; margin-top: 4px; }
+.key-binding.has-failure { padding: 10px; border: 1px solid var(--red); border-radius: 7px; margin-bottom: 6px; background: var(--floating-surface); }
+.key-binding.has-failure .state-pill { background: var(--red-soft); color: var(--red); }
+.key-binding.has-failure small { color: var(--red); font-size: 12px; font-weight: 600; }
 .key-error { color: var(--red, #ac3028); }
 .key-muted, .key-panel small { color: var(--muted); }
 .key-dialog { max-height: 85vh; overflow-y: auto; }

@@ -56,15 +56,14 @@ test('single unbind explicitly revokes and locked keys block destructive actions
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/unlock', { admin_password: 'password' }))
 })
 
-test('binding details stay collapsed until requested and failures remain visible', async () => {
+test('failed binding details open automatically and the failure badge survives collapse', async () => {
   setup([{ ...key, bindings: [{ ...key.bindings[0], status: 'failed', message: '实例连接失败' }] }])
   const toggle = await screen.findByRole('button', { name: /绑定实例/ })
-  expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  expect(toggle).toHaveTextContent('操作失败')
-  expect(screen.queryByRole('button', { name: '解绑并撤销' })).not.toBeInTheDocument()
-  fireEvent.click(toggle)
   expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  expect(toggle).toHaveTextContent('1 个失败')
   expect(screen.getByText('实例连接失败')).toBeVisible()
   fireEvent.click(toggle)
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(toggle).toHaveTextContent('1 个失败')
   expect(screen.queryByRole('button', { name: '解绑并撤销' })).not.toBeInTheDocument()
 })

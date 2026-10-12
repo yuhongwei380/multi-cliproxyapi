@@ -7,6 +7,7 @@ type Binding = { instance_id: string; instance_name: string; status: string; mes
 type KeyRecord = { id: string; note: string; masked_key: string; locked: boolean; deleting: boolean; bindings: Binding[] }
 type Dialog = { kind: 'create' | 'bind' | 'note' | 'unlock' | 'delete' | 'revoke'; key?: KeyRecord; binding?: Binding }
 const labels: Record<string, string> = { pending: '待下发', copied: '备份继承，待验证', deployed: '已下发', exists: '已存在', failed: '下发失败', revoking: '撤销中', 'revoke-failed': '撤销失败' }
+const failedBindings = (key: KeyRecord) => key.bindings.filter(binding => ['failed', 'revoke-failed'].includes(binding.status))
 
 export function KeyPanel() {
   const [items, setItems] = useState<KeyRecord[]>([])
@@ -26,7 +27,7 @@ export function KeyPanel() {
     setItems(keys.items ?? []); setInstances(children.items ?? [])
     const ids = new Set((keys.items ?? []).map((key: KeyRecord) => key.id))
     setRevealed(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => ids.has(id))))
-    setExpanded(previous => previous.filter(id => ids.has(id)))
+    setExpanded(previous => [...new Set([...previous.filter(id => ids.has(id)), ...(keys.items ?? []).filter((key: KeyRecord) => failedBindings(key).length > 0).map((key: KeyRecord) => key.id)])])
   }
   useEffect(() => { void load().catch(cause => setError(cause.message)) }, [])
   const open = (next: Dialog) => { setDialog(next); setNote(next.key?.note ?? ''); setValue(''); setPassword(''); setSelected([]); setError(''); setNotice('') }
@@ -68,9 +69,9 @@ export function KeyPanel() {
     <div className="key-heading"><div><div className="eyebrow">API KEYS</div><h2>API Key 管理</h2><p>每个 API Key 可绑定多个 CPA 实例，下发时保留现有 Key。删除前逐实例撤销。</p></div><div className="key-actions"><button className="button ghost" disabled={busy} onClick={() => void perform(load)}>刷新</button><button className="button primary" disabled={busy} onClick={() => open({ kind: 'create' })}>创建 Key</button></div></div>
     {error && <p role="alert" className="key-error">{error}</p>}{notice && <p role="status">{notice}</p>}
     {!items.length && <p>尚未创建 Key。</p>}
-    <div className="key-list">{items.map(key => <article className="key-card" key={key.id}>
+    <div className="key-list">{items.map(key => <article className={`key-card${failedBindings(key).length ? ' has-failure' : ''}`} key={key.id}>
       <div className="key-row"><div className="key-identity"><div className="key-name"><h3 title={key.note || '未命名 Key'}>{key.note || '未命名 Key'}</h3>{key.locked && <span className="state-pill">已锁定</span>}{key.deleting && <span className="state-pill">待完成删除</span>}</div><code title={revealed[key.id] || key.masked_key}>{revealed[key.id] || key.masked_key}</code></div>
-        <div className="key-binding-summary">{key.bindings.length ? <button type="button" className="key-expand" aria-expanded={expanded.includes(key.id)} aria-controls={`bindings-${key.id}`} title={key.bindings.map(binding => `${binding.instance_name || binding.instance_id}：${labels[binding.status] || binding.status}`).join('；')} onClick={() => setExpanded(previous => previous.includes(key.id) ? previous.filter(id => id !== key.id) : [...previous, key.id])}>绑定实例（{key.bindings.length}）<span aria-hidden="true">{expanded.includes(key.id) ? '⌃' : '⌄'}</span>{key.bindings.some(binding => ['failed', 'revoke-failed'].includes(binding.status)) && <span className="key-error">操作失败</span>}</button> : <span className="key-muted">未绑定实例</span>}</div>
+        <div className="key-binding-summary">{key.bindings.length ? <button type="button" className="key-expand" aria-expanded={expanded.includes(key.id)} aria-controls={`bindings-${key.id}`} title={key.bindings.map(binding => `${binding.instance_name || binding.instance_id}：${labels[binding.status] || binding.status}`).join('；')} onClick={() => setExpanded(previous => previous.includes(key.id) ? previous.filter(id => id !== key.id) : [...previous, key.id])}>绑定实例（{key.bindings.length}）{failedBindings(key).length > 0 && <span className="key-failure-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5v4M8 11h.01" /></svg>{failedBindings(key).length} 个失败</span>}<svg className="key-expand-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg></button> : <span className="key-muted">未绑定实例</span>}</div>
         <div className="key-actions key-row-actions">
         <button className="button ghost" disabled={busy} onClick={() => void perform(async () => { const response = await action(key, 'reveal'); await copyKey(response.key); setNotice('Key 已复制。') })}>复制</button>
         <button className="button ghost" disabled={busy} onClick={() => revealed[key.id] ? setRevealed(previous => { const next = { ...previous }; delete next[key.id]; return next }) : void perform(async () => { const response = await action(key, 'reveal'); setRevealed(previous => ({ ...previous, [key.id]: response.key })) })}>{revealed[key.id] ? '隐藏' : '显示'}</button>
@@ -80,7 +81,7 @@ export function KeyPanel() {
         <button className="button ghost" disabled={busy} onClick={() => key.locked ? open({ kind: 'unlock', key }) : void perform(async () => { await action(key, 'lock') })}>{key.locked ? '解锁' : '锁定'}</button>
         <button className="button danger" disabled={busy || key.locked} onClick={() => open({ kind: 'delete', key })}>{key.deleting ? '重试删除' : '删除'}</button>
       </div></div>
-      {key.bindings.length > 0 && <div id={`bindings-${key.id}`} className="key-binding-details" hidden={!expanded.includes(key.id)}>{key.bindings.map(binding => <div className="key-binding" key={binding.instance_id}><div><strong>{binding.instance_name || binding.instance_id}</strong><span className="state-pill">{labels[binding.status] || binding.status}</span>{binding.message && <small className="key-error">{binding.message}</small>}</div><button className="button ghost" disabled={busy || key.locked || key.deleting} onClick={() => open({ kind: 'revoke', key, binding })}>解绑并撤销</button></div>)}</div>}
+      {key.bindings.length > 0 && <div id={`bindings-${key.id}`} className="key-binding-details" hidden={!expanded.includes(key.id)}>{key.bindings.map(binding => <div className={`key-binding${['failed', 'revoke-failed'].includes(binding.status) ? ' has-failure' : ''}`} key={binding.instance_id}><div><strong>{binding.instance_name || binding.instance_id}</strong><span className="state-pill">{labels[binding.status] || binding.status}</span>{binding.message && <small className="key-error">{binding.message}</small>}</div><button className="button ghost" disabled={busy || key.locked || key.deleting} onClick={() => open({ kind: 'revoke', key, binding })}>解绑并撤销</button></div>)}</div>}
     </article>)}</div>
     {dialog && <dialog open className="modal-backdrop"><div className="dialog key-dialog"><button className="dialog-close" disabled={busy} aria-label="关闭" onClick={() => setDialog(null)}>×</button><h2>{{ create: '创建 Key', bind: '绑定 CPA 实例', note: '编辑备注', unlock: '解锁 Key', delete: '删除 Key', revoke: '解绑并撤销' }[dialog.kind]}</h2>
       <form onSubmit={event => { event.preventDefault(); void submit() }}>

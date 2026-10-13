@@ -22,6 +22,18 @@ test('creates a server generated key with a persisted note, or a securely genera
   expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toMatch(/^sk-[A-Za-z0-9]{48}$/)
 })
 
+test('revealing a key updates only the row without reloading the module', async () => {
+  setup(); vi.mocked(api.post).mockResolvedValue({ key: 'sk-test-secret' })
+  await screen.findByRole('button', { name: '显示' })
+  expect(api.get).toHaveBeenCalledTimes(2)
+  fireEvent.click(screen.getByRole('button', { name: '显示' }))
+  expect(await screen.findByText('sk-test-secret')).toBeInTheDocument()
+  expect(api.get).toHaveBeenCalledTimes(2)
+  fireEvent.click(screen.getByRole('button', { name: '隐藏' }))
+  expect(screen.getByText('sk-…1234')).toBeInTheDocument()
+  expect(api.get).toHaveBeenCalledTimes(2)
+})
+
 test('binding selects only new children and does not implicitly deploy', async () => {
   setup(); fireEvent.click(await screen.findByRole('button', { name: '绑定' }))
   const dialog = within(screen.getByRole('dialog'))

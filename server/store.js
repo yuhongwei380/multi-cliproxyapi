@@ -76,6 +76,11 @@ export class Store {
         attempted_at TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (instance_id, account_id)
       );
+      CREATE TABLE IF NOT EXISTS quota_notifications (
+        notification_key TEXT PRIMARY KEY,
+        sent_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS quota_notifications_sent_idx ON quota_notifications(sent_at);
       CREATE TABLE IF NOT EXISTS quota_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         refresh_interval_minutes INTEGER NOT NULL DEFAULT 360,
@@ -273,6 +278,8 @@ export class Store {
     }))
   }
   deleteQuota(instanceId, accountId) { this.db.prepare('DELETE FROM quotas WHERE instance_id=? AND account_id=?').run(instanceId, accountId) }
+  getQuotaNotification(key) { return this.db.prepare('SELECT sent_at FROM quota_notifications WHERE notification_key=?').get(key)?.sent_at || '' }
+  saveQuotaNotification(key, sentAt) { this.db.prepare('INSERT INTO quota_notifications(notification_key,sent_at) VALUES(?,?) ON CONFLICT(notification_key) DO UPDATE SET sent_at=excluded.sent_at').run(key, sentAt) }
 
   getQuotaSettings({ includeSecretCiphertext = false } = {}) {
     const row = this.db.prepare('SELECT refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext FROM quota_settings WHERE id=1').get()

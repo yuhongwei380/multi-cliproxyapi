@@ -34,6 +34,19 @@ test('revealing a key updates only the row without reloading the module', async 
   expect(api.get).toHaveBeenCalledTimes(2)
 })
 
+test('revealing a key does not flash or disable unrelated key actions', async () => {
+  setup()
+  let resolveReveal!: (value: { key: string }) => void
+  vi.mocked(api.post).mockImplementation(() => new Promise(resolve => { resolveReveal = resolve }) as any)
+  const show = await screen.findByRole('button', { name: '显示' })
+  fireEvent.click(show)
+  expect(show).toBeDisabled()
+  expect(screen.getByRole('button', { name: '创建 Key' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '删除' })).toBeEnabled()
+  resolveReveal({ key: 'sk-test-secret' })
+  expect(await screen.findByText('sk-test-secret')).toBeInTheDocument()
+})
+
 test('searches API key notes and shows only matching rows', async () => {
   setup([{ ...key, note: '测试环境' }, { ...key, id: 'production', note: '生产环境', bindings: [] }])
   const input = await screen.findByRole('textbox', { name: '搜索 API Key 备注' })

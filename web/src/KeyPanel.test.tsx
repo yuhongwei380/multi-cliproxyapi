@@ -102,6 +102,7 @@ test('instance filters include multi-bound keys and allow returning to all or un
   expect(screen.queryByRole('heading', { name: '测试' })).not.toBeInTheDocument()
   fireEvent.click(filters.getByRole('button', { name: '未绑定1' }))
   expect(screen.getByRole('heading', { name: '未分配 Key' })).toBeInTheDocument()
+  expect(screen.getByText('未绑定', { selector: '.key-unbound' })).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: '多实例 Key' })).not.toBeInTheDocument()
   fireEvent.click(filters.getByRole('button', { name: '全部4' }))
   expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(4)

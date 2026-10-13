@@ -34,6 +34,21 @@ test('revealing a key updates only the row without reloading the module', async 
   expect(api.get).toHaveBeenCalledTimes(2)
 })
 
+test('searches API key notes and shows only matching rows', async () => {
+  setup([{ ...key, note: '测试环境' }, { ...key, id: 'production', note: '生产环境', bindings: [] }])
+  const input = await screen.findByRole('textbox', { name: '搜索 API Key 备注' })
+  fireEvent.change(input, { target: { value: '测试' } })
+  expect(screen.getByRole('heading', { name: '测试环境' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '生产环境' })).not.toBeInTheDocument()
+  expect(screen.getByText('显示 1 / 2 个 Key')).toBeInTheDocument()
+  fireEvent.change(input, { target: { value: '生产' } })
+  expect(screen.getByRole('heading', { name: '生产环境' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '测试环境' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '清除' }))
+  expect(screen.getByRole('heading', { name: '测试环境' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '生产环境' })).toBeInTheDocument()
+})
+
 test('binding selects only new children and does not implicitly deploy', async () => {
   setup(); fireEvent.click(await screen.findByRole('button', { name: '绑定' }))
   const dialog = within(screen.getByRole('dialog'))

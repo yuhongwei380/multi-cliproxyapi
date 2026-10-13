@@ -2,6 +2,12 @@
 .key-heading, .key-binding { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .key-heading h2 { margin: 8px 0; }
 .key-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.key-search-bar { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.key-search-label { display: grid; gap: 6px; min-width: min(360px, 100%); color: var(--muted); font-size: 12px; font-weight: 650; }
+.key-search-label input { width: min(360px, 60vw); min-width: 220px; height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--floating-surface); color: var(--ink); font-size: 13px; }
+.key-search-label input::placeholder { color: var(--quiet); }
+.key-search-label input:focus { border-color: var(--primary-active); box-shadow: 0 0 0 3px rgb(73 91 183 / 12%); }
+.key-search-clear { min-height: 30px; padding: 5px 10px; font-size: 12px; }
 .key-filter-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
 .key-filters { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .key-filter { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--floating-surface); color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
@@ -53,4 +59,4 @@
 .key-input input { min-width: 0; flex: 1; }
 .key-choices { display: grid; gap: 12px; max-height: 45vh; overflow-y: auto; }
 @media (max-width: 1200px) { .key-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; } .key-row-actions { grid-column: 1 / -1; } }
-@media (max-width: 600px) { .key-panel { padding: 16px; } .key-card { padding: 10px 12px; } .key-name { flex-wrap: wrap; gap: 4px 8px; } .key-name h3 { max-width: 100%; } .key-expand { flex-wrap: wrap; } .key-binding-summary { max-width: 120px; } }
+@media (max-width: 600px) { .key-panel { padding: 16px; } .key-search-bar { align-items: stretch; } .key-search-label { width: 100%; } .key-search-label input { width: 100%; min-width: 0; } .key-card { padding: 10px 12px; } .key-name { flex-wrap: wrap; gap: 4px 8px; } .key-name h3 { max-width: 100%; } .key-expand { flex-wrap: wrap; } .key-binding-summary { max-width: 120px; } }

@@ -38,7 +38,10 @@
 .key-row-actions .button, .key-binding .button { min-height: 30px; padding: 5px 9px; border-radius: 7px; font-size: 12px; }
 .key-binding-details { margin-top: 10px; }
 .key-binding { border-top: 1px dashed var(--line); padding: 8px 0; gap: 10px; font-size: 12px; }
-.key-binding .state-pill { margin-left: 12px; }
+.key-binding-info { min-width: 0; }
+.key-binding-name { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.key-binding-name .state-pill { margin-left: 0; }
+.key-binding-port { padding: 2px 6px; border-radius: 5px; background: var(--bg-secondary); color: var(--muted); font-size: 11px; white-space: nowrap; }
 .key-binding small { display: block; margin-top: 4px; }
 .key-binding.has-failure { padding: 10px; border: 1px solid var(--red); border-radius: 7px; margin-bottom: 6px; background: var(--floating-surface); }
 .key-binding.has-failure .state-pill { background: var(--red-soft); color: var(--red); }

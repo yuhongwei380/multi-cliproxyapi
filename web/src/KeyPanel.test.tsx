@@ -5,9 +5,9 @@ import { api } from './api'
 vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
-const key = { id: 'key-one', note: '测试', masked_key: 'sk-…1234', locked: false, deleting: false, bindings: [{ instance_id: 'one', instance_name: 'CPA 一', status: 'deployed', message: '' }] }
+const key = { id: 'key-one', note: '测试', masked_key: 'sk-…1234', locked: false, deleting: false, bindings: [{ instance_id: 'one', instance_name: 'CPA 一', instance_port: 8317, status: 'deployed', message: '' }] }
 function setup(items = [key]) {
-  vi.mocked(api.get).mockImplementation(async path => path === '/keys' ? { items } : { items: [{ id: 'one', name: 'CPA 一', status: { state: 'running' } }, { id: 'two', name: 'CPA 二', status: { state: 'stopped' }, locked: true }] })
+  vi.mocked(api.get).mockImplementation(async path => path === '/keys' ? { items } : { items: [{ id: 'one', name: 'CPA 一', port: 8317, status: { state: 'running' } }, { id: 'two', name: 'CPA 二', port: 8318, status: { state: 'stopped' }, locked: true }] })
   vi.mocked(api.post).mockResolvedValue({})
   render(<KeyPanel />)
 }
@@ -34,7 +34,7 @@ test('binding selects only new children and does not implicitly deploy', async (
 test('delete confirms affected instances and retains partial failure for retry', async () => {
   setup(); vi.mocked(api.post).mockResolvedValue({ deleted: false, results: [{ instance_id: 'one', status: 'failed' }] })
   fireEvent.click(await screen.findByRole('button', { name: '删除' }))
-  expect(within(screen.getByRole('dialog')).getByText('CPA 一')).toBeInTheDocument()
+  expect(within(screen.getByRole('dialog')).getByText(/CPA 一/)).toBeInTheDocument()
   expect(api.post).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: '撤销并删除' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/delete', {}))
@@ -43,7 +43,7 @@ test('delete confirms affected instances and retains partial failure for retry',
 })
 
 test('single unbind explicitly revokes and locked keys block destructive actions', async () => {
-  setup(); fireEvent.click(await screen.findByRole('button', { name: /绑定实例/ })); fireEvent.click(screen.getByRole('button', { name: '解绑并撤销' }))
+  setup(); fireEvent.click(await screen.findByRole('button', { name: /绑定实例/ })); expect(screen.getByText('端口 8317')).toBeInTheDocument(); fireEvent.click(screen.getByRole('button', { name: '解绑并撤销' }))
   fireEvent.click(screen.getByRole('button', { name: '确认撤销' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/revoke', { instance_id: 'one' }))
   cleanup(); setup([{ ...key, locked: true }])
@@ -69,7 +69,7 @@ test('failed binding details open automatically and the failure badge survives c
 })
 
 test('instance filters include multi-bound keys and allow returning to all or unbound', async () => {
-  const second = { instance_id: 'two', instance_name: 'CPA 二', status: 'pending', message: '' }
+  const second = { instance_id: 'two', instance_name: 'CPA 二', instance_port: 8318, status: 'pending', message: '' }
   setup([
     key,
     { ...key, id: 'multi', note: '多实例 Key', bindings: [...key.bindings, second] },

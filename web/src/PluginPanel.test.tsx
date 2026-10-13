@@ -38,6 +38,19 @@ test('blocked deployment prevents another rollout and offers rollback recovery',
   fireEvent.click(screen.getByRole('button', { name: '重试回滚' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/recover'))
 })
+test('deployment history can be collapsed as a whole', async () => {
+  vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [{ id: 'job', plugin: 'cpa-key-billing', version: '1.3.20', state: 'completed', message: '', results: [] }] } : { catalog: [], instances: [] })
+  render(<PluginPanel />)
+  const toggle = await screen.findByRole('button', { name: '折叠' })
+  const content = document.getElementById('plugin-history-content')
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  expect(content).not.toHaveAttribute('hidden')
+  fireEvent.click(toggle)
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(content).toHaveAttribute('hidden')
+  fireEvent.click(screen.getByRole('button', { name: '展开' }))
+  expect(screen.getByRole('button', { name: '折叠' })).toHaveAttribute('aria-expanded', 'true')
+})
 test('record deletion requires confirmation and refreshes history after success', async () => {
   let items = [{ id: 'done', plugin: 'cpa-key-billing', version: '1.3.20', state: 'completed', message: '', results: [], created_at: '2026-10-12T03:00:00Z' }]
   vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items } : { catalog: [], instances: [] })

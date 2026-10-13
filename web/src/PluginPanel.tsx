@@ -24,6 +24,7 @@ export function PluginPanel() {
   const [error, setError] = useState('')
   const [loadError, setLoadError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Job | null>(null)
+  const [historyExpanded, setHistoryExpanded] = useState(true)
   const active = jobs.some(job => ['queued', 'running', 'blocked'].includes(job.state))
   async function refresh() {
     try {
@@ -79,13 +80,15 @@ export function PluginPanel() {
       })}</tbody></table></div>}
       <div className="plugin-deploy-footer"><div><p role="status">将部署 {eligible.length} 个实例，跳过 {selected.length - eligible.length} 个已锁定实例。</p><small>首个实例：{eligible[0]?.name || '—'}；首个失败会回滚并停止后续部署。</small></div><button className="button primary" disabled={loading || busy || active || !eligible.length}>{busy ? '处理中…' : '统一安装 / 升级'}</button></div>
     </form>
-    <section className="plugin-card plugin-history" aria-label="部署记录"><div className="plugin-card-heading"><div><h2>部署记录</h2><p>查看每次部署结果，已结束的记录可删除。</p></div><span className="plugin-badge neutral">{jobs.length} 条记录</span></div>
+    <section className="plugin-card plugin-history" aria-label="部署记录"><div className="plugin-card-heading"><div><h2>部署记录</h2><p>查看每次部署结果，已结束的记录可删除。</p></div><div className="plugin-history-actions"><span className="plugin-badge neutral">{jobs.length} 条记录</span><button type="button" className="button ghost plugin-history-toggle" aria-expanded={historyExpanded} aria-controls="plugin-history-content" onClick={() => setHistoryExpanded(expanded => !expanded)}>{historyExpanded ? '折叠' : '展开'}</button></div></div>
+      <div id="plugin-history-content" hidden={!historyExpanded}>
       {!jobs.length ? <div className="plugin-empty">{loading ? '正在读取记录…' : '暂无部署记录'}</div> : <div className="plugin-job-list">{jobs.map(job => <article className="plugin-job" key={job.id}>
         <div className="plugin-job-heading"><div><strong>{inventory.catalog.find(item => item.id === job.plugin)?.name || job.plugin}</strong><span className="plugin-version">{job.version || 'latest'}</span><span className={`plugin-badge ${tone(job.state)}`}>{labels[job.state] || job.state}</span></div><button className="button ghost plugin-record-delete" type="button" disabled={busy || !finished(job)} title={!finished(job) ? '运行中或待恢复的记录无法删除' : '删除此部署记录'} aria-label={`删除部署记录 ${job.id}`} onClick={() => { setError(''); setDeleteTarget(job) }}>删除记录</button></div>
         <div className="plugin-job-meta"><time dateTime={job.created_at}>{dateLabel(job.created_at)}</time><span>{job.results.length} 个实例</span><span>{job.results.filter(result => ['verified', 'installed-disabled', 'installed-pending-verification'].includes(result.state)).length} 个已安装</span>{job.results.some(result => result.state === 'rolled-back') && <span>包含回滚</span>}</div>
         <details open={job.state === 'blocked' || undefined}><summary>实例结果与详情</summary>{job.message && <p className="plugin-job-message">{job.message}</p>}<ul className="plugin-job-results">{job.results.map(result => <li key={result.id}><span>{instanceName(result.id)}</span><span className={`plugin-badge ${tone(result.state)}`}>{labels[result.state] || result.state}</span>{result.backup_id && <p>备份实例：{result.backup_name || result.backup_id} · 端口 {result.backup_port} · 已停止并锁定</p>}{result.message && <p>{result.message}</p>}</li>)}</ul></details>
       </article>)}</div>}
       <p className="plugin-history-note">回滚恢复插件文件和 CPA 配置，不会逆转插件自身的数据迁移。</p>
+      </div>
     </section>
     {deleteTarget && <dialog open className="modal-backdrop" aria-labelledby="plugin-delete-title"><div className="dialog plugin-delete-dialog"><button className="dialog-close" disabled={busy} aria-label="关闭删除记录对话框" onClick={() => setDeleteTarget(null)}>×</button><div className="eyebrow">DEPLOYMENT HISTORY</div><h2 id="plugin-delete-title">删除部署记录？</h2><p>{deleteTarget.plugin} · {deleteTarget.version || 'latest'} · {dateLabel(deleteTarget.created_at)}</p><p>删除后无法恢复此记录。已安装的插件、实例配置和备份会保留。</p>{error && <p className="settings-inline-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="button ghost" disabled={busy} onClick={() => setDeleteTarget(null)}>取消</button><button className="button danger" disabled={busy} onClick={() => void deleteRecord()}>{busy ? '删除中…' : '确认删除记录'}</button></div></div></dialog>}
   </section>

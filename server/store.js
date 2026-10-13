@@ -197,7 +197,7 @@ export class Store {
   }
   saveManagedKey(key) { this.db.prepare('UPDATE managed_keys SET note=?,locked=?,deleting=? WHERE id=?').run(key.note,key.locked ? 1 : 0,key.deleting ? 1 : 0,key.id) }
   deleteManagedKey(id) { if (this.keyBindings(id).length) throw new ConflictError('Key 仍有未撤销绑定'); this.db.prepare('DELETE FROM managed_keys WHERE id=?').run(id) }
-  keyBindings(id) { return this.db.prepare('SELECT b.*,i.name AS instance_name FROM key_bindings b LEFT JOIN instances i ON i.id=b.instance_id WHERE key_id=? ORDER BY instance_id').all(id) }
+  keyBindings(id) { return this.db.prepare('SELECT b.*,i.name AS instance_name,i.port AS instance_port FROM key_bindings b LEFT JOIN instances i ON i.id=b.instance_id WHERE key_id=? ORDER BY instance_id').all(id) }
   bindKey(id, instanceId) { this.db.prepare("INSERT OR IGNORE INTO key_bindings(key_id,instance_id,status,message) VALUES(?,?,'pending','')").run(id,instanceId) }
   saveKeyBinding(id, instanceId, status, message) { this.db.prepare('UPDATE key_bindings SET status=?,message=? WHERE key_id=? AND instance_id=?').run(status,message,id,instanceId) }
   unbindKey(id, instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE key_id=? AND instance_id=?').run(id,instanceId) }

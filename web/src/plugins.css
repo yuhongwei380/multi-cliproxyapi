@@ -2,6 +2,8 @@
 .plugins-module .module-heading { margin-bottom: 6px; }
 .plugin-card { min-width: 0; padding: 26px 28px; border: 1px solid var(--line); border-radius: 15px; background: var(--floating-surface); }
 .plugin-card-heading, .plugin-target-heading, .plugin-deploy-footer, .plugin-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.plugin-history-actions { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; }
+.plugin-history-toggle { min-height: 32px; padding: 6px 10px; font-size: 12px; }
 .plugin-card-heading h2 { margin: 0 0 6px; font-size: 22px; font-weight: 750; letter-spacing: -.045em; }
 .plugin-card-heading p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .plugin-badge { display: inline-flex; flex: 0 0 auto; align-items: center; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; font-size: 11px; line-height: 1.5; white-space: nowrap; }

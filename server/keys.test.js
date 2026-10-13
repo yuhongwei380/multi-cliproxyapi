@@ -69,6 +69,7 @@ test('creation encrypts secrets, masks listings, rejects duplicates and persists
 test('bindings do not deploy; repeated deploy is idempotent and preserves existing keys', async t => {
   const f = fixture(t); const key = await f.service.create({ key: secret })
   await f.service.mutate(key.id, 'bind', { instances: ['one', 'two', 'one'] })
+  assert.equal(f.service.list()[0].bindings.find(item => item.instance_id === 'one').instance_port, 18000)
   assert.equal(f.writes.length, 0)
   assert.throws(() => f.store.deleteManagedKey(key.id), /未撤销绑定/)
   assert.throws(() => f.store.assertNoKeyBindings('one'), /仍绑定/)

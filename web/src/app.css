@@ -84,6 +84,7 @@ a { color: inherit; }
 .breadcrumb b { color: var(--line-strong); font-weight: 500; }
 .breadcrumb strong { color: var(--ink); font-weight: 650; }
 .topbar-actions, .mast-actions { display: flex; align-items: center; gap: 12px; }
+.upstream-repository { display: inline-flex; align-items: center; white-space: nowrap; text-decoration: none; }
 .user-chip { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
 .dashboard-content { width: min(1400px, 100%); margin: 0 auto; padding: 34px 38px 72px; }

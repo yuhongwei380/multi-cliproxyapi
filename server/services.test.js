@@ -222,6 +222,19 @@ test('quota settings configure the refresh period and notify on low remaining qu
   const f = fixture(); const created = await f.instances.create({ name: 'quota-alert', port: await port() }); await f.instances.start(created.id); const client = new StaticClient({ accounts: [{ id: 'a', provider: 'demo' }], quotas: { a: { values: [{ name: '6h', remaining: 1, total: 10 }] } } }); const notifications = []; const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, notifier: { notify: async (settings, message) => { notifications.push({ settings, message }) } } }); assert.equal(quota.getSettings().refresh_interval_minutes, 360); const saved = quota.updateSettings({ refresh_interval_minutes: 90, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=test', alert_threshold_percent: 20 }); assert.equal(saved.refresh_interval_minutes, 90); assert.equal(saved.webhook_url, ''); assert.equal(saved.webhook_url_configured, true); await quota.refreshInstance(created.id); assert.equal(notifications.length, 1); assert.match(notifications[0].message, /10\.0%/); assert.equal(notifications[0].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=test'); assert.throws(() => quota.updateSettings({ webhook_enabled: true, webhook_url: '' }), /webhook_url is required/); assert.throws(() => quota.updateSettings({ webhook_url: 'http://127.0.0.1/internal' }), /DingTalk HTTPS robot URL/); assert.throws(() => quota.updateSettings({ webhook_url: 'https://example.com/robot/send?access_token=test' }), /DingTalk HTTPS robot URL/); f.store.close()
 })
 
+test('duplicate low quota notifications wait five hours before sending again', async () => {
+  const f = fixture(); let now = new Date('2026-10-13T00:00:00.000Z')
+  try {
+    const created = await f.instances.create({ name: 'quota-alert-cooldown', port: await port() }); await f.instances.start(created.id)
+    const client = new StaticClient({ accounts: [{ id: 'a', provider: 'demo' }], quotas: { a: { values: [{ name: '5h', remaining: 0, total: 10 }] } } }); const notifications = []
+    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, clock: () => now, notifier: { notify: async (settings, message) => { notifications.push({ settings, message }) } } })
+    quota.updateSettings({ webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=test', alert_threshold_percent: 20 })
+    await quota.refreshInstance(created.id); await quota.refreshInstance(created.id); assert.equal(notifications.length, 1)
+    now = new Date(now.getTime() + 5 * 60 * 60 * 1000 - 1); await quota.refreshInstance(created.id); assert.equal(notifications.length, 1)
+    now = new Date(now.getTime() + 1); await quota.refreshInstance(created.id); assert.equal(notifications.length, 2); assert.match(notifications[1].message, /5h：剩余 0\.0%/)
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('quota webhook signing secrets are encrypted and never returned by settings', () => {
   const f = fixture(); const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clients: async () => ({ listAccounts: async () => [] }) })
   assert.throws(() => quota.updateSettings({ webhook_signing_enabled: true }), /webhook_secret is required/)

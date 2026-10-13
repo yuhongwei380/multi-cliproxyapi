@@ -72,6 +72,19 @@ test('uses an optional child password and provides a show/hide control', async (
   expect(screen.getByRole('button', { name: '隐藏密码' })).toBeInTheDocument()
 })
 
+test('provides a link to the upstream CPA repository', async () => {
+  vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+  render(<App />)
+  const link = await screen.findByRole('link', { name: '上游CPA仓库' })
+  expect(link).toHaveAttribute('href', 'https://github.com/router-for-me/CLIProxyAPI')
+  expect(link).toHaveAttribute('target', '_blank')
+  expect(link).toHaveAttribute('rel', 'noreferrer')
+})
+
 test('backup dialog requires a new port, submits a clone and retains input on failure', async () => {
   const source = { id: 'cpa_1', name: 'one', port: 8317, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) => {

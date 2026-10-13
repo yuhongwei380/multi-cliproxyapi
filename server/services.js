@@ -507,8 +507,14 @@ function quotaPercent(value) {
   return Math.max(0, Math.min(100, remaining / total * 100))
 }
 
+export const QUOTA_NOTIFICATION_COOLDOWN_MS = 5 * 60 * 60 * 1000
+
+function quotaNotificationKey(instanceId, snapshot, value) {
+  return JSON.stringify([instanceId, snapshot.account_id || '', snapshot.provider || '', value?.name || '默认窗口'])
+}
+
 export class QuotaService {
-  constructor({ store, instances, clients, secrets = null, clock = () => new Date(), refreshIntervalMs = 6 * 60 * 60 * 1000, maxConcurrent = 3, notifier = null } = {}) { this.store = store; this.instances = instances; this.clients = clients; this.secrets = secrets; this.clock = clock; this.refreshIntervalMs = refreshIntervalMs; this.maxConcurrent = maxConcurrent; this.notifier = notifier || new DingTalkNotifier(); this.running = new Set(); this.migrateLegacyWebhookUrl() }
+  constructor({ store, instances, clients, secrets = null, clock = () => new Date(), refreshIntervalMs = 6 * 60 * 60 * 1000, maxConcurrent = 3, notifier = null } = {}) { this.store = store; this.instances = instances; this.clients = clients; this.secrets = secrets; this.clock = clock; this.refreshIntervalMs = refreshIntervalMs; this.maxConcurrent = maxConcurrent; this.notifier = notifier || new DingTalkNotifier(); this.running = new Set(); this.notificationSentAt = new Map(); this.migrateLegacyWebhookUrl() }
   getSettings() {
     const settings = typeof this.store.getQuotaSettings === 'function' ? this.store.getQuotaSettings() : { refresh_interval_minutes: Math.max(1, Math.round(this.refreshIntervalMs / 60000)) }
     const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url
@@ -562,6 +568,15 @@ export class QuotaService {
     return saved
   }
   intervalMs() { const settings = this.getSettings(); return Math.max(60000, Number(settings.refresh_interval_minutes) * 60000) }
+  notificationCoolingDown(key, now) {
+    const sentAt = typeof this.store.getQuotaNotification === 'function' ? this.store.getQuotaNotification(key) : this.notificationSentAt.get(key) || ''
+    const timestamp = Date.parse(sentAt)
+    return Number.isFinite(timestamp) && now - timestamp < QUOTA_NOTIFICATION_COOLDOWN_MS
+  }
+  rememberNotification(key, sentAt) {
+    if (typeof this.store.saveQuotaNotification === 'function') this.store.saveQuotaNotification(key, sentAt)
+    else this.notificationSentAt.set(key, sentAt)
+  }
   async refreshInstance(instanceId, signal) {
     if (this.running.has(instanceId)) throw new Error('quota refresh already in progress'); this.running.add(instanceId)
     try {
@@ -576,11 +591,15 @@ export class QuotaService {
         try { if (!this.clients) throw new Error('CPA client factory unavailable'); client = await this.clients(instance); const accounts = await client.listAccounts(signal); const previous = this.store.listQuotas(instanceId); const previousBy = new Map(previous.map(item => [item.account_id, item])); if (!accounts.length) { this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'empty', message: 'no OAuth accounts configured', attempted_at: attempt, collected_at: attempt }) }
           const results = []; let index = 0; const worker = async () => { while (index < accounts.length) { const account = accounts[index++]; let snapshot; try { snapshot = await client.fetchQuota(account, signal); snapshot = { ...snapshot, instance_id: instanceId, account_id: account.id, provider: account.provider || '', attempted_at: attempt, status: 'ok', collected_at: attempt } } catch (error) { const old = previousBy.get(account.id); snapshot = { instance_id: instanceId, account_id: account.id, provider: account.provider || '', values: old?.values || [], collected_at: old?.collected_at || '', attempted_at: attempt, status: error.code === 'ERR_UNSUPPORTED' ? 'unsupported' : 'failed', message: error.code === 'ERR_UNSUPPORTED' ? 'quota endpoint is not supported for this account' : error.message } } results.push(snapshot) } }
           await Promise.all(Array.from({ length: Math.max(1, Math.min(this.maxConcurrent, accounts.length || 1)) }, worker)); for (const snapshot of results) this.store.saveQuota(snapshot)
-          const settings = this.settingsWithSecret()
+          const settings = this.settingsWithSecret(); const alertAt = Date.parse(attempt)
           const low = results.filter(snapshot => snapshot.status === 'ok').flatMap(snapshot => (snapshot.values || []).map(value => ({ snapshot, value, percent: quotaPercent(value) })).filter(item => item.percent !== null && item.percent < settings.alert_threshold_percent))
-          if (low.length && this.notifier && settings.webhook_enabled && settings.webhook_url) {
-            const lines = low.map(item => `${instance.name} / ${item.snapshot.provider || 'OAuth'} / ${item.value.name || '默认窗口'}：剩余 ${item.percent.toFixed(1)}%`)
-            try { await this.notifier.notify(settings, `CLIProxyAPI 配额告警\n${lines.join('\n')}`) } catch {
+          const pendingNotifications = low.map(item => ({ ...item, key: quotaNotificationKey(instanceId, item.snapshot, item.value) })).filter(item => !this.notificationCoolingDown(item.key, alertAt))
+          if (pendingNotifications.length && this.notifier && settings.webhook_enabled && settings.webhook_url) {
+            const lines = pendingNotifications.map(item => `${instance.name} / ${item.snapshot.provider || 'OAuth'} / ${item.value.name || '默认窗口'}：剩余 ${item.percent.toFixed(1)}%`)
+            try {
+              const delivered = await this.notifier.notify(settings, `CLIProxyAPI 配额告警\n${lines.join('\n')}`)
+              if (delivered !== false) for (const item of pendingNotifications) this.rememberNotification(item.key, attempt)
+            } catch {
               // Transport errors may contain the full signed webhook URL.
               this.store.appendRuntimeLog?.({ level: 'error', source: 'quota', instance_id: instanceId, message: 'DingTalk quota notification failed; check webhook settings and network access', context: {} })
             }

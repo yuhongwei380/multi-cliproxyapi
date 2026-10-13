@@ -59,6 +59,7 @@ test('single unbind explicitly revokes and locked keys block destructive actions
   fireEvent.click(screen.getByRole('button', { name: '确认撤销' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/revoke', { instance_id: 'one' }))
   cleanup(); setup([{ ...key, locked: true }])
+  expect(await screen.findByText('CPA已锁定')).toBeInTheDocument()
   expect(await screen.findByRole('button', { name: '删除' })).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: /绑定实例/ }))
   expect(screen.getByRole('button', { name: '解绑并撤销' })).toBeDisabled()

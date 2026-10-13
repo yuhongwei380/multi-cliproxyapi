@@ -7,7 +7,7 @@ import crypto from 'node:crypto'
 import { Store } from './store.js'
 import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
-import { AuthService, InstanceService, DeleteService, QuotaService, DingTalkNotifier } from './services.js'
+import { AuthService, InstanceService, DeleteService, QuotaService, DingTalkNotifier, isQuotaNotificationWorkTime } from './services.js'
 import { StaticClient } from './cpa.js'
 import { instanceBinaryPath } from './instance-binary.js'
 
@@ -219,11 +219,36 @@ test('quota scheduler retries a previously failed OAuth discovery', async () => 
 })
 
 test('quota settings configure the refresh period and notify on low remaining quota', async () => {
-  const f = fixture(); const created = await f.instances.create({ name: 'quota-alert', port: await port() }); await f.instances.start(created.id); const client = new StaticClient({ accounts: [{ id: 'a', provider: 'demo' }], quotas: { a: { values: [{ name: '6h', remaining: 1, total: 10 }] } } }); const notifications = []; const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, notifier: { notify: async (settings, message) => { notifications.push({ settings, message }) } } }); assert.equal(quota.getSettings().refresh_interval_minutes, 360); const saved = quota.updateSettings({ refresh_interval_minutes: 90, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=test', alert_threshold_percent: 20 }); assert.equal(saved.refresh_interval_minutes, 90); assert.equal(saved.webhook_url, ''); assert.equal(saved.webhook_url_configured, true); await quota.refreshInstance(created.id); assert.equal(notifications.length, 1); assert.match(notifications[0].message, /10\.0%/); assert.equal(notifications[0].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=test'); assert.throws(() => quota.updateSettings({ webhook_enabled: true, webhook_url: '' }), /webhook_url is required/); assert.throws(() => quota.updateSettings({ webhook_url: 'http://127.0.0.1/internal' }), /DingTalk HTTPS robot URL/); assert.throws(() => quota.updateSettings({ webhook_url: 'https://example.com/robot/send?access_token=test' }), /DingTalk HTTPS robot URL/); f.store.close()
+  const f = fixture(); const created = await f.instances.create({ name: 'quota-alert', port: await port() }); await f.instances.start(created.id); const client = new StaticClient({ accounts: [{ id: 'a', provider: 'demo' }], quotas: { a: { values: [{ name: '6h', remaining: 1, total: 10 }] } } }); const notifications = []; const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, clock: () => new Date('2026-10-13T02:00:00.000Z'), notifier: { notify: async (settings, message) => { notifications.push({ settings, message }) } } }); assert.equal(quota.getSettings().refresh_interval_minutes, 360); const saved = quota.updateSettings({ refresh_interval_minutes: 90, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=test', alert_threshold_percent: 20 }); assert.equal(saved.refresh_interval_minutes, 90); assert.equal(saved.webhook_url, ''); assert.equal(saved.webhook_url_configured, true); await quota.refreshInstance(created.id); assert.equal(notifications.length, 1); assert.match(notifications[0].message, /10\.0%/); assert.equal(notifications[0].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=test'); assert.throws(() => quota.updateSettings({ webhook_enabled: true, webhook_url: '' }), /webhook_url is required/); assert.throws(() => quota.updateSettings({ webhook_url: 'http://127.0.0.1/internal' }), /DingTalk HTTPS robot URL/); assert.throws(() => quota.updateSettings({ webhook_url: 'https://example.com/robot/send?access_token=test' }), /DingTalk HTTPS robot URL/); f.store.close()
+})
+
+test('quota notifications are limited to the fixed UTC+8 work windows', () => {
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T00:59:59.999Z')), false)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T01:00:00.000Z')), true)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T03:59:59.999Z')), true)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T04:00:00.000Z')), false)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T05:29:59.999Z')), false)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T05:30:00.000Z')), true)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T09:59:59.999Z')), true)
+  assert.equal(isQuotaNotificationWorkTime(new Date('2026-10-13T10:00:00.000Z')), false)
+})
+
+test('per-instance quota notification settings override global defaults and persist encrypted webhook data', async () => {
+  const f = fixture()
+  try {
+    const first = await f.instances.create({ name: 'quota-custom', port: await port() }); const second = await f.instances.create({ name: 'quota-default', port: await port() })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clients: async () => ({ listAccounts: async () => [] }) })
+    quota.updateSettings({ refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global', alert_threshold_percent: 25 })
+    const defaults = quota.listNotificationSettings(); assert.equal(defaults.find(item => item.instance_id === second.id).configured, false); assert.equal(defaults.find(item => item.instance_id === second.id).refresh_interval_minutes, 120)
+    const saved = quota.updateNotificationSettings(first.id, { refresh_interval_minutes: 30, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=instance', alert_threshold_percent: 10 })
+    assert.equal(saved.configured, true); assert.equal(saved.refresh_interval_minutes, 30); assert.equal(saved.webhook_url_configured, true); assert.equal(saved.webhook_url, undefined)
+    const stored = f.store.getQuotaInstanceSettings(first.id, { includeSecrets: true }); assert.notEqual(stored.webhook_url_ciphertext, ''); assert.equal(f.secrets.decrypt(stored.webhook_url_ciphertext), 'https://oapi.dingtalk.com/robot/send?access_token=instance')
+    assert.equal(quota.listNotificationSettings().find(item => item.instance_id === first.id).refresh_interval_minutes, 30)
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 
 test('duplicate low quota notifications wait five hours before sending again', async () => {
-  const f = fixture(); let now = new Date('2026-10-13T00:00:00.000Z')
+  const f = fixture(); let now = new Date('2026-10-13T02:00:00.000Z')
   try {
     const created = await f.instances.create({ name: 'quota-alert-cooldown', port: await port() }); await f.instances.start(created.id)
     const client = new StaticClient({ accounts: [{ id: 'a', provider: 'demo' }], quotas: { a: { values: [{ name: '5h', remaining: 0, total: 10 }] } } }); const notifications = []
@@ -263,7 +288,7 @@ test('notification failure is logged without losing successful quota data or lea
     const item = await f.instances.create({ name: 'notify-failure', port: await port() })
     await f.instances.start(item.id)
     const client = new StaticClient({ accounts: [{ id: 'a' }], quotas: { a: { values: [{ remaining: 0, total: 10 }] } } })
-    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, notifier: { notify: async () => { throw new Error('https://oapi.dingtalk.com/robot/send?access_token=private-token') } } })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, clock: () => new Date('2026-10-13T02:00:00.000Z'), notifier: { notify: async () => { throw new Error('https://oapi.dingtalk.com/robot/send?access_token=private-token') } } })
     quota.updateSettings({ webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=private-token' })
     await quota.refreshInstance(item.id)
     assert.equal((await quota.list(item.id))[0].status, 'ok')

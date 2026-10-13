@@ -592,38 +592,50 @@ test('separates the instance module and keeps a second create action discoverabl
 })
 
 test('loads quota settings on demand and saves the refresh and DingTalk rules', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch')
-    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
-    .mockImplementationOnce(() => response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any)
-    .mockImplementationOnce(() => response({ items: [] }) as any)
-    .mockImplementationOnce(() => response({ items: [] }) as any)
-    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
-    .mockImplementationOnce(() => response({ refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }) as any)
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any
+    if (path === '/api/instances/cpa_1/quotas') return response({ items: [] }) as any
+    if (path === '/api/versions') return response({ items: [] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    if (path === '/api/quota/settings') return response({ refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }) as any
+    if (path === '/api/quota/notifications') return response({ items: [{ instance_id: 'cpa_1', instance_name: 'one', instance_port: 8317, configured: false, refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, timezone: 'UTC+8', work_windows: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }] }] }) as any
+    return response({}) as any
+  })
   const user = userEvent.setup()
   render(<App />)
   await screen.findByText('one')
-  await user.click(screen.getByRole('link', { name: '配额观察' }))
-  expect(await screen.findByRole('heading', { name: '配额观察' })).toBeInTheDocument()
-  await user.click(screen.getByRole('button', { name: '配额周期' }))
-  expect(screen.getByRole('heading', { name: '配额周期与通知' })).toBeInTheDocument()
+  await user.click(screen.getByRole('link', { name: '定时额度通知' }))
+  expect(await screen.findByRole('heading', { name: '定时额度通知' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '全局默认配额周期与通知' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: 'CPA 实例通知配置' })).toBeInTheDocument()
+  expect(screen.getByText('通知工作时间（UTC+8）')).toBeInTheDocument()
   const interval = screen.getByLabelText(/自动获取周期/)
   await user.clear(interval)
   await user.type(interval, '120')
-  const webhook = screen.getByLabelText(/钉钉机器人 Webhook URL/)
+  const webhook = screen.getByLabelText('钉钉机器人 Webhook URL')
   await user.type(webhook, 'https://oapi.dingtalk.com/robot/send?access_token=test')
   await user.click(screen.getByRole('checkbox', { name: '启用钉钉机器人通知' }))
-  await user.click(screen.getByRole('checkbox', { name: '启用 Webhook 加签' }))
+  await user.click(within(screen.getByRole('region', { name: '全局默认配额周期与通知设置' })).getByRole('checkbox', { name: '启用 Webhook 加签' }))
   await user.type(screen.getByLabelText('钉钉机器人加签密钥'), 'ding-secret')
-  const threshold = screen.getByLabelText(/告警阈值/)
+  const threshold = screen.getByLabelText('告警阈值（%）')
   await user.clear(threshold)
   await user.type(threshold, '15')
   fetchMock.mockImplementationOnce(() => response({ refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret_configured: true }) as any)
   await user.click(screen.getByRole('button', { name: '保存配额设置' }))
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(7))
-  const patchCall = fetchMock.mock.calls[6]
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/settings' && init?.method === 'PATCH')).toBe(true))
+  const patchCall = fetchMock.mock.calls.find(([input, init]) => input === '/api/quota/settings' && init?.method === 'PATCH')!
   expect(patchCall[0]).toBe('/api/quota/settings')
   expect((patchCall[1] as RequestInit).method).toBe('PATCH')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ refresh_interval_minutes: 120, webhook_enabled: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret: 'ding-secret' })
+  const instanceInterval = screen.getByLabelText('one 通知周期（分钟）')
+  await user.clear(instanceInterval); await user.type(instanceInterval, '45')
+  fetchMock.mockImplementationOnce(() => response({ instance_id: 'cpa_1', instance_name: 'one', instance_port: 8317, configured: true, refresh_interval_minutes: 45, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, timezone: 'UTC+8', work_windows: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }] }) as any)
+  await user.click(screen.getByRole('button', { name: '保存实例通知' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/notifications/cpa_1' && init?.method === 'PATCH')).toBe(true))
+  const instancePatch = fetchMock.mock.calls.find(([input, init]) => input === '/api/quota/notifications/cpa_1' && init?.method === 'PATCH')!
+  expect(JSON.parse(String((instancePatch[1] as RequestInit).body))).toMatchObject({ refresh_interval_minutes: 45, alert_threshold_percent: 20 })
 })
 
 test('instance lock disables disruptive actions and unlock restores them', async () => {

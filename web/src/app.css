@@ -560,6 +560,32 @@ body { background: var(--bg-secondary); }
 .quota-overview-card strong { display: block; margin-top: 10px; color: var(--ink); font-size: 28px; font-weight: 760; letter-spacing: -.045em; font-variant-numeric: tabular-nums; }
 .quota-toolbar .button.primary { min-width: 132px; }
 .quota-settings-panel { margin-bottom: 20px; padding: 24px 26px 22px; border: 1px solid var(--line); border-radius: 15px; background: var(--bg-primary); box-shadow: var(--shadow); }
+.quota-notifications-module { padding-top: 24px; }
+.notification-work-hours { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 16px; margin-bottom: 20px; padding: 14px 17px; border: 1px solid color-mix(in srgb, var(--primary-active) 22%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--primary-active) 7%, var(--floating-surface)); color: var(--ink); font-size: 13px; }
+.notification-work-hours strong { font-weight: 750; }
+.notification-work-hours span { color: var(--primary-active); font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; }
+.notification-work-hours small { flex-basis: 100%; color: var(--muted); font-size: 11px; }
+.notification-instance-section { margin-top: 25px; }
+.notification-instance-section > .section-heading { margin-bottom: 14px; }
+.notification-instance-section > .section-heading h2 { margin: 5px 0 3px; color: var(--ink); font-size: 20px; font-weight: 750; letter-spacing: -.035em; }
+.notification-instance-section > .section-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.notification-instance-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.quota-notification-card { min-width: 0; padding: 21px 22px 19px; border: 1px solid var(--line); border-radius: 14px; background: var(--floating-surface); box-shadow: var(--shadow); }
+.notification-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
+.notification-card-head h2 { margin: 5px 0 3px; color: var(--ink); font-size: 19px; font-weight: 750; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.notification-card-head p { margin: 0; color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; overflow-wrap: anywhere; }
+.notification-config-state { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: var(--bg-tertiary); color: var(--muted); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.notification-config-state.configured { background: var(--green-soft); color: #087443; }
+.notification-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 18px; padding-top: 18px; }
+.notification-settings-grid > label, .notification-webhook-section > label { display: grid; gap: 7px; color: var(--ink); font-size: 12px; font-weight: 680; }
+.notification-settings-grid input[type="number"], .notification-webhook-section input[type="url"] { width: 100%; height: 40px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--bg-secondary); color: var(--ink); font-size: 12px; }
+.notification-settings-grid input:focus, .notification-webhook-section input:focus { border-color: var(--primary-color); box-shadow: 0 0 0 3px rgb(143 139 133 / 14%); }
+.notification-settings-grid small, .notification-webhook-section small { color: var(--muted); font-size: 10px; font-weight: 450; line-height: 1.4; }
+.notification-webhook-section { display: grid; gap: 13px; margin-top: 18px; padding-top: 17px; border-top: 1px solid var(--line); }
+.notification-webhook-section .eyebrow { margin-bottom: -3px; }
+.notification-webhook-section .password-field input { width: 100%; height: 40px; padding: 0 42px 0 10px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--bg-secondary); color: var(--ink); font-size: 12px; }
+.quota-notification-card .settings-actions { justify-content: flex-end; margin-top: 17px; }
+.quota-notification-card .settings-actions .button { min-height: 38px; }
 .settings-panel-head h2 { margin: 7px 0 4px; color: var(--ink); font-size: 22px; font-weight: 750; letter-spacing: -.045em; }
 .settings-panel-head p { margin: 0; color: var(--muted); font-size: 13px; }
 .settings-grid { display: grid; grid-template-columns: minmax(220px, .75fr) minmax(0, 1.25fr); gap: 24px; margin-top: 22px; }
@@ -615,6 +641,7 @@ body { background: var(--bg-secondary); }
 @media (max-width: 1200px) {
   .instance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quota-instance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .notification-instance-list { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
   .quota-instance-list { grid-template-columns: minmax(0, 1fr); }
@@ -629,6 +656,8 @@ body { background: var(--bg-secondary); }
   .combined-card-head .button { margin-top: 16px; }
   .combined-metrics, .quota-overview-card { grid-template-columns: 1fr 1fr; }
   .quota-settings-panel { padding: 21px 18px; }
+  .notification-settings-grid { display: block; }
+  .notification-settings-grid > label { margin-bottom: 18px; }
   .settings-grid { display: block; }
   .settings-grid > label { margin-bottom: 22px; }
   .webhook-section { padding: 21px 0 0; border-top: 1px solid var(--line); border-left: 0; }

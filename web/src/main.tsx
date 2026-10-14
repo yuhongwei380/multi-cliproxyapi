@@ -2,7 +2,7 @@ import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
-import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
+import { api, AuditLog, BrandingSettings, Instance, QuotaNotificationSettings, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
 import './app.css'
 import './management-link.css'
 import { Dropdown, DropdownOption } from './Dropdown'
@@ -10,7 +10,7 @@ import { PluginPanel } from './PluginPanel'
 import { KeyPanel } from './KeyPanel'
 
 type Modal = 'create' | 'backup' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
-type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'plugins' | 'keys' | 'runtime-logs' | 'audit-logs'
+type Module = 'overview' | 'instances' | 'quotas' | 'quota-notifications' | 'versions' | 'plugins' | 'keys' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
   refresh_interval_minutes: 360,
@@ -40,6 +40,7 @@ const MODULE_LABELS: Record<Module, string> = {
   overview: '总览',
   instances: 'CLIProxyAPI 实例管理',
   quotas: '配额观察',
+  'quota-notifications': '定时额度通知',
   versions: '版本管理',
   plugins: '插件管理',
   keys: 'API Key 管理',
@@ -54,7 +55,7 @@ function moduleFromHash(hash: string): Module {
   if (hash === '#keys') return 'keys'
   if (hash === '#plugins') return 'plugins'
   const value = hash.replace(/^#/, '')
-  if (value === 'instances' || value === 'quotas' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
+  if (value === 'instances' || value === 'quotas' || value === 'quota-notifications' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
   return 'overview'
 }
 
@@ -86,7 +87,10 @@ function App() {
   const [quotaSettingsLoaded, setQuotaSettingsLoaded] = useState(false)
   const [quotaSettingsLoading, setQuotaSettingsLoading] = useState(false)
   const [quotaSettingsError, setQuotaSettingsError] = useState('')
-  const [quotaPeriodOpen, setQuotaPeriodOpen] = useState(false)
+  const [quotaNotificationSettings, setQuotaNotificationSettings] = useState<QuotaNotificationSettings[]>([])
+  const [quotaNotificationSettingsLoaded, setQuotaNotificationSettingsLoaded] = useState(false)
+  const [quotaNotificationSettingsLoading, setQuotaNotificationSettingsLoading] = useState(false)
+  const [quotaNotificationSettingsError, setQuotaNotificationSettingsError] = useState('')
   const [settingsNotice, setSettingsNotice] = useState('')
   const instanceActionLock = useRef(new Set<string>())
 
@@ -145,6 +149,24 @@ function App() {
     }
   }
 
+  const loadQuotaNotificationSettings = async () => {
+    if (quotaNotificationSettingsLoading) return
+    setQuotaNotificationSettingsLoading(true)
+    setQuotaNotificationSettingsError('')
+    try {
+      const response = await api.get('/quota/notifications')
+      setQuotaNotificationSettings((response.items ?? []) as QuotaNotificationSettings[])
+      setQuotaNotificationSettingsLoaded(true)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : '定时额度通知配置加载失败'
+      setQuotaNotificationSettingsError(message)
+      setError(message)
+      setQuotaNotificationSettingsLoaded(true)
+    } finally {
+      setQuotaNotificationSettingsLoading(false)
+    }
+  }
+
   useEffect(() => {
     const onHashChange = () => setActiveModule(moduleFromHash(window.location.hash))
     window.addEventListener('hashchange', onHashChange)
@@ -152,8 +174,11 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (user && activeModule === 'quotas' && !quotaSettingsLoaded && !quotaSettingsLoading) void loadQuotaSettings()
-  }, [user, activeModule, quotaSettingsLoaded, quotaSettingsLoading])
+    if (user && activeModule === 'quota-notifications') {
+      if (!quotaSettingsLoaded && !quotaSettingsLoading) void loadQuotaSettings()
+      if (!quotaNotificationSettingsLoaded && !quotaNotificationSettingsLoading) void loadQuotaNotificationSettings()
+    }
+  }, [user, activeModule, quotaSettingsLoaded, quotaSettingsLoading, quotaNotificationSettingsLoaded, quotaNotificationSettingsLoading])
 
   useEffect(() => {
     api.get('/auth/status')
@@ -277,6 +302,12 @@ function App() {
     setQuotaSettingsError('')
   }
 
+  const saveQuotaNotificationSettings = (settings: QuotaNotificationSettings) => {
+    setQuotaNotificationSettings(previous => previous.map(item => item.instance_id === settings.instance_id ? settings : item))
+    setQuotaNotificationSettingsLoaded(true)
+    setQuotaNotificationSettingsError('')
+  }
+
   const saveBranding = (settings: BrandingSettings) => {
     setBranding(settings)
     setSettingsNotice('品牌设置已更新')
@@ -303,6 +334,7 @@ function App() {
       <div className="sidebar-caption nav-section-caption">观测</div>
       <nav className="sidebar-nav">
         <NavigationLink module="quotas" activeModule={activeModule} onNavigate={navigate} icon="◌">配额观察</NavigationLink>
+        <NavigationLink module="quota-notifications" activeModule={activeModule} onNavigate={navigate} icon="◷">定时额度通知</NavigationLink>
         <NavigationLink module="runtime-logs" activeModule={activeModule} onNavigate={navigate} icon="≋">运行日志</NavigationLink>
         <NavigationLink module="audit-logs" activeModule={activeModule} onNavigate={navigate} icon="◎">审计日志</NavigationLink>
       </nav>
@@ -329,7 +361,8 @@ function App() {
         {settingsNotice && <div className="success-toast" role="status"><span>✓</span>{settingsNotice}<button aria-label="关闭提示" onClick={() => setSettingsNotice('')}>×</button></div>}
         {activeModule === 'overview' && <Overview branding={branding} instances={instances} quotas={quotas} versions={versions} upgradeState={upgradeState} loading={loading} busy={busy} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} onNavigate={navigate} />}
         {activeModule === 'instances' && <InstanceManagement instances={instances} quotas={quotas} loading={loading} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} />}
-        {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} periodOpen={quotaPeriodOpen} busy={busy} instanceBusy={instanceBusy} onTogglePeriod={() => { setQuotaPeriodOpen(open => !open); if (!quotaSettingsLoaded) void loadQuotaSettings() }} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} />}
+        {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} busy={busy} instanceBusy={instanceBusy} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onNavigate={navigate} />}
+        {activeModule === 'quota-notifications' && <QuotaNotificationModule settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} notificationSettings={quotaNotificationSettings} notificationSettingsLoaded={quotaNotificationSettingsLoaded} notificationSettingsLoading={quotaNotificationSettingsLoading} notificationSettingsError={quotaNotificationSettingsError} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} onNotificationSaved={saveQuotaNotificationSettings} onNotificationError={message => { setQuotaNotificationSettingsError(message); setError(message) }} onRefresh={() => { void loadQuotaSettings(); void loadQuotaNotificationSettings() }} />}
         {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
         {activeModule === 'plugins' && <PluginPanel />}
@@ -386,19 +419,76 @@ function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate
   return <section className="module-pane instances-module"><section className="section-heading module-heading"><div><div className="eyebrow">CLIPROXYAPI INSTANCES</div><h1>CLIProxyAPI 实例管理</h1><p>创建、停止、重启和配置独立的 CLIProxyAPI 子实例。</p></div><div className="section-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><button className="button ghost" onClick={onRefresh}>重新同步</button></div></section>{loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}</section>
 }
 
-function QuotaObservation({ instances, quotas, settings, settingsLoaded, settingsLoading, settingsError, periodOpen, busy, instanceBusy, onTogglePeriod, onRefreshAll, onRefreshInstance, onCreate, onSettingsSaved, onSettingsError }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; settings: QuotaSettings; settingsLoaded: boolean; settingsLoading: boolean; settingsError: string; periodOpen: boolean; busy: string | null; instanceBusy: Record<string, string>; onTogglePeriod: () => void; onRefreshAll: () => void; onRefreshInstance: (instance: Instance) => void; onCreate: () => void; onSettingsSaved: (settings: QuotaSettings) => void; onSettingsError: (message: string) => void }) {
+function QuotaObservation({ instances, quotas, busy, instanceBusy, onRefreshAll, onRefreshInstance, onCreate, onNavigate }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; busy: string | null; instanceBusy: Record<string, string>; onRefreshAll: () => void; onRefreshInstance: (instance: Instance) => void; onCreate: () => void; onNavigate: (module: Module) => void }) {
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
   const stale = snapshots.filter(quota => quota.status === 'stale').length
   const accountCount = snapshots.filter(quota => quota.account_id !== '__discovery__').length
-  return <section className="module-pane quotas-module"><section className="section-heading module-heading"><div><div className="eyebrow">QUOTA OBSERVATION</div><h1>配额观察</h1><p>从子实例读取 OAuth 配额，按周期刷新并在低于阈值时通知。</p></div><div className="section-actions quota-toolbar"><button className="button primary" disabled={!!busy || settingsLoading} onClick={onRefreshAll}>手动查看配额</button><button className="button ghost" aria-expanded={periodOpen} onClick={onTogglePeriod}>配额周期</button></div></section><div className="quota-overview-card"><div><span>成功快照</span><strong>{successful}</strong></div><div><span>OAuth 账户</span><strong>{accountCount}</strong></div><div><span>已过期</span><strong className={stale ? 'warn-text' : ''}>{stale}</strong></div><div><span>自动获取</span><strong>{settings.refresh_interval_minutes}<small> 分钟</small></strong></div></div>{settingsError && <div className="settings-inline-error" role="status">{settingsError}</div>}{periodOpen && <QuotaSettingsPanel settings={settings} loading={settingsLoading} loaded={settingsLoaded} onSaved={onSettingsSaved} onError={onSettingsError} />}{instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="quota-instance-list">{instances.map(instance => { const instanceQuotas = quotas[instance.id] ?? []; const instanceAction = instanceBusy[instance.id]; return <article className="quota-instance-card" key={instance.id}><div className="quota-instance-head"><div><div className="eyebrow">INSTANCE QUOTA</div><h2>{instance.name}</h2><p>{instance.id} · 端口 {instance.port}</p></div><button className="button ghost" disabled={!!busy || !!instanceAction} onClick={() => onRefreshInstance(instance)}>{instanceAction ? '读取中…' : '手动查看'}</button></div>{instanceQuotas.length ? <QuotaDetailPanel quotas={instanceQuotas} /> : <div className="quota-empty-message">尚未采集配额；点击“手动查看”从子实例读取。</div>}</article> })}</div>}</section>
+  return <section className="module-pane quotas-module"><section className="section-heading module-heading"><div><div className="eyebrow">QUOTA OBSERVATION</div><h1>配额观察</h1><p>从子实例读取 OAuth 配额，按实例配置的周期刷新。</p></div><div className="section-actions quota-toolbar"><button className="button primary" disabled={!!busy} onClick={onRefreshAll}>手动查看配额</button><button className="button ghost" onClick={() => onNavigate('quota-notifications')}>定时额度通知 →</button></div></section><div className="quota-overview-card"><div><span>成功快照</span><strong>{successful}</strong></div><div><span>OAuth 账户</span><strong>{accountCount}</strong></div><div><span>已过期</span><strong className={stale ? 'warn-text' : ''}>{stale}</strong></div><div><span>自动获取</span><strong>{instances.length ? '按实例配置' : '—'}</strong></div></div>{instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="quota-instance-list">{instances.map(instance => { const instanceQuotas = quotas[instance.id] ?? []; const instanceAction = instanceBusy[instance.id]; return <article className="quota-instance-card" key={instance.id}><div className="quota-instance-head"><div><div className="eyebrow">INSTANCE QUOTA</div><h2>{instance.name}</h2><p>{instance.id} · 端口 {instance.port}</p></div><button className="button ghost" disabled={!!busy || !!instanceAction} onClick={() => onRefreshInstance(instance)}>{instanceAction ? '读取中…' : '手动查看'}</button></div>{instanceQuotas.length ? <QuotaDetailPanel quotas={instanceQuotas} /> : <div className="quota-empty-message">尚未采集配额；点击“手动查看”从子实例读取。</div>}</article> })}</div>}</section>
 }
 
-function QuotaSettingsPanel({ settings, loading, loaded, onSaved, onError }: { settings: QuotaSettings; loading: boolean; loaded: boolean; onSaved: (settings: QuotaSettings) => void; onError: (message: string) => void }) {
+function QuotaNotificationModule({ settings, settingsLoaded, settingsLoading, settingsError, notificationSettings, notificationSettingsLoaded, notificationSettingsLoading, notificationSettingsError, onSettingsSaved, onSettingsError, onNotificationSaved, onNotificationError, onRefresh }: { settings: QuotaSettings; settingsLoaded: boolean; settingsLoading: boolean; settingsError: string; notificationSettings: QuotaNotificationSettings[]; notificationSettingsLoaded: boolean; notificationSettingsLoading: boolean; notificationSettingsError: string; onSettingsSaved: (settings: QuotaSettings) => void; onSettingsError: (message: string) => void; onNotificationSaved: (settings: QuotaNotificationSettings) => void; onNotificationError: (message: string) => void; onRefresh: () => void }) {
+  const windows = notificationSettings[0]?.work_windows ?? [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }]
+  return <section className="module-pane quota-notifications-module"><section className="section-heading module-heading"><div><div className="eyebrow">SCHEDULED QUOTA NOTIFICATIONS</div><h1>定时额度通知</h1><p>按 CPA 实例独立设置通知周期、阈值和 Webhook，通知时间固定使用 UTC+8 工作时段。</p></div><div className="section-actions"><button className="button ghost" disabled={settingsLoading || notificationSettingsLoading} onClick={onRefresh}>刷新配置</button></div></section><div className="notification-work-hours" role="note"><strong>通知工作时间（UTC+8）</strong><span>{windows.map(window => `${window.start}–${window.end}`).join('、')}</span><small>工作时间外只采集配额，不发送 Webhook 通知。</small></div>{settingsError && <div className="settings-inline-error" role="alert">{settingsError}</div>}{notificationSettingsError && <div className="settings-inline-error" role="alert">{notificationSettingsError}</div>}<QuotaSettingsPanel title="全局默认配额周期与通知" settings={settings} loading={settingsLoading} loaded={settingsLoaded} onSaved={onSettingsSaved} onError={onSettingsError} /><section className="notification-instance-section"><div className="section-heading"><div><div className="eyebrow">INSTANCE OVERRIDES</div><h2>CPA 实例通知配置</h2><p>未单独保存的实例使用全局默认配置；保存后可使用不同的周期和 Webhook。</p></div></div>{notificationSettingsLoading && !notificationSettingsLoaded ? <LoadingState label="正在读取实例通知配置…" /> : !notificationSettings.length ? <div className="quota-empty-message">暂无 CPA 实例，请先创建实例。</div> : <div className="notification-instance-list">{notificationSettings.map(item => <QuotaNotificationCard key={item.instance_id} settings={item} onSaved={onNotificationSaved} onError={onNotificationError} />)}</div>}</section></section>
+}
+
+function QuotaNotificationCard({ settings, onSaved, onError }: { settings: QuotaNotificationSettings; onSaved: (settings: QuotaNotificationSettings) => void; onError: (message: string) => void }) {
+  const [draft, setDraft] = useState<QuotaNotificationSettings>(settings)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  useEffect(() => { setDraft(settings); setSaved(false) }, [settings])
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault(); setSaving(true); setSaved(false)
+    try {
+      const { instance_id, instance_name, instance_port, configured, timezone, work_windows, webhook_secret, webhook_url, ...settingsPayload } = draft
+      const payload = { ...settingsPayload, ...(webhook_url ? { webhook_url } : {}), ...(webhook_secret ? { webhook_secret } : {}) }
+      const response = await api.patch('/quota/notifications/' + encodeURIComponent(instance_id), payload)
+      onSaved({ ...draft, ...response, webhook_url: '', webhook_secret: '' } as QuotaNotificationSettings); setSaved(true)
+    } catch (cause) { const message = cause instanceof Error ? cause.message : '实例通知配置保存失败'; onError(message) } finally { setSaving(false) }
+  }
+  return <article className="quota-notification-card" aria-label={`${settings.instance_name} 定时额度通知配置`}>
+    <div className="notification-card-head"><div><div className="eyebrow">CPA INSTANCE</div><h2>{settings.instance_name}</h2><p>{settings.instance_id} · 端口 {settings.instance_port}</p></div><span className={'notification-config-state' + (settings.configured ? ' configured' : '')}>{settings.configured ? '已单独配置' : '使用全局默认'}</span></div>
+    <form onSubmit={save}>
+      <div className="notification-settings-grid">
+        <div className="notification-enable-row"><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_enabled} onChange={event => setDraft({ ...draft, webhook_enabled: event.target.checked })} />启用定时额度通知</label><small>开启后按周期检查配额，并在工作时间内发送通知。</small></div>
+        <label>通知周期（分钟）<input aria-label={`${settings.instance_name} 通知周期（分钟）`} type="number" min="1" max="10080" value={draft.refresh_interval_minutes} onChange={event => setDraft({ ...draft, refresh_interval_minutes: Number(event.target.value) })} required /><small>同时作为该实例的自动配额获取周期。</small></label>
+        <label>告警阈值（%）<input aria-label={`${settings.instance_name} 告警阈值（%）`} type="number" min="0" max="100" step="0.01" value={draft.alert_threshold_percent} onChange={event => setDraft({ ...draft, alert_threshold_percent: Number(event.target.value) })} required /><small>剩余配额低于此百分比时进入通知队列。</small></label>
+      </div>
+      <div className="notification-webhook-section">
+        <div className="notification-webhook-heading"><div><div className="eyebrow">WEBHOOK</div><h3>钉钉机器人</h3></div></div>
+        <div className="notification-webhook-fields">
+          <label className="notification-webhook-url">钉钉机器人 Webhook URL<input aria-label={`${settings.instance_name} 钉钉机器人 Webhook URL`} type="url" value={draft.webhook_url} onChange={event => setDraft({ ...draft, webhook_url: event.target.value })} placeholder={draft.webhook_url_configured ? '已配置；留空保持当前地址' : 'https://oapi.dingtalk.com/robot/send?access_token=…'} /><small>{draft.webhook_url_configured ? 'Webhook 地址已加密保存；输入新地址才会替换。' : '仅支持钉钉 HTTPS 机器人地址。'}</small></label>
+          <label className="checkbox-label notification-signing-toggle"><input type="checkbox" checked={draft.webhook_signing_enabled} onChange={event => setDraft({ ...draft, webhook_signing_enabled: event.target.checked })} />启用 Webhook 加签</label>
+          <label>钉钉机器人加签密钥<PasswordInput aria-label={`${settings.instance_name} 钉钉机器人加签密钥`} value={draft.webhook_secret ?? ''} onChange={event => setDraft({ ...draft, webhook_secret: event.target.value })} autoComplete="new-password" placeholder={draft.webhook_secret_configured ? '留空保持当前密钥' : '请输入钉钉机器人加签密钥'} /><small>{draft.webhook_secret_configured ? '已配置密钥；留空保持当前密钥。' : '启用加签时必须配置密钥。'}</small></label>
+        </div>
+      </div>
+      <div className="dialog-actions settings-actions"><button type="submit" className="button primary" disabled={saving}>{saving ? '保存中…' : saved ? '已保存' : '保存实例通知'}</button></div>
+    </form>
+  </article>
+}
+
+function QuotaSettingsPanel({ title = '配额周期与通知', settings, loading, loaded, onSaved, onError }: { title?: string; settings: QuotaSettings; loading: boolean; loaded: boolean; onSaved: (settings: QuotaSettings) => void; onError: (message: string) => void }) {
   const [draft, setDraft] = useState<QuotaSettings>(settings)
   const [saving, setSaving] = useState(false)
   useEffect(() => setDraft(settings), [settings])
-  return <section className="quota-settings-panel" aria-label="配额周期和 Webhook 通知设置"><div className="settings-panel-head"><div><div className="eyebrow">SCHEDULE & NOTIFICATIONS</div><h2>配额周期与通知</h2><p>{loaded ? '自动获取周期和告警规则会保存到总控配置。' : loading ? '正在读取当前配置…' : '使用默认配置，保存后生效。'}</p></div></div><form onSubmit={async event => { event.preventDefault(); setSaving(true); try { const { webhook_secret, webhook_url, ...settingsPayload } = draft; const payload = { ...settingsPayload, ...(webhook_url ? { webhook_url } : {}), ...(webhook_secret ? { webhook_secret } : {}) }; const response = await api.patch('/quota/settings', payload); onSaved({ ...draft, ...response, webhook_url: '', webhook_secret: '' } as QuotaSettings) } catch (cause) { onError(cause instanceof Error ? cause.message : '保存配额设置失败') } finally { setSaving(false) } }}><div className="settings-grid"><label>自动获取周期（分钟）<input aria-label="自动获取周期（分钟）" type="number" min="1" max="10080" value={draft.refresh_interval_minutes} onChange={event => setDraft({ ...draft, refresh_interval_minutes: Number(event.target.value) })} required /><small>默认 360 分钟，可手动查看即时刷新。</small></label><div className="webhook-section"><div className="eyebrow">WEBHOOK NOTIFICATION</div><h3>Webhook 通知</h3><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_enabled} onChange={event => setDraft({ ...draft, webhook_enabled: event.target.checked })} />启用钉钉机器人通知</label><label>钉钉机器人 Webhook URL<input aria-label="钉钉机器人 Webhook URL" type="url" value={draft.webhook_url} onChange={event => setDraft({ ...draft, webhook_url: event.target.value })} placeholder={draft.webhook_url_configured ? '已配置；留空保持当前地址' : 'https://oapi.dingtalk.com/robot/send?access_token=…'} /><small>{draft.webhook_url_configured ? 'Webhook 地址已加密保存；输入新地址才会替换。' : '仅支持钉钉 HTTPS 机器人地址。'}</small></label><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_signing_enabled} onChange={event => setDraft({ ...draft, webhook_signing_enabled: event.target.checked })} />启用 Webhook 加签</label><label>钉钉机器人加签密钥<PasswordInput aria-label="钉钉机器人加签密钥" value={draft.webhook_secret ?? ''} onChange={event => setDraft({ ...draft, webhook_secret: event.target.value })} autoComplete="new-password" placeholder={draft.webhook_secret_configured ? '留空保持当前密钥' : '请输入钉钉机器人加签密钥'} /><small>{draft.webhook_secret_configured ? '已配置密钥；留空保持当前密钥。' : '启用加签时必须配置密钥。'}</small></label><label>告警阈值（%）<input aria-label="告警阈值（%）" type="number" min="0" max="100" step="0.01" value={draft.alert_threshold_percent} onChange={event => setDraft({ ...draft, alert_threshold_percent: Number(event.target.value) })} required /><small>当剩余配额低于此百分比时发送通知；同一实例、账户和配额窗口 5 小时内只发送一次。</small></label></div></div><div className="dialog-actions settings-actions"><button className="button primary" disabled={saving}>{saving ? '保存中…' : '保存配额设置'}</button></div></form></section>
+  return <section className="quota-settings-panel" aria-label={`${title}设置`}>
+    <div className="settings-panel-head"><div><div className="eyebrow">SCHEDULE & NOTIFICATIONS</div><h2>{title}</h2><p>{loaded ? '自动获取周期和告警规则会保存到总控配置。' : loading ? '正在读取当前配置…' : '使用默认配置，保存后生效。'}</p></div></div>
+    <form onSubmit={async event => { event.preventDefault(); setSaving(true); try { const { webhook_secret, webhook_url, ...settingsPayload } = draft; const payload = { ...settingsPayload, ...(webhook_url ? { webhook_url } : {}), ...(webhook_secret ? { webhook_secret } : {}) }; const response = await api.patch('/quota/settings', payload); onSaved({ ...draft, ...response, webhook_url: '', webhook_secret: '' } as QuotaSettings) } catch (cause) { onError(cause instanceof Error ? cause.message : '保存配额设置失败') } finally { setSaving(false) } }}>
+      <div className="quota-rules-grid">
+        <label>自动获取周期（分钟）<input aria-label="自动获取周期（分钟）" type="number" min="1" max="10080" value={draft.refresh_interval_minutes} onChange={event => setDraft({ ...draft, refresh_interval_minutes: Number(event.target.value) })} required /><small>默认 360 分钟，可手动查看即时刷新。</small></label>
+        <label>告警阈值（%）<input aria-label="告警阈值（%）" type="number" min="0" max="100" step="0.01" value={draft.alert_threshold_percent} onChange={event => setDraft({ ...draft, alert_threshold_percent: Number(event.target.value) })} required /><small>全局默认低于此百分比时发送通知；同一实例、账户和配额窗口 5 小时内只发送一次。</small></label>
+      </div>
+      <div className="quota-global-webhook">
+        <div className="quota-global-webhook-head"><div><div className="eyebrow">WEBHOOK NOTIFICATION</div><h3>Webhook 通知</h3></div><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_enabled} onChange={event => setDraft({ ...draft, webhook_enabled: event.target.checked })} />启用钉钉机器人通知</label></div>
+        <div className="quota-global-webhook-fields">
+          <label className="quota-global-webhook-url">钉钉机器人 Webhook URL<input aria-label="钉钉机器人 Webhook URL" type="url" value={draft.webhook_url} onChange={event => setDraft({ ...draft, webhook_url: event.target.value })} placeholder={draft.webhook_url_configured ? '已配置；留空保持当前地址' : 'https://oapi.dingtalk.com/robot/send?access_token=…'} /><small>{draft.webhook_url_configured ? 'Webhook 地址已加密保存；输入新地址才会替换。' : '仅支持钉钉 HTTPS 机器人地址。'}</small></label>
+          <label className="checkbox-label quota-global-signing-toggle"><input type="checkbox" checked={draft.webhook_signing_enabled} onChange={event => setDraft({ ...draft, webhook_signing_enabled: event.target.checked })} />启用 Webhook 加签</label>
+          <label>钉钉机器人加签密钥<PasswordInput aria-label="钉钉机器人加签密钥" value={draft.webhook_secret ?? ''} onChange={event => setDraft({ ...draft, webhook_secret: event.target.value })} autoComplete="new-password" placeholder={draft.webhook_secret_configured ? '留空保持当前密钥' : '请输入钉钉机器人加签密钥'} /><small>{draft.webhook_secret_configured ? '已配置密钥；留空保持当前密钥。' : '启用加签时必须配置密钥。'}</small></label>
+        </div>
+      </div>
+      <div className="dialog-actions settings-actions"><button type="submit" className="button primary" disabled={saving}>{saving ? '保存中…' : '保存配额设置'}</button></div>
+    </form>
+  </section>
 }
 
 function LogPage({ kind, instances }: { kind: 'runtime' | 'audit'; instances: Instance[] }) {

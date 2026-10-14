@@ -81,6 +81,15 @@ export class Store {
         sent_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS quota_notifications_sent_idx ON quota_notifications(sent_at);
+      CREATE TABLE IF NOT EXISTS quota_instance_settings (
+        instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+        refresh_interval_minutes INTEGER NOT NULL DEFAULT 360,
+        webhook_enabled INTEGER NOT NULL DEFAULT 0,
+        alert_threshold_percent REAL NOT NULL DEFAULT 20,
+        webhook_signing_enabled INTEGER NOT NULL DEFAULT 0,
+        webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
+        webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
+      );
       CREATE TABLE IF NOT EXISTS quota_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         refresh_interval_minutes INTEGER NOT NULL DEFAULT 360,
@@ -280,6 +289,19 @@ export class Store {
   deleteQuota(instanceId, accountId) { this.db.prepare('DELETE FROM quotas WHERE instance_id=? AND account_id=?').run(instanceId, accountId) }
   getQuotaNotification(key) { return this.db.prepare('SELECT sent_at FROM quota_notifications WHERE notification_key=?').get(key)?.sent_at || '' }
   saveQuotaNotification(key, sentAt) { this.db.prepare('INSERT INTO quota_notifications(notification_key,sent_at) VALUES(?,?) ON CONFLICT(notification_key) DO UPDATE SET sent_at=excluded.sent_at').run(key, sentAt) }
+  getQuotaInstanceSettings(instanceId, { includeSecrets = false } = {}) {
+    const row = this.db.prepare('SELECT instance_id,refresh_interval_minutes,webhook_enabled,alert_threshold_percent,webhook_signing_enabled,webhook_signing_secret_ciphertext,webhook_url_ciphertext FROM quota_instance_settings WHERE instance_id=?').get(instanceId)
+    if (!row) return null
+    const settings = { instance_id: row.instance_id, refresh_interval_minutes: Number(row.refresh_interval_minutes) || 360, webhook_enabled: Boolean(row.webhook_enabled), webhook_url: '', webhook_url_configured: Boolean(row.webhook_url_ciphertext), alert_threshold_percent: Number(row.alert_threshold_percent), webhook_signing_enabled: Boolean(row.webhook_signing_enabled), webhook_secret_configured: Boolean(row.webhook_signing_secret_ciphertext) }
+    if (includeSecrets) { settings.webhook_signing_secret_ciphertext = row.webhook_signing_secret_ciphertext || ''; settings.webhook_url_ciphertext = row.webhook_url_ciphertext || '' }
+    return settings
+  }
+  saveQuotaInstanceSettings(settings) {
+    this.db.prepare(`INSERT INTO quota_instance_settings(instance_id,refresh_interval_minutes,webhook_enabled,alert_threshold_percent,webhook_signing_enabled,webhook_signing_secret_ciphertext,webhook_url_ciphertext)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET refresh_interval_minutes=excluded.refresh_interval_minutes, webhook_enabled=excluded.webhook_enabled, alert_threshold_percent=excluded.alert_threshold_percent, webhook_signing_enabled=excluded.webhook_signing_enabled, webhook_signing_secret_ciphertext=excluded.webhook_signing_secret_ciphertext, webhook_url_ciphertext=excluded.webhook_url_ciphertext`).run(
+      settings.instance_id, settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, settings.webhook_signing_secret_ciphertext || '', settings.webhook_url_ciphertext || '')
+    return this.getQuotaInstanceSettings(settings.instance_id)
+  }
 
   getQuotaSettings({ includeSecretCiphertext = false } = {}) {
     const row = this.db.prepare('SELECT refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext FROM quota_settings WHERE id=1').get()

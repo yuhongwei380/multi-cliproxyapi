@@ -45,6 +45,15 @@ export type QuotaSettings = {
   webhook_secret?: string
 }
 
+export type QuotaNotificationSettings = QuotaSettings & {
+  instance_id: string
+  instance_name: string
+  instance_port: number
+  configured: boolean
+  timezone: 'UTC+8'
+  work_windows: Array<{ start: string; end: string }>
+}
+
 export type VersionInstall = {
   tag: string
   asset: string

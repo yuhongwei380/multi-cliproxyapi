@@ -156,6 +156,16 @@ test('quota settings are protected and can be updated through the API', async ()
   } finally { await closeFixture(f) }
 })
 
+test('per-instance quota notification settings are protected and independently configurable', async () => {
+  const f = await fixture(); try {
+    const instance = await f.instances.create({ name: 'notification-http', port: await freePort() }); const route = `${f.url}/api/quota/notifications/${instance.id}`
+    assert.equal((await fetch(`${f.url}/api/quota/notifications`)).status, 401); assert.equal((await fetch(route, { method: 'PATCH' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    const defaults = await fetch(`${f.url}/api/quota/notifications`, { headers }); assert.equal(defaults.status, 200); const defaultItem = (await defaults.json()).items.find(item => item.instance_id === instance.id); assert.equal(defaultItem.configured, false); assert.equal(defaultItem.timezone, 'UTC+8'); assert.deepEqual(defaultItem.work_windows, [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }])
+    const saved = await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ refresh_interval_minutes: 45, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=instance', alert_threshold_percent: 12 }) }); assert.equal(saved.status, 200); const savedBody = await saved.json(); assert.equal(savedBody.configured, true); assert.equal(savedBody.refresh_interval_minutes, 45); assert.equal(savedBody.webhook_url, undefined); assert.ok(f.store.listAuditLogs().some(item => item.action === 'quota.notification.update' && item.resource_id === instance.id && item.outcome === 'success'))
+  } finally { await closeFixture(f) }
+})
+
 test('administrator password endpoint requires the current password and keeps the session active', async () => {
   const f = await fixture(); try {
     const denied = await fetch(`${f.url}/api/auth/password`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ current_password: 'controller admin password', new_password: 'new-password' }) }); assert.equal(denied.status, 401)

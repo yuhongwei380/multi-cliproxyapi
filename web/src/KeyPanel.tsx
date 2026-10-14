@@ -18,6 +18,7 @@ export function KeyPanel() {
   const [password, setPassword] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const [revealBusy, setRevealBusy] = useState<Record<string, boolean>>({})
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [revealed, setRevealed] = useState<Record<string, string>>({})
@@ -38,6 +39,13 @@ export function KeyPanel() {
   const perform = async (work: () => Promise<void>, reload = true) => {
     setBusy(true); setError(''); setNotice('')
     try { await work(); if (reload) await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '操作失败') } finally { setBusy(false) }
+  }
+  const revealKey = async (key: KeyRecord, onRevealed: (secret: string) => void | Promise<void>) => {
+    if (revealBusy[key.id]) return
+    setRevealBusy(previous => ({ ...previous, [key.id]: true })); setError('')
+    try { const response = await action(key, 'reveal'); await onRevealed(response.key) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Key 读取失败') } finally {
+      setRevealBusy(previous => { const next = { ...previous }; delete next[key.id]; return next })
+    }
   }
   const action = async (key: KeyRecord, kind: string, body = {}) => {
     const result = await api.post(`/keys/${key.id}/${kind}`, body)
@@ -97,8 +105,8 @@ export function KeyPanel() {
       <div className="key-row"><div className="key-identity"><div className="key-name"><h3 title={key.note || '未命名 Key'}>{key.note || '未命名 Key'}</h3>{key.locked && <span className="state-pill">CPA已锁定</span>}{key.deleting && <span className="state-pill">待完成删除</span>}</div><code title={revealed[key.id] || key.masked_key}>{revealed[key.id] || key.masked_key}</code></div>
         <div className="key-binding-summary">{key.bindings.length ? <button type="button" className="key-expand key-bound" aria-expanded={expanded.includes(key.id)} aria-controls={`bindings-${key.id}`} title={key.bindings.map(binding => `${binding.instance_name || binding.instance_id}：${labels[binding.status] || binding.status}`).join('；')} onClick={() => setExpanded(previous => previous.includes(key.id) ? previous.filter(id => id !== key.id) : [...previous, key.id])}>已绑定实例（{key.bindings.length}）{failedBindings(key).length > 0 && <span className="key-failure-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 4.5v4M8 11h.01" /></svg>{failedBindings(key).length} 个失败</span>}<svg className="key-expand-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6 3.5 3.5L11.5 6" /></svg></button> : <span className="key-unbound">未绑定</span>}</div>
         <div className="key-actions key-row-actions">
-        <button type="button" className="button ghost" disabled={busy} onClick={() => void perform(async () => { const response = await action(key, 'reveal'); await copyKey(response.key); setNotice('Key 已复制。') }, false)}>复制</button>
-        <button type="button" className="button ghost" disabled={busy} onClick={() => revealed[key.id] ? setRevealed(previous => { const next = { ...previous }; delete next[key.id]; return next }) : void perform(async () => { const response = await action(key, 'reveal'); setRevealed(previous => ({ ...previous, [key.id]: response.key })) }, false)}>{revealed[key.id] ? '隐藏' : '显示'}</button>
+        <button type="button" className="button ghost" disabled={busy || revealBusy[key.id]} onClick={() => void revealKey(key, async secret => { await copyKey(secret); setNotice('Key 已复制。') })}>复制</button>
+        <button type="button" className="button ghost" disabled={busy || revealBusy[key.id]} onClick={() => revealed[key.id] ? setRevealed(previous => { const next = { ...previous }; delete next[key.id]; return next }) : void revealKey(key, secret => { setRevealed(previous => ({ ...previous, [key.id]: secret })) })}>{revealed[key.id] ? '隐藏' : '显示'}</button>
         <button type="button" className="button ghost" disabled={busy || key.locked} onClick={() => open({ kind: 'note', key })}>备注</button>
         <button type="button" className="button ghost" disabled={busy || key.locked || key.deleting} onClick={() => open({ kind: 'bind', key })}>绑定</button>
         <button type="button" className="button primary" disabled={busy || key.deleting || !key.bindings.length} onClick={() => void perform(async () => { await action(key, 'deploy') })}>下发 Key</button>

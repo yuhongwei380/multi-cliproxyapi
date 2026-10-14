@@ -44,6 +44,7 @@
 .key-row-actions .button, .key-binding .button { min-height: 30px; padding: 5px 9px; border-radius: 7px; font-size: 12px; }
 .key-binding-details { margin-top: 10px; }
 .key-binding { border-top: 1px dashed var(--line); padding: 8px 0; gap: 10px; font-size: 12px; }
+.key-binding-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .key-binding-info { min-width: 0; }
 .key-binding-name { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .key-binding-name .state-pill { margin-left: 0; }

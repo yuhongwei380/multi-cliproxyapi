@@ -44,6 +44,19 @@ export class KeyService {
     })
   }
   async reveal(id) { return this.run(() => ({ key: this.secrets.decrypt(this.store.getManagedKey(id).ciphertext) })) }
+  async dismissDeployFailure(id, instanceId, actor = 'admin') {
+    return this.run(() => {
+      const key = this.store.getManagedKey(id)
+      this.active(key)
+      this.editable(key)
+      const binding = this.store.keyBindings(id).find(item => item.instance_id === instanceId)
+      if (!binding) throw invalid('实例未绑定此 Key')
+      if (binding.status !== 'failed') throw new ConflictError('此绑定没有待关闭的下发错误')
+      this.store.saveKeyBinding(id, instanceId, 'pending', '')
+      this.store.appendAuditLog({ actor, action: 'key.deploy.failure.dismiss', resource_type: 'instance', resource_id: instanceId, outcome: 'success', detail: `Key ${id}` })
+      return { status: 'dismissed' }
+    })
+  }
   async distribute(id, { revoke = false, instanceId = null, remove = false, actor = 'admin' } = {}) {
     return this.run(async () => {
       const key = this.store.getManagedKey(id)

@@ -101,13 +101,13 @@ npm run package:linux
 
 一个 Key 可绑定多个 CPA 实例，绑定不立即写入实例。点击“下发 Key”后逐实例读取客户端 Key 列表：相同 Key 已存在时不重复写入，否则追加，保留其他 Key，并重新读取确认。优先使用 CPA v8 的 `/v8/management/config/access/api-keys`，该路径返回 404 时兼容旧 `/v0/management/api-keys`。实例须运行且未锁定；操作与实例生命周期、升级和插件部署共用操作锁。CPA 原生面板的并发改动无法通过总控操作锁完全排除，请避免同时修改同一实例的 Key 列表。
 
-“解绑并撤销”会从指定 CPA 移除完全匹配的 Key，重新读取确认已不存在后才解除绑定；其他实例不受影响。“删除”逐个撤销所有绑定实例，全部成功后才删除总控记录。失败时保留 Key、剩余绑定及错误状态，可点击“重试删除”；待删除 Key 禁止新增绑定和再次下发。停止、锁定、无法连接的实例须先处理，再重试撤销。已不存在的 Key 视为撤销成功。仍有总控 Key 绑定的实例禁止直接删除，避免遗留绑定。
+“解绑并撤销”会从指定 CPA 移除完全匹配的 Key，重新读取确认已不存在后才解除绑定；其他实例不受影响。“删除”逐个撤销所有绑定实例，全部成功后才删除总控记录。失败时保留 Key、剩余绑定及错误状态，可点击“重试删除”；待删除 Key 禁止新增绑定和再次下发。下发失败项可点击“关闭报错”，保留绑定并恢复为待下发状态，之后可处理实例再重试。停止、锁定、无法连接的实例须先处理，再重试撤销。已不存在的 Key 视为撤销成功。仍有总控 Key 绑定的实例禁止直接删除，避免遗留绑定。
 
 CPA 的空客户端 Key 列表会注销配置 Key 鉴权提供器，没有其他鉴权提供器时会放行请求。撤销后列表为空时，总控写入一个 `sk-controller-guard-` 前缀的 256 位随机保护 Key，验证后再解绑。该 Key 不向用户发放、不作为普通总控 Key 展示；它只保留实例的鉴权要求，避免旧 Key 删除后因匿名访问而继续可用。后续下发会保留该保护 Key。此行为依据 [CPA 配置鉴权提供器](https://github.com/router-for-me/CLIProxyAPI/blob/main/internal/access/config_access/provider.go) 和 [鉴权管理器](https://github.com/router-for-me/CLIProxyAPI/blob/main/sdk/access/manager.go)；有自定义鉴权插件的实例需要另行验证插件策略。
 
 Key 锁定状态持久保存。锁定后禁止编辑备注、绑定、解绑和删除，复制、查看及下发仍可使用；解锁需要总控管理员密码。实例备份会继承来源的总控 Key 绑定，防止复制配置后遗漏撤销；备份默认停止，自动备份还会锁定，删除 Key 前需要启动并解锁这些绑定备份，再执行撤销。未绑定到总控的独立 Key 或历史副本不在撤销范围内。
 
-管理接口均需要管理员会话：`GET /api/keys`、`POST /api/keys`，以及 `POST /api/keys/:id/{note,bind,deploy,revoke,delete,lock,unlock,reveal}`。创建体为 `{ "note": "测试", "key": "sk-example123" }`，省略 `key` 由服务器生成；绑定体为 `{ "instances": ["实例ID"] }`；单实例撤销体为 `{ "instance_id": "实例ID" }`；解锁体为 `{ "admin_password": "总控管理员密码" }`。下发、撤销和删除返回逐实例 `results`，删除必须检查 `deleted`，HTTP 200 不代表所有实例均成功。
+管理接口均需要管理员会话：`GET /api/keys`、`POST /api/keys`，以及 `POST /api/keys/:id/{note,bind,deploy,revoke,delete,lock,unlock,reveal,dismiss-failure}`。创建体为 `{ "note": "测试", "key": "sk-example123" }`，省略 `key` 由服务器生成；绑定、单实例撤销和关闭下发错误使用 `{ "instance_id": "实例ID" }`（绑定使用 `instances` 数组）；解锁体为 `{ "admin_password": "总控管理员密码" }`。下发、撤销和删除返回逐实例 `results`，删除必须检查 `deleted`，HTTP 200 不代表所有实例均成功。
 
 真实 CPA 8.0.23 服务器验收完成创建、下发、查重、单实例撤销、部分删除失败重试、鉴权保护、备份副本撤销及总控重启持久化，15 项检查通过。该版本使用旧管理接口回退，空 Key 列表的 `null` 响应已兼容。详见 [验收报告](test-doc/test-evidence/2026-10-12/key-management-real.md)；复现脚本为 `scripts/verify-key-management.mjs`，只使用显式提供的 CPA 二进制及临时数据。
 

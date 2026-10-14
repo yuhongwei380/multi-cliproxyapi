@@ -110,10 +110,14 @@ export class Controller {
     const route = url.pathname.replace(/^\/api/, '')
     if (route === '/keys' && request.method === 'GET') return writeJson(response, 200, { items: this.keys.list() })
     if (route === '/keys' && request.method === 'POST') return writeJson(response, 201, await this.keys.create(await readJson(request)))
-    const keyRoute = route.match(/^\/keys\/([^/]+)\/(note|bind|lock|unlock|reveal|deploy|revoke|delete)$/)
+    const keyRoute = route.match(/^\/keys\/([^/]+)\/(note|bind|lock|unlock|reveal|deploy|revoke|delete|dismiss-failure)$/)
     if (keyRoute && request.method === 'POST') {
       const [, id, action] = keyRoute; const body = await readJson(request)
       if (action === 'reveal') return writeJson(response, 200, await this.keys.reveal(id))
+      if (action === 'dismiss-failure') {
+        if (typeof body.instance_id !== 'string') throw Object.assign(new Error('请选择实例'), { status: 400 })
+        return writeJson(response, 200, await this.keys.dismissDeployFailure(id, body.instance_id, username))
+      }
       if (['deploy','revoke','delete'].includes(action)) {
         if (action === 'revoke' && typeof body.instance_id !== 'string') throw Object.assign(new Error('请选择解绑实例'), { status: 400 })
         return writeJson(response, 200, await this.keys.distribute(id, { revoke: action !== 'deploy', remove: action === 'delete', instanceId: action === 'revoke' ? body.instance_id : null, actor: username }))

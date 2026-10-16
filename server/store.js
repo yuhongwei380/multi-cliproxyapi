@@ -157,6 +157,7 @@ export class Store {
         original_running_json TEXT NOT NULL DEFAULT '[]',
         original_desired_json TEXT NOT NULL DEFAULT '{}',
         instance_stages_json TEXT NOT NULL DEFAULT '{}',
+        backup_instances_json TEXT NOT NULL DEFAULT '[]',
         message TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL
       );
@@ -187,6 +188,8 @@ export class Store {
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
     if (!quotaColumns.has('webhook_url_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_url_ciphertext TEXT NOT NULL DEFAULT ''")
+    const upgradeColumns = new Set(this.db.prepare('PRAGMA table_info(upgrade_state)').all().map(row => row.name))
+    if (!upgradeColumns.has('backup_instances_json')) this.db.exec("ALTER TABLE upgrade_state ADD COLUMN backup_instances_json TEXT NOT NULL DEFAULT '[]'")
     const brandingColumns = new Set(this.db.prepare('PRAGMA table_info(branding_settings)').all().map(row => row.name))
     if (!brandingColumns.has('logo')) this.db.exec("ALTER TABLE branding_settings ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
     this.db.prepare('INSERT OR IGNORE INTO quota_settings(id, refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext) VALUES(1, 360, 0, \'\', 20, 0, \'\', \'\')').run()
@@ -215,6 +218,7 @@ export class Store {
   bindKey(id, instanceId) { this.db.prepare("INSERT OR IGNORE INTO key_bindings(key_id,instance_id,status,message) VALUES(?,?,'pending','')").run(id,instanceId) }
   saveKeyBinding(id, instanceId, status, message) { this.db.prepare('UPDATE key_bindings SET status=?,message=? WHERE key_id=? AND instance_id=?').run(status,message,id,instanceId) }
   unbindKey(id, instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE key_id=? AND instance_id=?').run(id,instanceId) }
+  deleteKeyBindingsForInstance(instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE instance_id=?').run(instanceId) }
   assertNoKeyBindings(instanceId) { if (this.db.prepare('SELECT 1 FROM key_bindings WHERE instance_id=? LIMIT 1').get(instanceId)) throw new ConflictError('实例仍绑定总控 Key，请先解绑并撤销') }
   inheritKeyBindings(sourceId, targetId) { this.db.prepare("INSERT INTO key_bindings(key_id,instance_id,status,message) SELECT key_id,?,'copied','备份继承的 Key，启动后可验证或撤销' FROM key_bindings WHERE instance_id=?").run(targetId,sourceId) }
 
@@ -377,14 +381,14 @@ export class Store {
   }
 
   saveUpgradeState(state) {
-    this.db.prepare(`INSERT INTO upgrade_state(id,state,old_version,new_version,original_running_json,original_desired_json,instance_stages_json,message,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,old_version=excluded.old_version,new_version=excluded.new_version,original_running_json=excluded.original_running_json,original_desired_json=excluded.original_desired_json,instance_stages_json=excluded.instance_stages_json,message=excluded.message,updated_at=excluded.updated_at`).run(
-      state.id || 'singleton', state.state, state.old_version || '', state.new_version || '', json(state.original_running || []), json(state.original_desired || {}), json(state.instance_stages || {}), state.message || '', state.updated_at)
+    this.db.prepare(`INSERT INTO upgrade_state(id,state,old_version,new_version,original_running_json,original_desired_json,instance_stages_json,backup_instances_json,message,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,old_version=excluded.old_version,new_version=excluded.new_version,original_running_json=excluded.original_running_json,original_desired_json=excluded.original_desired_json,instance_stages_json=excluded.instance_stages_json,backup_instances_json=excluded.backup_instances_json,message=excluded.message,updated_at=excluded.updated_at`).run(
+      state.id || 'singleton', state.state, state.old_version || '', state.new_version || '', json(state.original_running || []), json(state.original_desired || {}), json(state.instance_stages || {}), json(state.backup_instances || []), state.message || '', state.updated_at)
   }
   getUpgradeState() {
     const row = this.db.prepare('SELECT * FROM upgrade_state WHERE id=?').get('singleton')
     if (!row) throw new NotFoundError('upgrade state not found')
-    return { id: row.id, state: row.state, old_version: row.old_version || '', new_version: row.new_version || '', original_running: parse(row.original_running_json, []), original_desired: parse(row.original_desired_json, {}), instance_stages: parse(row.instance_stages_json, {}), message: row.message || '', updated_at: row.updated_at }
+    return { id: row.id, state: row.state, old_version: row.old_version || '', new_version: row.new_version || '', original_running: parse(row.original_running_json, []), original_desired: parse(row.original_desired_json, {}), instance_stages: parse(row.instance_stages_json, {}), backup_instances: parse(row.backup_instances_json, []), message: row.message || '', updated_at: row.updated_at }
   }
   clearUpgradeState() { this.db.prepare('DELETE FROM upgrade_state WHERE id=?').run('singleton') }
   savePluginJob(job) { this.db.prepare('INSERT INTO plugin_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(job.id, json(job)) }

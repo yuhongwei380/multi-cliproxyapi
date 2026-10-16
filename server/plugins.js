@@ -52,7 +52,7 @@ export class PluginArtifacts {
 }
 
 export class PluginService {
-  constructor({ store, instances, runtime, clients, artifacts }) { Object.assign(this, { store, instances, runtime, clients, artifacts }); this.pending = null }
+  constructor({ store, instances, runtime, clients, verifyInstance = null, artifacts }) { Object.assign(this, { store, instances, runtime, clients, verifyInstance, artifacts }); this.pending = null }
   assertIdle() { if (this.store.listPluginJobs().some(active)) throw new ConflictError('plugin deployment requires completion or recovery first') }
   jobs() { return this.store.listPluginJobs() }
   deleteRecord(id) { this.store.deletePluginJob(id) }
@@ -98,6 +98,11 @@ export class PluginService {
           await this.deploy(job, result, instance, artifact)
         })
       }
+      for (const result of (this.verifyInstance ? job.results : []).filter(item => item.backup_id && ['verified', 'installed-disabled', 'installed-pending-verification'].includes(item.state))) {
+        try { await this.instances.removeAutomaticBackup(result.backup_id); result.backup_removed = true }
+        catch (error) { result.backup_cleanup_error = error.message; job.message = [job.message, `备份 ${result.backup_id} 清理失败：${error.message}`].filter(Boolean).join('；') }
+        this.save(job)
+      }
       job.state = 'completed'
     } catch (error) {
       job.state = job.results.some(item => item.state === 'blocked') ? 'blocked' : 'failed'; job.message = error.message
@@ -140,7 +145,7 @@ export class PluginService {
       atomic(files.file, fs.readFileSync(artifact.file), 0o755); atomic(files.manifest, JSON.stringify({ id: job.plugin, version: artifact.version, sha256: artifact.sha256 }))
       if (job.enable) atomic(files.config, editChildConfig(fs.readFileSync(files.config, 'utf8'), { plugin: { id: job.plugin } }))
       if (result.was_running) {
-        result.state = 'verifying'; this.save(job); await this.runtime.start(instance); await this.instances.confirmStarted(instance); result.loaded = await this.verify(instance, job, result)
+        result.state = 'verifying'; this.save(job); await this.runtime.start(instance); await this.instances.confirmStarted(instance); result.loaded = await this.verify(instance, job, result); if (this.verifyInstance) { result.service_verifying = true; this.save(job); await this.verifyInstance(instance); result.service_verified = true }
       }
       result.state = result.was_running ? (result.loaded ? 'verified' : 'installed-disabled') : 'installed-pending-verification'; this.save(job)
     } catch (error) {

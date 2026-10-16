@@ -52,7 +52,7 @@ function auditTarget(request, pathname) {
   if (pathname === '/api/instance-limits') return { action: 'instance-limits.update', resource_type: 'instance-limits', resource_id: 'singleton' }
   if (pathname === '/api/quota/settings') return { action: 'quota.settings.update', resource_type: 'quota-settings', resource_id: 'singleton' }
   const quotaNotification = pathname.match(/^\/api\/quota\/notifications\/([^/]+)$/)
-  if (quotaNotification) return { action: 'quota.notification.update', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotification[1]) }
+  if (quotaNotification) return { action: request.method === 'DELETE' ? 'quota.notification.delete' : 'quota.notification.update', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotification[1]) }
   if (pathname === '/api/versions/install') return { action: 'version.install', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/upgrade') return { action: 'version.upgrade', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/uninstall') return { action: 'version.uninstall', resource_type: 'version', resource_id: '' }
@@ -146,6 +146,7 @@ export class Controller {
     if (route === '/quota/notifications' && request.method === 'GET') return writeJson(response, 200, { items: this.quota.listNotificationSettings() })
     const quotaNotification = route.match(/^\/quota\/notifications\/([^/]+)$/)
     if (quotaNotification && request.method === 'PATCH') return writeJson(response, 200, this.quota.updateNotificationSettings(decodeURIComponent(quotaNotification[1]), await readJson(request)))
+    if (quotaNotification && request.method === 'DELETE') return writeJson(response, 200, this.quota.deleteNotificationSettings(decodeURIComponent(quotaNotification[1])))
     if (route === '/versions/install' && request.method === 'POST') { if (!this.installer) throw new Error('version installer unavailable'); const body = await readJson(request); const installed = await this.installer.install(body.version || ''); this.store.saveVersion(installed); const instances = this.store.listInstances(); if (!instances.length && this.activator) await this.activator.activateVersion(installed.tag); this.instances.setDefaultVersionAfterInstall(installed.tag); const { path: _path, ...publicVersion } = installed; return writeJson(response, 201, publicVersion) }
     if (route === '/versions/upgrade' && request.method === 'POST') { const body = await readJson(request); const result = await this.upgrade.upgrade(body.version); return writeJson(response, 200, { status: 'upgraded', version: body.version, ...(result || {}) }) }
     if (route === '/versions/uninstall' && request.method === 'POST') { if (!this.versionService) throw new Error('version uninstaller unavailable'); const body = await readJson(request); await this.versionService.uninstall(body.version); return writeJson(response, 200, { status: 'uninstalled', version: body.version }) }

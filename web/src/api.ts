@@ -35,6 +35,7 @@ export type QuotaSnapshot = {
 }
 
 export type QuotaSettings = {
+  instance_ids: string[]
   refresh_interval_minutes: number
   webhook_enabled: boolean
   webhook_url: string
@@ -45,7 +46,7 @@ export type QuotaSettings = {
   webhook_secret?: string
 }
 
-export type QuotaNotificationSettings = QuotaSettings & {
+export type QuotaNotificationSettings = Omit<QuotaSettings, 'instance_ids'> & {
   instance_id: string
   instance_name: string
   instance_port: number

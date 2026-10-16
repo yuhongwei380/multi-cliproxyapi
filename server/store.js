@@ -90,6 +90,9 @@ export class Store {
         webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
         webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS quota_global_instances (
+        instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS quota_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         refresh_interval_minutes INTEGER NOT NULL DEFAULT 360,
@@ -98,7 +101,8 @@ export class Store {
         alert_threshold_percent REAL NOT NULL DEFAULT 20,
         webhook_signing_enabled INTEGER NOT NULL DEFAULT 0,
         webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
-        webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
+        webhook_url_ciphertext TEXT NOT NULL DEFAULT '',
+        targets_configured INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS branding_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -188,6 +192,7 @@ export class Store {
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
     if (!quotaColumns.has('webhook_url_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_url_ciphertext TEXT NOT NULL DEFAULT ''")
+    if (!quotaColumns.has('targets_configured')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN targets_configured INTEGER NOT NULL DEFAULT 0')
     const upgradeColumns = new Set(this.db.prepare('PRAGMA table_info(upgrade_state)').all().map(row => row.name))
     if (!upgradeColumns.has('backup_instances_json')) this.db.exec("ALTER TABLE upgrade_state ADD COLUMN backup_instances_json TEXT NOT NULL DEFAULT '[]'")
     const brandingColumns = new Set(this.db.prepare('PRAGMA table_info(branding_settings)').all().map(row => row.name))
@@ -306,16 +311,40 @@ export class Store {
       settings.instance_id, settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, settings.webhook_signing_secret_ciphertext || '', settings.webhook_url_ciphertext || '')
     return this.getQuotaInstanceSettings(settings.instance_id)
   }
+  listQuotaInstanceSettingIds() { return this.db.prepare('SELECT instance_id FROM quota_instance_settings ORDER BY instance_id').all().map(row => row.instance_id) }
+  deleteQuotaInstanceSettings(instanceId) { this.db.prepare('DELETE FROM quota_instance_settings WHERE instance_id=?').run(instanceId) }
+  listQuotaGlobalInstanceIds() {
+    const configured = Boolean(this.db.prepare('SELECT targets_configured FROM quota_settings WHERE id=1').get()?.targets_configured)
+    if (!configured) return this.db.prepare('SELECT id FROM instances ORDER BY created_at,id').all().map(row => row.id)
+    return this.db.prepare('SELECT instance_id FROM quota_global_instances ORDER BY instance_id').all().map(row => row.instance_id)
+  }
+  saveQuotaGlobalInstanceIds(instanceIds) {
+    const ids = [...new Set(instanceIds)]
+    const existing = new Set(this.db.prepare('SELECT id FROM instances').all().map(row => row.id))
+    if (ids.some(id => !existing.has(id))) throw new NotFoundError('CPA instance not found')
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare('DELETE FROM quota_global_instances').run()
+      const insert = this.db.prepare('INSERT INTO quota_global_instances(instance_id) VALUES(?)')
+      for (const id of ids) insert.run(id)
+      this.db.prepare('UPDATE quota_settings SET targets_configured=1 WHERE id=1').run()
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return ids
+  }
 
   getQuotaSettings({ includeSecretCiphertext = false } = {}) {
-    const row = this.db.prepare('SELECT refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext FROM quota_settings WHERE id=1').get()
+    const row = this.db.prepare('SELECT refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext, targets_configured FROM quota_settings WHERE id=1').get()
     if (!row) {
-      const fallback = { refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }
+      const fallback = { refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, instance_ids: [], targets_configured: false }
       if (includeSecretCiphertext) { fallback.webhook_signing_secret_ciphertext = ''; fallback.webhook_url_ciphertext = ''; fallback.webhook_url_legacy = '' }
       return fallback
     }
     const ciphertext = row.webhook_signing_secret_ciphertext || ''; const urlCiphertext = row.webhook_url_ciphertext || ''; const legacyUrl = row.webhook_url || ''
-    const settings = { refresh_interval_minutes: Number(row.refresh_interval_minutes) || 360, webhook_enabled: Boolean(row.webhook_enabled), webhook_url: '', webhook_url_configured: Boolean(urlCiphertext || legacyUrl), alert_threshold_percent: Number(row.alert_threshold_percent), webhook_signing_enabled: Boolean(row.webhook_signing_enabled), webhook_secret_configured: Boolean(ciphertext) }
+    const settings = { refresh_interval_minutes: Number(row.refresh_interval_minutes) || 360, webhook_enabled: Boolean(row.webhook_enabled), webhook_url: '', webhook_url_configured: Boolean(urlCiphertext || legacyUrl), alert_threshold_percent: Number(row.alert_threshold_percent), webhook_signing_enabled: Boolean(row.webhook_signing_enabled), webhook_secret_configured: Boolean(ciphertext), instance_ids: this.listQuotaGlobalInstanceIds(), targets_configured: Boolean(row.targets_configured) }
     if (includeSecretCiphertext) { settings.webhook_signing_secret_ciphertext = ciphertext; settings.webhook_url_ciphertext = urlCiphertext; settings.webhook_url_legacy = legacyUrl }
     return settings
   }
@@ -326,6 +355,7 @@ export class Store {
     this.db.prepare(`INSERT INTO quota_settings(id, refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext)
       VALUES(1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET refresh_interval_minutes=excluded.refresh_interval_minutes, webhook_enabled=excluded.webhook_enabled, webhook_url=excluded.webhook_url, alert_threshold_percent=excluded.alert_threshold_percent, webhook_signing_enabled=excluded.webhook_signing_enabled, webhook_signing_secret_ciphertext=excluded.webhook_signing_secret_ciphertext, webhook_url_ciphertext=excluded.webhook_url_ciphertext`).run(
       settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.webhook_url || '', settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, ciphertext, urlCiphertext)
+    if (Object.prototype.hasOwnProperty.call(settings, 'instance_ids')) this.saveQuotaGlobalInstanceIds(settings.instance_ids)
     return this.getQuotaSettings()
   }
 

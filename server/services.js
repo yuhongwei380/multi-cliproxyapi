@@ -552,8 +552,8 @@ export class QuotaService {
   constructor({ store, instances, clients, secrets = null, clock = () => new Date(), refreshIntervalMs = 6 * 60 * 60 * 1000, maxConcurrent = 3, notifier = null } = {}) { this.store = store; this.instances = instances; this.clients = clients; this.secrets = secrets; this.clock = clock; this.refreshIntervalMs = refreshIntervalMs; this.maxConcurrent = maxConcurrent; this.notifier = notifier || new DingTalkNotifier(); this.running = new Set(); this.notificationSentAt = new Map(); this.migrateLegacyWebhookUrl() }
   getSettings() {
     const settings = typeof this.store.getQuotaSettings === 'function' ? this.store.getQuotaSettings() : { refresh_interval_minutes: Math.max(1, Math.round(this.refreshIntervalMs / 60000)) }
-    const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url
-    return { ...DEFAULT_QUOTA_SETTINGS, ...safe, webhook_url: '', webhook_url_configured: Boolean(settings.webhook_url_configured || settings.webhook_url), webhook_secret_configured: Boolean(settings.webhook_secret_configured) }
+    const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url; delete safe.targets_configured
+    return { ...DEFAULT_QUOTA_SETTINGS, ...safe, instance_ids: Array.isArray(settings.instance_ids) ? settings.instance_ids : [], webhook_url: '', webhook_url_configured: Boolean(settings.webhook_url_configured || settings.webhook_url), webhook_secret_configured: Boolean(settings.webhook_secret_configured) }
   }
   storedSettings() {
     if (typeof this.store.getQuotaSettings !== 'function') return { ...this.getSettings(), webhook_signing_secret_ciphertext: '', webhook_url_ciphertext: '', webhook_url_legacy: '' }
@@ -597,7 +597,7 @@ export class QuotaService {
   }
   publicInstanceNotificationSettings(instance) {
     const settings = this.instanceSettingsWithSecret(instance.id); const safe = { ...settings }
-    delete safe.webhook_url; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext
+    delete safe.webhook_url; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.instance_ids; delete safe.targets_configured
     return { ...safe, timezone: QUOTA_NOTIFICATION_TIMEZONE, work_windows: QUOTA_NOTIFICATION_WORK_WINDOWS }
   }
   listNotificationSettings() { return this.store.listInstances().map(instance => this.publicInstanceNotificationSettings(instance)) }
@@ -620,11 +620,25 @@ export class QuotaService {
     }
     delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_id; delete next.instance_name; delete next.instance_port; delete next.configured
     this.store.saveQuotaInstanceSettings({ ...next, instance_id: instanceId, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext })
+    if (typeof this.store.listQuotaGlobalInstanceIds === 'function' && typeof this.store.saveQuotaGlobalInstanceIds === 'function') this.store.saveQuotaGlobalInstanceIds(this.store.listQuotaGlobalInstanceIds().filter(id => id !== instanceId))
     this.wakeScheduler?.()
     return this.publicInstanceNotificationSettings(this.store.getInstance(instanceId))
   }
+  deleteNotificationSettings(instanceId) {
+    const instance = this.store.getInstance(instanceId)
+    this.store.deleteQuotaInstanceSettings?.(instanceId)
+    this.wakeScheduler?.()
+    return this.publicInstanceNotificationSettings(instance)
+  }
   updateSettings(input = {}) {
-    const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url')
+    const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url'); const hasInstanceIds = Object.prototype.hasOwnProperty.call(input, 'instance_ids')
+    let instanceIds = current.instance_ids || []
+    if (hasInstanceIds) {
+      if (!Array.isArray(input.instance_ids) || input.instance_ids.some(id => typeof id !== 'string')) throw ErrInvalidQuotaSettings('instance_ids must be an array of CPA instance IDs')
+      const available = new Set(this.store.listInstances().map(instance => instance.id)); const configured = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+      instanceIds = [...new Set(input.instance_ids)].filter(id => available.has(id) && !configured.has(id))
+      if (instanceIds.length !== new Set(input.instance_ids).size) throw ErrInvalidQuotaSettings('instance_ids contains an unknown or separately configured CPA instance')
+    }
     let ciphertext = stored.webhook_signing_secret_ciphertext || ''
     let urlCiphertext = stored.webhook_url_ciphertext || ''
     if (hasSecret) {
@@ -639,14 +653,19 @@ export class QuotaService {
         urlCiphertext = this.secrets.encrypt(next.webhook_url)
       } else urlCiphertext = ''
     }
-    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy
-    const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
+    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_ids; delete next.targets_configured
+    const targetInput = hasInstanceIds ? { instance_ids: instanceIds } : {}
+    const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, ...targetInput, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, ...targetInput, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
     if (next.refresh_interval_minutes !== current.refresh_interval_minutes) this.wakeScheduler?.()
-    return saved
+    return typeof this.store.getQuotaSettings === 'function' ? this.getSettings() : saved
   }
   intervalMs(instanceId = null) { const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.getSettings(); return Math.max(60000, Number(settings.refresh_interval_minutes) * 60000) }
+  scheduledInstances() {
+    const globalIds = new Set(this.getSettings().instance_ids || []); const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+    return this.store.listInstances().filter(instance => globalIds.has(instance.id) || customIds.has(instance.id))
+  }
   schedulerIntervalMs() {
-    const instances = this.store.listInstances()
+    const instances = this.scheduledInstances()
     return instances.length ? Math.min(...instances.map(instance => this.intervalMs(instance.id))) : this.intervalMs()
   }
   notificationCoolingDown(key, now) {
@@ -693,7 +712,7 @@ export class QuotaService {
   }
   markDiscoveryFailure(instanceId, attempt, error) { const previous = this.store.listQuotas(instanceId); if (!previous.length) this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'failed', message: error.message, attempted_at: attempt, collected_at: '' }); else for (const item of previous) this.store.saveQuota({ ...item, attempted_at: attempt, status: 'failed', message: error.message }) }
   async list(instanceId) { this.store.getInstance(instanceId); const now = this.clock().getTime(); const interval = this.intervalMs(instanceId); return this.store.listQuotas(instanceId).map(item => item.status === 'ok' && (!item.attempted_at || now - Date.parse(item.attempted_at) >= interval) ? { ...item, status: 'stale', message: 'quota snapshot is older than the refresh interval' } : item) }
-  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.store.listInstances()) { const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
+  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.scheduledInstances()) { const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
   async run(signal) {
     if (signal?.aborted) return
     await this.refreshDue(signal)

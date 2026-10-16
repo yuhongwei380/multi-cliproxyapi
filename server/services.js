@@ -250,6 +250,31 @@ export class InstanceService {
     }
     return backups
   }
+  // Internal cleanup used after a successful upgrade/deployment. Automatic
+  // backups are locked and inherit key bindings, so the normal administrator
+  // deletion flow cannot be used for them.
+  async removeAutomaticBackup(instanceId) {
+    return this.withInstanceLock(instanceId, async () => {
+      const instance = this.store.getInstance(instanceId)
+      const metadata = backupMetadata(instance)
+      if (!instance.is_backup || !metadata?.automatic) throw new ConflictError('instance is not an automatic backup')
+      const expected = path.resolve(this.root, 'instances', instance.id)
+      if (path.resolve(instance.directory) !== expected) throw ErrDeleteNotSafe
+      if (!this.runtime) throw ErrDeleteNotSafe
+      const status = await this.runtime.status(instance)
+      if (!isStopped(status.state)) {
+        await this.runtime.stop(instance)
+        if (!isStopped((await this.runtime.status(instance)).state)) throw ErrDeleteNotSafe
+      }
+      await this.units?.unregister(instance)
+      validateDeletePath(this.root, instance.directory)
+      await fsp.rm(instance.directory, { recursive: true, force: true })
+      this.store.deleteKeyBindingsForInstance?.(instance.id)
+      this.store.deleteInstance(instance.id)
+      this.runtimeLog('info', instance, 'automatic upgrade backup removed', { source_instance_id: metadata.source_id, reason: metadata.reason })
+      return instance
+    })
+  }
   writeInitialConfig(instance, secret) {
     const file = path.join(instance.directory, 'config.yaml'); const temporary = `${file}.tmp`
     // CPA disables the management API when secret-key is empty.  Keep the

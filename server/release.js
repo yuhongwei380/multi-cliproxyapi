@@ -299,7 +299,7 @@ export class VersionService {
 export const UpgradeState = Object.freeze({ PREPARED: 'prepared', STOPPING_OLD: 'stopping-old', OLD_STOPPED: 'old-stopped', STARTING_NEW: 'starting-new', COMMITTED: 'committed', RESTORING_OLD: 'restoring-old', ROLLED_BACK: 'rolled-back', BLOCKED: 'blocked' })
 
 export class UpgradeService {
-  constructor({ store, instances, runtime, activator = null, units = null, prepareVersion = null, clock = () => new Date() } = {}) { this.store = store; this.instances = instances; this.runtime = runtime; this.activator = activator; this.units = units; this.prepareVersion = prepareVersion; this.clock = clock }
+  constructor({ store, instances, runtime, activator = null, units = null, prepareVersion = null, verifyInstance = null, clock = () => new Date() } = {}) { this.store = store; this.instances = instances; this.runtime = runtime; this.activator = activator; this.units = units; this.prepareVersion = prepareVersion; this.verifyInstance = verifyInstance; this.clock = clock }
   persist(state) { state.updated_at = this.clock().toISOString(); this.store.saveUpgradeState(state) }
   async upgrade(newVersion) {
     return this.instances.operations.run('global', async () => {
@@ -309,7 +309,7 @@ export class UpgradeService {
       if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
       let oldState = null
       try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
-      if (!instances.length || instances.every(item => item.version === newVersion)) return
+      if (!instances.length || instances.every(item => item.version === newVersion)) return { verified: false, verification_skipped: true, checked: [], backups_removed: true }
       const oldVersion = instances[0].version
       // Complete network-dependent preparation before disrupting any process.
       // Keep the old version ready too, so rollback needs no network access.
@@ -317,19 +317,36 @@ export class UpgradeService {
         for (const version of new Set(instances.map(item => item.version))) await this.prepareVersion(version)
         await this.prepareVersion(newVersion)
       }
-      await this.instances.automaticBackups(instances.map(instance => instance.id), `CPA ${newVersion}`)
-      const state = { id: 'singleton', state: UpgradeState.PREPARED, old_version: oldVersion, new_version: newVersion, original_running: [], original_desired: {}, instance_stages: {}, message: '', updated_at: this.clock().toISOString() }
+      const backups = (await this.instances.automaticBackups(instances.map(instance => instance.id), `CPA ${newVersion}`)) || []
+      const state = { id: 'singleton', state: UpgradeState.PREPARED, old_version: oldVersion, new_version: newVersion, original_running: [], original_desired: {}, instance_stages: {}, backup_instances: backups.map(backup => backup.id), message: '', updated_at: this.clock().toISOString() }
+      const checked = []
       try {
+        this.persist(state)
         for (const instance of instances) { state.original_desired[instance.id] = { desired_state: instance.desired_state, version: instance.version }; const status = await this.runtime.status(instance); if (status.state === ObservedState.UNKNOWN) throw new Error(`inspect ${instance.id}: runtime state is unknown`); state.instance_stages[instance.id] = status.state; if (instance.desired_state === DesiredState.RUNNING && [ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) state.original_running.push(instance.id) }
         this.persist(state); state.state = UpgradeState.STOPPING_OLD; this.persist(state)
         for (const instance of instances) { const status = await this.runtime.status(instance); if (!isStopped(status.state)) { state.instance_stages[instance.id] = 'stopping-old'; this.persist(state); await this.runtime.stop(instance); const stopped = await this.runtime.status(instance); if (!isStopped(stopped.state)) throw new Error(`confirm ${instance.id} stopped`) } state.instance_stages[instance.id] = 'old-stopped'; this.persist(state) }
         state.state = UpgradeState.OLD_STOPPED; this.persist(state); if (this.activator) await this.activator.activateVersion(newVersion)
         for (const instance of instances) { const current = this.store.getInstance(instance.id); const updated = { ...current, version: newVersion, revision: current.revision + 1, updated_at: this.clock().toISOString() }; await this.instances.prepareBinary(updated); this.store.updateInstance(updated, current.revision); await this.units?.install(updated); state.instance_stages[instance.id] = 'new-configured'; this.persist(state) }
         state.state = UpgradeState.STARTING_NEW; this.persist(state)
-        for (const id of state.original_running) { const instance = this.store.getInstance(id); state.instance_stages[id] = 'starting-new'; this.persist(state); await this.instances.prepareBinary(instance); await this.runtime.start(instance); const status = await this.runtime.status(instance); if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`confirm ${id} ready`); state.instance_stages[id] = 'new-running'; this.persist(state) }
-        state.state = UpgradeState.COMMITTED; this.persist(state); this.store.clearUpgradeState(); this.instances.defaultVersion = newVersion
+        for (const id of state.original_running) { const instance = this.store.getInstance(id); state.instance_stages[id] = 'starting-new'; this.persist(state); await this.instances.prepareBinary(instance); await this.runtime.start(instance); const status = await this.runtime.status(instance); if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`confirm ${id} ready`); if (this.verifyInstance) { state.instance_stages[id] = 'verifying-service'; this.persist(state); checked.push({ id, ...(await this.verifyInstance(instance)) }) }; state.instance_stages[id] = 'new-running'; this.persist(state) }
+        state.state = UpgradeState.COMMITTED; this.persist(state); const cleanup = this.verifyInstance ? await this.removeBackups(state) : { failures: [] }; this.store.clearUpgradeState(); this.instances.defaultVersion = newVersion
+        return { verified: Boolean(this.verifyInstance) && checked.length > 0 && checked.length === state.original_running.length, checked, verification_skipped: checked.length === 0, backups_removed: cleanup.failures.length === 0 }
       } catch (error) { await this.rollback(state, instances, error); throw error }
     })
+  }
+  async removeBackups(state) {
+    const failures = []
+    for (const id of state.backup_instances || []) {
+      try { await this.instances.removeAutomaticBackup(id) } catch (error) {
+        if (error?.code === 'ERR_NOT_FOUND') continue
+        failures.push(`${id}: ${error.message}`)
+      }
+    }
+    if (failures.length) {
+      state.message = [state.message, `automatic backup cleanup failed: ${failures.join('; ')}`].filter(Boolean).join('; ')
+      this.persist(state)
+    }
+    return { failures }
   }
   async rollback(state, originalInstances, cause) {
     state.state = UpgradeState.RESTORING_OLD; state.message = cause.message; this.persist(state); let blocked = null
@@ -348,7 +365,8 @@ export class UpgradeService {
   async recover() {
     return this.instances.operations.run('global', async () => {
     let state; try { state = this.store.getUpgradeState() } catch (error) { if (error.code === 'ERR_NOT_FOUND') return; throw error }
-    if ([UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(state.state)) { this.store.clearUpgradeState(); return }
+    if (state.state === UpgradeState.COMMITTED) { if (this.verifyInstance) await this.removeBackups(state); this.store.clearUpgradeState(); return }
+    if (state.state === UpgradeState.ROLLED_BACK) { this.store.clearUpgradeState(); return }
     const recordedStageIds = Object.keys(state.instance_stages || {}); const recordedIds = new Set(recordedStageIds.length ? recordedStageIds : Object.keys(state.original_desired || {})); const instances = this.store.listInstances().filter(instance => !recordedIds.size || recordedIds.has(instance.id)); await this.rollback(state, instances, new Error('upgrade interrupted; recovered to old version'))
     })
   }

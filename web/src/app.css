@@ -628,6 +628,8 @@ body { background: var(--bg-secondary); }
 .settings-actions .button { min-height: 40px; font-size: 13px; }
 .settings-inline-error { margin: 0 0 14px; padding: 10px 12px; border: 1px solid rgb(189 91 76 / 35%); border-radius: 8px; background: var(--red-soft); color: var(--red); font-size: 12px; }
 .quota-instance-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.quota-instance-selector { max-width: 520px; margin: 18px 0 4px; }
+.quota-instance-selector .dropdown-picker { width: 100%; }
 .quota-instance-card { min-width: 0; padding: 18px 16px; border: 1px solid var(--line); border-radius: 15px; background: var(--floating-surface); box-shadow: none; }
 .quota-instance-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .quota-instance-head > div { min-width: 0; overflow-wrap: anywhere; }

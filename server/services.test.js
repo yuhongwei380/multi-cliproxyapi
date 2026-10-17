@@ -291,20 +291,88 @@ test('quota webhook signing secrets are encrypted and never returned by settings
   const stored = f.store.getQuotaSettings({ includeSecretCiphertext: true }); assert.notEqual(stored.webhook_signing_secret_ciphertext, ''); assert.equal(f.secrets.decrypt(stored.webhook_signing_secret_ciphertext), 'ding-secret'); f.store.close()
 })
 
-test('quota test notifications use the saved global or per-instance webhook settings', async () => {
+test('quota test notifications fetch current weekly quotas and share the normal message format', async () => {
   const f = fixture()
-  const created = await f.instances.create({ name: 'quota-test', port: await port(), management_password: 'child management password' })
-  const sent = []
-  const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clients: async () => ({ listAccounts: async () => [] }), notifier: { notify: async (settings, message) => { sent.push({ settings, message }); return true } } })
-  await assert.rejects(() => quota.sendTestNotification(), /钉钉机器人通知未启用/)
-  quota.updateSettings({ webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global' })
-  assert.deepEqual(await quota.sendTestNotification(), { status: 'sent', instance_id: '' })
-  assert.equal(sent.length, 1); assert.match(sent[0].message, /全局配置/); assert.equal(sent[0].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=global')
-  quota.updateNotificationSettings(created.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=instance' })
-  assert.deepEqual(await quota.sendTestNotification(created.id), { status: 'sent', instance_id: created.id })
-  assert.equal(sent.length, 2); assert.match(sent[1].message, /quota-test/); assert.equal(sent[1].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=instance')
-  await assert.rejects(() => quota.sendTestNotification('missing-instance'))
-  f.store.close()
+  try {
+    const created = await f.instances.create({ name: 'quota-test', port: await port(), management_password: 'child management password' })
+    await f.instances.start(created.id)
+    const sent = []
+    let now = new Date('2026-10-13T14:00:00Z')
+    const client = new StaticClient({ accounts: [{ id: 'alice', provider: 'codex' }], quotas: { alice: { values: [{ name: '周限额', remaining: 80, total: 100, reset_at: '2026-10-20T08:00:00Z' }] } } })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clock: () => now, clients: async () => client, notifier: { notify: async (settings, message) => { sent.push({ settings, message }); return true } } })
+    await assert.rejects(() => quota.sendTestNotification(), /钉钉机器人通知未启用/)
+    quota.updateSettings({ instance_ids: [], webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global' })
+    await assert.rejects(() => quota.sendTestNotification(), /先选择下发到 CPA 实例/)
+    quota.updateSettings({ instance_ids: [created.id] })
+    assert.deepEqual(await quota.sendTestNotification(), { status: 'sent', instance_id: '' })
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0].message, '【测试消息】CLIProxyAPI 配额告警\nquota-test / codex alice / 周限额：剩余 80.0%，额度刷新时间 2026-10-20 16:00（UTC+8）')
+    assert.equal(sent[0].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=global')
+    client.quotas.alice.values[0] = { name: '周限额', remaining: 10, total: 100, reset_at: '2026-10-21T08:00:00Z' }
+    now = new Date('2026-10-13T02:00:00Z')
+    quota.updateNotificationSettings(created.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=instance' })
+    assert.deepEqual(await quota.sendTestNotification(created.id), { status: 'sent', instance_id: created.id })
+    assert.equal(sent.length, 2)
+    assert.match(sent[1].message, /周限额：剩余 10\.0%，额度刷新时间 2026-10-21 16:00/)
+    assert.equal(sent[1].settings.webhook_url, 'https://oapi.dingtalk.com/robot/send?access_token=instance')
+    await quota.refreshInstance(created.id)
+    assert.equal(sent.length, 3, 'testing must not send normal alerts or consume their cooldown')
+    assert.equal(sent[1].message, '【测试消息】' + sent[2].message)
+    await quota.sendTestNotification(created.id)
+    assert.equal(sent.length, 4, 'a normal alert cooldown must not suppress manual tests')
+    await assert.rejects(() => quota.sendTestNotification('missing-instance'))
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('global quota tests fetch only selected instances and include each account weekly window', async () => {
+  const f = fixture()
+  try {
+    const selected = await f.instances.create({ name: 'selected', port: await port() })
+    const override = await f.instances.create({ name: 'override', port: await port() })
+    await f.instances.create({ name: 'unselected', port: await port() })
+    await f.instances.start(selected.id)
+    const visited = [], messages = []
+    const client = new StaticClient({ accounts: [{ id: 'a', provider: 'claude' }, { id: 'b', provider: 'kimi' }], quotas: {
+      a: { values: [{ name: '5 小时限额', remaining: 1, total: 100 }, { name: '周限额', remaining: 75, total: 100, reset_at: '2026-10-20T08:00:00Z' }, { name: 'Sonnet 周限额', remaining: 50, total: 100, reset_at: '2026-10-21T08:00:00Z' }] },
+      b: { values: [{ name: '周限额', remaining: 60, total: 100, reset_at: '2026-10-22T08:00:00Z' }] },
+    } })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clients: async instance => { visited.push(instance.id); return client }, notifier: { notify: async (_, message) => { messages.push(message); return true } } })
+    quota.updateSettings({ instance_ids: [selected.id, override.id], webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global' })
+    quota.updateNotificationSettings(override.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=override' })
+    await quota.sendTestNotification()
+    assert.deepEqual(visited, [selected.id])
+    assert.equal(messages.length, 1)
+    assert.match(messages[0], /claude a \/ 周限额：剩余 75\.0%，额度刷新时间 2026-10-20 16:00/)
+    assert.match(messages[0], /claude a \/ Sonnet 周限额：剩余 50\.0%，额度刷新时间 2026-10-21 16:00/)
+    assert.match(messages[0], /kimi b \/ 周限额：剩余 60\.0%，额度刷新时间 2026-10-22 16:00/)
+    assert(!messages[0].includes('5 小时限额'))
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('quota test messages report unavailable live data without presenting cached quotas as current', async () => {
+  const f = fixture()
+  try {
+    const instance = await f.instances.create({ name: 'failed-account', port: await port() })
+    await f.instances.start(instance.id)
+    const messages = []
+    const client = new StaticClient({ accounts: [{ id: 'a' }], quotas: { a: { values: [{ name: '周限额', remaining: 90, total: 100, reset_at: '2026-10-21T08:00:00Z' }] } } })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clients: async () => client, notifier: { notify: async (_, message) => { messages.push(message); return true } } })
+    quota.updateNotificationSettings(instance.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=test' })
+    await quota.refreshInstance(instance.id)
+    client.fetchQuota = async () => { throw new Error('unavailable') }
+    await quota.sendTestNotification(instance.id)
+    assert.match(messages[0], /周限额：额度读取失败，额度刷新时间未提供/)
+    assert(!messages[0].includes('90.0%'))
+    client.fetchQuota = async () => ({ values: [{ name: '月限额', remaining: 90, total: 100 }] })
+    await quota.sendTestNotification(instance.id)
+    assert.match(messages[1], /周限额：未提供周额度，额度刷新时间未提供/)
+    client.accounts = []
+    await quota.sendTestNotification(instance.id)
+    assert.match(messages[2], /未配置 OAuth 账户/)
+    await f.instances.stop(instance.id)
+    await assert.rejects(() => quota.sendTestNotification(instance.id), { status: 409 })
+    assert.equal(messages.length, 3)
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 
 test('legacy DingTalk access tokens migrate from plaintext to encrypted storage', () => {

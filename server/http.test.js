@@ -169,15 +169,17 @@ test('per-instance quota notification settings are protected and independently c
 test('quota test notification endpoints are authenticated and audited', async () => {
   const f = await fixture(); try {
     const instance = await f.instances.create({ name: 'test-message-http', port: await freePort() })
+    await f.instances.start(instance.id)
+    f.quota.clients = async () => ({ listAccounts: async () => [{ id: 'oauth-http', provider: 'codex' }], fetchQuota: async () => ({ values: [{ name: '周限额', remaining: 75, total: 100, reset_at: '2026-10-21T08:00:00Z' }] }) })
     const sent = []; f.quota.notifier = { notify: async (settings, message) => { sent.push({ settings, message }); return true } }
     const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
     assert.equal((await fetch(`${f.url}/api/quota/settings/test`, { method: 'POST' })).status, 401)
     assert.equal((await fetch(`${f.url}/api/quota/notifications/${instance.id}/test`, { method: 'POST' })).status, 401)
     const disabled = await fetch(`${f.url}/api/quota/settings/test`, { method: 'POST', headers }); assert.equal(disabled.status, 400); assert.match((await disabled.json()).error, /未启用/)
-    const configured = await fetch(`${f.url}/api/quota/settings`, { method: 'PATCH', headers, body: JSON.stringify({ webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global-token' }) }); assert.equal(configured.status, 200)
+    const configured = await fetch(`${f.url}/api/quota/settings`, { method: 'PATCH', headers, body: JSON.stringify({ instance_ids: [instance.id], webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global-token' }) }); assert.equal(configured.status, 200)
     const globalTest = await fetch(`${f.url}/api/quota/settings/test`, { method: 'POST', headers }); assert.equal(globalTest.status, 200); assert.deepEqual(await globalTest.json(), { status: 'sent', instance_id: '' })
     const instanceTest = await fetch(`${f.url}/api/quota/notifications/${instance.id}/test`, { method: 'POST', headers }); assert.equal(instanceTest.status, 200); assert.deepEqual(await instanceTest.json(), { status: 'sent', instance_id: instance.id })
-    assert.equal(sent.length, 2); assert.match(sent[0].message, /全局配置/); assert.match(sent[1].message, /test-message-http/)
+    assert.equal(sent.length, 2); assert.equal(sent[0].message, sent[1].message); assert.match(sent[0].message, /^【测试消息】CLIProxyAPI 配额告警\ntest-message-http \/ codex oauth-http \/ 周限额：剩余 75\.0%，额度刷新时间 2026-10-21 16:00（UTC\+8）$/)
     assert.ok(f.store.listAuditLogs().some(item => item.action === 'quota.settings.test' && item.outcome === 'success'))
     assert.ok(f.store.listAuditLogs().some(item => item.action === 'quota.notification.test' && item.resource_id === instance.id && item.outcome === 'success'))
   } finally { await closeFixture(f) }

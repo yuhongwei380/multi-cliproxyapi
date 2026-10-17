@@ -158,13 +158,56 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   expect(screen.getByRole('progressbar', { name: 'oauth-1 5 小时额度剩余' })).toHaveAttribute('aria-valuenow', '12')
   expect(screen.getByRole('progressbar', { name: 'oauth-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()
+  const cardReset = document.querySelector('.quota-summary-reset time')
+  expect(cardReset).toHaveAttribute('datetime', '2030-09-19T08:09:00Z')
+  expect(cardReset).toHaveTextContent(/09\/19\d{2}:\d{2}/)
   await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(await screen.findByText('周限额')).toBeInTheDocument()
-  expect(within(screen.getByRole('dialog', { name: 'OAuth 额度详情' })).getByText('31%')).toBeInTheDocument()
-  expect(screen.getByText('GPT-5.3-Codex-Spark 5 小时限额')).toBeInTheDocument()
+  const quotaDialog = screen.getByRole('dialog', { name: 'OAuth 额度详情' })
+  expect(within(quotaDialog).getByText('31%')).toBeInTheDocument()
+  expect(within(quotaDialog).getByText('GPT-5.3-Codex-Spark 5 小时限额')).toBeInTheDocument()
   expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.getByRole('progressbar', { name: 'GPT-5.3-Codex-Spark 5 小时限额 剩余配额' })).toHaveAttribute('aria-valuenow', '100')
-  expect(screen.getByText(/09\/19/)).toBeInTheDocument()
+  expect(within(quotaDialog).getByText(/09\/19/)).toBeInTheDocument()
+  const links = screen.getAllByRole('link')
+  const instancesIndex = links.findIndex(link => link.getAttribute('href') === '#instances')
+  expect(links[instancesIndex + 1]).toHaveTextContent('额度观察')
+  expect(screen.queryByRole('link', { name: '配额观察' })).not.toBeInTheDocument()
+})
+
+test('keeps reset times attached to their accounts and windows in cards, dialogs and quota observation', async () => {
+  const snapshots = [
+    { account_id: 'account-a', provider: 'codex', status: 'ok', values: [
+      { name: '5 小时限额', remaining: 10, total: 100, unit: '%', reset_at: '2030-09-19T08:00:00Z' },
+      { name: '周限额', remaining: 30, total: 100, unit: '%', reset_at: '2030-09-23T08:00:00Z' },
+    ] },
+    { account_id: 'account-b', provider: 'kimi', status: 'stale', values: [
+      { name: '周限额', remaining: 40, total: 100, unit: '%', reset_at: '2030-09-25T08:00:00Z' },
+      { name: '月限额', remaining: 50, total: 100, unit: '%', reset_at: 'invalid' },
+    ] },
+  ]
+  vi.spyOn(globalThis, 'fetch').mockImplementation(url => {
+    const route = String(url)
+    if (route.endsWith('/auth/status')) return response({ authenticated: true, username: 'admin' }) as any
+    if (route.endsWith('/instances')) return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any
+    if (route.endsWith('/quotas')) return response({ items: snapshots }) as any
+    return response(route.endsWith('/state') ? { state: 'idle' } : { items: [] }) as any
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('account-a')
+  const accountRow = (name: string) => screen.getByText(name).closest('.quota-summary-row')!
+  expect([...accountRow('account-a').querySelectorAll('time')].map(time => time.dateTime)).toEqual(['2030-09-19T08:00:00Z', '2030-09-23T08:00:00Z'])
+  expect(accountRow('account-b').querySelector('time')).toHaveAttribute('datetime', '2030-09-25T08:00:00Z')
+  expect(accountRow('account-b')).toHaveTextContent('未提供重置时间')
+  await user.click(screen.getByRole('button', { name: '额度详情' }))
+  const dialog = screen.getByRole('dialog', { name: 'OAuth 额度详情' })
+  expect([...dialog.querySelectorAll('time')].map(time => time.dateTime)).toEqual(['2030-09-19T08:00:00Z', '2030-09-23T08:00:00Z', '2030-09-25T08:00:00Z'])
+  expect(dialog).not.toHaveTextContent('Invalid Date')
+  await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+  await user.click(screen.getByRole('link', { name: '额度观察' }))
+  expect([...document.querySelectorAll('.quota-window time')].map(time => time.getAttribute('datetime'))).toEqual(['2030-09-19T08:00:00Z', '2030-09-23T08:00:00Z', '2030-09-25T08:00:00Z'])
+  expect(screen.getByText('未提供重置时间')).toBeInTheDocument()
 })
 
 test('keeps each summary limit independent when a window is missing or cached', async () => {
@@ -268,7 +311,7 @@ test('reports partial quota refresh failures while keeping successful instances 
   const user = userEvent.setup()
   render(<App />)
   await screen.findByText('one')
-  await user.click(screen.getByRole('link', { name: '配额观察' }))
+  await user.click(screen.getByRole('link', { name: '额度观察' }))
   await user.click(screen.getByRole('button', { name: '手动查看配额' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('配额刷新完成：1 个实例成功，1 个实例失败')
   expect(screen.getByText('primary')).toBeInTheDocument()
@@ -616,11 +659,11 @@ test('loads quota settings on demand and saves the global rules to the selected 
   await screen.findByText('one')
   await user.click(screen.getByRole('link', { name: '定时额度通知' }))
   expect(await screen.findByRole('heading', { name: '定时额度通知' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: '全局配额观察配置' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '全局额度观察配置' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: '下发到 CPA 实例' })).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: '单独配置' })).toBeInTheDocument()
   expect(screen.getByText('通知工作时间（UTC+8）')).toBeInTheDocument()
-  const globalPanel = screen.getByRole('region', { name: '全局配额观察配置设置' })
+  const globalPanel = screen.getByRole('region', { name: '全局额度观察配置设置' })
   expect(within(globalPanel).queryByRole('checkbox', { name: /one/ })).not.toBeInTheDocument()
   await user.click(within(globalPanel).getByRole('combobox', { name: /选择下发到 CPA 实例/ }))
   await user.click(within(globalPanel).getByRole('option', { name: /one/ }))
@@ -644,6 +687,35 @@ test('loads quota settings on demand and saves the global rules to the selected 
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ instance_ids: ['cpa_1'], refresh_interval_minutes: 120, webhook_enabled: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret: 'ding-secret' })
 })
 
+test('sends a DingTalk test message from the global panel and from each instance override', async () => {
+  const fetchMock = quotaFetchMock({ notifications: [QUOTA_OVERRIDE] })
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('one')
+  await user.click(screen.getByRole('link', { name: '定时额度通知' }))
+  await screen.findByRole('heading', { name: '全局额度观察配置' })
+  fetchMock.mockImplementationOnce(() => response({ status: 'sent', instance_id: '' }) as any)
+  await user.click(within(screen.getByRole('region', { name: '全局额度观察配置设置' })).getByRole('button', { name: '发送测试消息' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/settings/test' && init?.method === 'POST')).toBe(true))
+  expect(await screen.findByText('测试消息已发送，请到钉钉群确认是否收到。')).toBeInTheDocument()
+  fetchMock.mockImplementationOnce(() => response({ status: 'sent', instance_id: 'cpa_1' }) as any)
+  await user.click(within(screen.getByRole('article')).getByRole('button', { name: '发送测试消息' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/notifications/cpa_1/test' && init?.method === 'POST')).toBe(true))
+})
+
+test('reports a failed test message without leaving the page', async () => {
+  const fetchMock = quotaFetchMock()
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('one')
+  await user.click(screen.getByRole('link', { name: '定时额度通知' }))
+  await screen.findByRole('heading', { name: '全局额度观察配置' })
+  fetchMock.mockImplementationOnce(() => response({ error: '全局钉钉机器人通知未启用' }, 400) as any)
+  await user.click(within(screen.getByRole('region', { name: '全局额度观察配置设置' })).getByRole('button', { name: '发送测试消息' }))
+  expect(await screen.findByText('全局钉钉机器人通知未启用')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '全局额度观察配置' })).toBeInTheDocument()
+})
+
 test('creates and removes a per-instance quota override from the dialog', async () => {
   const state: { notifications?: unknown[] } = {}
   const fetchMock = quotaFetchMock(state)
@@ -651,7 +723,7 @@ test('creates and removes a per-instance quota override from the dialog', async 
   render(<App />)
   await screen.findByText('one')
   await user.click(screen.getByRole('link', { name: '定时额度通知' }))
-  await screen.findByRole('heading', { name: '全局配额观察配置' })
+  await screen.findByRole('heading', { name: '全局额度观察配置' })
   expect(screen.getByText(/当前没有单独配置/)).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: '+ 新增实例配置' }))
   const dialog = await screen.findByRole('dialog')

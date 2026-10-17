@@ -540,6 +540,14 @@ function quotaNotificationKey(instanceId, snapshot, value) {
   return JSON.stringify([instanceId, snapshot.account_id || '', snapshot.provider || '', value?.name || '默认窗口'])
 }
 
+function formatQuotaResetNotice(resetAt) {
+  const millis = Date.parse(resetAt || '')
+  if (!Number.isFinite(millis)) return '，额度刷新时间未提供'
+  const utc8 = new Date(millis + 8 * 60 * 60 * 1000)
+  const pad = value => String(value).padStart(2, '0')
+  return `，额度刷新时间 ${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())} ${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}（UTC+8）`
+}
+
 export function isQuotaNotificationWorkTime(value = new Date()) {
   const millis = value instanceof Date ? value.getTime() : new Date(value).getTime()
   if (!Number.isFinite(millis)) return false
@@ -630,6 +638,16 @@ export class QuotaService {
     this.wakeScheduler?.()
     return this.publicInstanceNotificationSettings(instance)
   }
+  async sendTestNotification(instanceId = '') {
+    const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.settingsWithSecret()
+    if (!settings.webhook_enabled) throw Object.assign(new Error(instanceId ? '该实例的钉钉机器人通知未启用' : '全局钉钉机器人通知未启用'), { status: 400 })
+    if (!settings.webhook_url) throw Object.assign(new Error('尚未配置钉钉机器人 Webhook 地址'), { status: 400 })
+    const label = instanceId ? `实例 ${settings.instance_name}（${settings.instance_id}）` : '全局配置'
+    const sentAt = new Date((this.clock() instanceof Date ? this.clock().getTime() : Date.now()) + 8 * 60 * 60 * 1000).toISOString().slice(0, 16).replace('T', ' ')
+    const sent = await this.notifier.notify(settings, `[CPA 总控] 配额通知测试消息\n${label}的 Webhook 配置正常，说明钉钉机器人可以正常接收告警。\n发送时间：${sentAt}（UTC+8）`)
+    if (!sent) throw Object.assign(new Error('测试消息未发送，请检查 Webhook 配置'), { status: 502 })
+    return { status: 'sent', instance_id: instanceId || '' }
+  }
   updateSettings(input = {}) {
     const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url'); const hasInstanceIds = Object.prototype.hasOwnProperty.call(input, 'instance_ids')
     let instanceIds = current.instance_ids || []
@@ -695,7 +713,7 @@ export class QuotaService {
           const low = results.filter(snapshot => snapshot.status === 'ok').flatMap(snapshot => (snapshot.values || []).map(value => ({ snapshot, value, percent: quotaPercent(value) })).filter(item => item.percent !== null && item.percent < settings.alert_threshold_percent))
           const pendingNotifications = low.map(item => ({ ...item, key: quotaNotificationKey(instanceId, item.snapshot, item.value) })).filter(item => !this.notificationCoolingDown(item.key, alertAt))
           if (pendingNotifications.length && isQuotaNotificationWorkTime(new Date(attempt)) && this.notifier && settings.webhook_enabled && settings.webhook_url) {
-            const lines = pendingNotifications.map(item => `${instance.name} / ${item.snapshot.provider || 'OAuth'} / ${item.value.name || '默认窗口'}：剩余 ${item.percent.toFixed(1)}%`)
+            const lines = pendingNotifications.map(item => `${instance.name} / ${item.snapshot.provider || 'OAuth'} ${item.snapshot.account_id} / ${item.value.name || '默认窗口'}：剩余 ${item.percent.toFixed(1)}%${formatQuotaResetNotice(item.value.reset_at)}`)
             try {
               const delivered = await this.notifier.notify(settings, `CLIProxyAPI 配额告警\n${lines.join('\n')}`)
               if (delivered !== false) for (const item of pendingNotifications) this.rememberNotification(item.key, attempt)

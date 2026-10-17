@@ -695,7 +695,7 @@ body { background: var(--bg-secondary); }
 .quota-instance-card .quota-values { gap: 14px; margin-top: 12px; }
 .quota-instance-card .quota-window-title { font-size: 13px; }
 .quota-instance-card .quota-window-meta strong { font-size: 20px; }
-.quota-instance-card .quota-window-meta span { font-size: 11px; }
+.quota-instance-card .quota-window-meta span.quota-reset-time { font-size: 20px; }
 .quota-instance-card .quota-progress { height: 7px; }
 .quota-instance-head h2 { margin: 7px 0 3px; color: var(--ink); font-size: 21px; font-weight: 750; letter-spacing: -.04em; }
 .quota-instance-head p { margin: 0; color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
@@ -916,9 +916,9 @@ body { background: var(--bg-secondary); }
 .quota-window-title { overflow-wrap: anywhere; color: var(--muted); font-size: 16px; font-weight: 680; line-height: 1.3; }
 .quota-window-meta { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
 .quota-window-meta strong { color: var(--ink); font-size: 23px; font-weight: 780; letter-spacing: -.035em; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.quota-window-meta span { overflow: hidden; color: var(--quiet); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.quota-window-meta time { font-variant-numeric: tabular-nums; }
-.quota-window-meta i { font-style: normal; }
+.quota-window-meta span.quota-reset-time { display: grid; gap: 3px; min-width: 0; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 23px; font-weight: 750; line-height: 1.4; }
+.quota-window-meta time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.quota-reset-time > small, .quota-reset-unknown { font-size: 12px; font-weight: 600; }
 .quota-progress { height: 10px; overflow: hidden; border-radius: 999px; background: #ecebed; }
 .quota-progress span { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--green); transition: width .24s var(--ease-out); }
 .quota-progress.warning span { background: #e2aa10; }
@@ -929,7 +929,7 @@ body { background: var(--bg-secondary); }
   .quota-values { gap: 15px; margin-top: 13px; }
   .quota-window-title { font-size: 14px; }
   .quota-window-meta strong { font-size: 21px; }
-  .quota-window-meta span { font-size: 12px; }
+  .quota-window-meta span.quota-reset-time { font-size: 21px; }
   .quota-progress { height: 9px; }
 }
 
@@ -1042,16 +1042,23 @@ body { background: var(--bg-secondary); }
 .quota-summary-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; }
 .quota-summary-heading > strong { font-size: 12px; font-weight: 650; }
 .quota-summary-heading .button { min-height: 40px; padding-inline: 10px; font-size: 12px; }
-.quota-summary-columns, .quota-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 72px; gap: 8px; }
+.quota-summary-columns, .quota-summary-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px 88px; gap: 8px; }
 .quota-summary-columns { padding: 4px 0; color: var(--muted); font-size: 11px; }
 .quota-summary-columns > :not(:first-child) { text-align: right; white-space: nowrap; }
 .quota-summary-row { align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
 .quota-summary-account { min-width: 0; }
+.quota-summary.has-many-windows .quota-summary-account { grid-column: 1 / -1; }
+.quota-summary.has-many-windows .quota-summary-columns > :first-child { display: none; }
 .quota-summary-account > strong { display: block; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
 .quota-summary-account > small { display: block; margin-top: 2px; font-size: 11px; }
 .quota-summary-value { text-align: right; font-variant-numeric: tabular-nums; }
 .quota-summary-value > strong { font-size: 13px; }
 .quota-summary-value .quota-progress { height: 4px; margin-top: 4px; background: var(--bg-tertiary); }
+.quota-summary-reset { display: grid; gap: 2px; margin-top: 5px; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 14px; font-weight: 750; line-height: 1.4; }
+.quota-summary-reset > small { font-family: inherit; font-size: 11px; font-weight: 600; }
+.quota-summary-reset > time { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 4px; }
+.quota-summary-reset > time > span { white-space: nowrap; }
+.quota-summary-reset .quota-reset-unknown { overflow-wrap: anywhere; }
 .quota-detail-dialog { width: min(760px, calc(100vw - 32px)); max-height: 85dvh; padding: 24px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--floating-surface); color: var(--ink); }
 .quota-detail-dialog::backdrop { background: rgb(15 23 42 / 45%); }
 .quota-detail-dialog header { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
@@ -1065,7 +1072,7 @@ body { background: var(--bg-secondary); }
 .quota-detail-dialog .quota-values { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .quota-detail-dialog .quota-window-title { font-size: 13px; }
 .quota-detail-dialog .quota-window-meta { flex-wrap: wrap; }
-.quota-detail-dialog .quota-window-meta span { font-size: 11px; white-space: normal; }
+.quota-detail-dialog .quota-window-meta span.quota-reset-time { font-size: 23px; }
 .quota-detail-dialog .quota-progress { height: 6px; background: var(--bg-tertiary); }
 .quota-detail-dialog button:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 2px; }
 .dashboard-content:has(.instances-module), .dashboard-content:has(.quotas-module) { width: 100%; padding-inline: 24px; }
@@ -1455,79 +1462,108 @@ body { background: var(--bg-secondary); }
 
 /* 定时额度通知：紧凑排版。仅作用于该模块及其实例配置弹窗，
    与 /quota-notifications 之外的页面（含左侧导航）互不影响。 */
-.quota-notifications-module { padding-top: 18px; }
-.quota-notifications-module .module-heading { align-items: flex-start; margin-bottom: 14px; }
-.quota-notifications-module .module-heading .eyebrow { font-size: 9px; }
-.quota-notifications-module .module-heading h1 { margin: 4px 0 3px; font-size: 26px; letter-spacing: -.05em; }
-.quota-notifications-module .module-heading p { max-width: 720px; font-size: 12px; }
-.quota-notifications-module .module-heading .section-actions .button { min-height: 32px; padding-inline: 12px; font-size: 12px; }
-.quota-notifications-module .notification-work-hours { gap: 4px 12px; margin-bottom: 12px; padding: 9px 13px; border-radius: 10px; font-size: 12px; }
-.quota-notifications-module .notification-work-hours small { flex-basis: auto; font-size: 11px; }
+.quota-notifications-module { padding-top: 12px; }
+.quota-notifications-module .module-heading { align-items: flex-start; margin-bottom: 10px; }
+.quota-notifications-module .module-heading .eyebrow { font-size: 8.5px; }
+.quota-notifications-module .module-heading h1 { margin: 2px 0 2px; font-size: 22px; letter-spacing: -.05em; }
+.quota-notifications-module .module-heading p { max-width: 720px; font-size: 11.5px; line-height: 1.45; }
+.quota-notifications-module .module-heading .section-actions .button { min-height: 30px; padding-inline: 11px; font-size: 11.5px; }
+.quota-notifications-module .notification-work-hours { gap: 3px 10px; margin-bottom: 10px; padding: 7px 11px; border-radius: 9px; font-size: 11.5px; }
+.quota-notifications-module .notification-work-hours small { flex-basis: auto; font-size: 10.5px; }
 
-.quota-notifications-module .quota-settings-panel { margin-bottom: 14px; padding: 17px 19px 15px; border-radius: 12px; }
-.quota-notifications-module .settings-panel-head h2 { margin: 4px 0 2px; font-size: 18px; letter-spacing: -.035em; }
-.quota-notifications-module .settings-panel-head p { font-size: 12px; }
+.quota-notifications-module .quota-settings-panel { margin-bottom: 11px; padding: 13px 15px 12px; border-radius: 11px; }
+.quota-notifications-module .settings-panel-head .eyebrow { font-size: 8.5px; }
+.quota-notifications-module .settings-panel-head h2 { margin: 2px 0 2px; font-size: 16px; letter-spacing: -.035em; }
+.quota-notifications-module .settings-panel-head p { font-size: 11.5px; line-height: 1.45; }
 
-.quota-notifications-module .quota-target-section { margin-top: 14px; padding: 13px 15px 14px; border-radius: 10px; }
-.quota-notifications-module .quota-section-head { gap: 14px; }
-.quota-notifications-module .quota-target-section .quota-section-head h3 { margin-bottom: 3px; font-size: 14px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-section-head h3 { font-size: 15px; }
-.quota-notifications-module .quota-section-head p { font-size: 11.5px; }
-.quota-notifications-module .quota-count-pill { padding: 3px 8px; font-size: 10px; }
-.quota-notifications-module .quota-selection-chips { gap: 6px; }
-.quota-notifications-module .quota-selection-chip { gap: 7px; padding: 3px 5px 3px 10px; }
-.quota-notifications-module .quota-selection-chip strong { font-size: 11.5px; }
-.quota-notifications-module .quota-selection-chip > button { flex-basis: 16px; width: 16px; height: 16px; font-size: 11px; }
-.quota-notifications-module .quota-target-hint { font-size: 10.5px; }
-.quota-notifications-module .quota-target-empty { margin-top: 12px; padding: 14px; font-size: 12px; }
+.quota-notifications-module .quota-target-section { margin-top: 11px; padding: 10px 12px 11px; border-radius: 9px; }
+.quota-notifications-module .quota-section-head { gap: 12px; }
+.quota-notifications-module .quota-target-section .quota-section-head h3 { margin-bottom: 2px; font-size: 13px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-section-head h3 { font-size: 13.5px; }
+.quota-notifications-module .quota-section-head p { font-size: 11px; line-height: 1.45; }
+.quota-notifications-module .quota-count-pill { padding: 2px 7px; font-size: 9.5px; }
+.quota-notifications-module .quota-selection-chips { gap: 5px; margin-top: 7px; }
+.quota-notifications-module .quota-selection-chip { gap: 6px; padding: 2px 4px 2px 8px; }
+.quota-notifications-module .quota-selection-chip strong { font-size: 11px; }
+.quota-notifications-module .quota-selection-chip small { font-size: 10px; }
+.quota-notifications-module .quota-selection-chip > button { flex-basis: 15px; width: 15px; height: 15px; font-size: 10px; }
+.quota-notifications-module .quota-target-hint { font-size: 10px; line-height: 1.4; }
+.quota-notifications-module .quota-target-empty { margin-top: 10px; padding: 12px; font-size: 11.5px; }
 
 /* 表单控件与区块间距统一收紧 */
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-target-picker { gap: 8px; margin-top: 11px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-target-picker { gap: 7px; margin-top: 9px; }
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-target-picker .dropdown-picker,
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-instance-selector-field .dropdown-picker { height: 38px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-target-picker .dropdown-trigger { font-size: 12.5px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-menu-options { gap: 1px; padding: 4px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-option { min-height: 32px; padding: 6px 8px; font-size: 12px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-menu-foot { padding: 6px 8px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-menu-foot-actions button { min-height: 24px; padding: 0 9px; font-size: 10.5px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-instance-selector-field .dropdown-picker { height: 34px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-target-picker .dropdown-trigger { font-size: 12px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-menu-options { gap: 1px; padding: 3px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-option { min-height: 30px; padding: 5px 7px; font-size: 11.5px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-menu-foot { padding: 5px 7px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .dropdown-menu-foot-actions button { min-height: 22px; padding: 0 8px; font-size: 10px; }
 
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid { gap: 16px; margin-top: 14px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid { gap: 10px 16px; margin-top: 11px; }
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid > label,
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field { gap: 5px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field { gap: 4px; }
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field-label,
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid > label { font-size: 12px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid > label { font-size: 11.5px; }
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid input[type="number"],
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field input[type="url"],
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field input[type="password"],
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field input[type="text"],
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field .password-field input { height: 38px; font-size: 12.5px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field .password-field input { height: 34px; font-size: 12px; }
 :is(.quota-notifications-module, .quota-instance-config-dialog) .quota-rules-grid small,
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field small { font-size: 10.5px; line-height: 1.4; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-field small { font-size: 10px; line-height: 1.35; }
 
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-webhook-section { gap: 12px; margin-top: 15px; padding-top: 13px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-webhook-fields { gap: 12px 18px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-enable-toggle { padding: 6px 11px; font-size: 12px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-signing-switch .checkbox-label { min-height: 38px; padding: 0 12px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-instance-identity { margin-top: 14px; padding: 10px 13px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-instance-dialog-actions { margin-top: 14px; }
-:is(.quota-notifications-module, .quota-instance-config-dialog) .dialog-actions .button { min-height: 34px; padding-inline: 13px; font-size: 12.5px; }
-.quota-notifications-module .settings-actions { margin-top: 14px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-webhook-section { gap: 9px; margin-top: 11px; padding-top: 10px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-webhook-fields { gap: 9px 14px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-enable-toggle { padding: 4px 10px; font-size: 11.5px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-signing-switch .checkbox-label { min-height: 34px; padding: 0 11px; font-size: 11.5px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-instance-identity { margin-top: 11px; padding: 8px 11px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .quota-instance-dialog-actions { margin-top: 11px; }
+:is(.quota-notifications-module, .quota-instance-config-dialog) .dialog-actions .button { min-height: 32px; padding-inline: 12px; font-size: 12px; }
+.quota-notifications-module .settings-actions { margin-top: 11px; }
 
-.quota-notifications-module .notification-instance-section { margin-top: 16px; padding-top: 14px; }
-.quota-notifications-module .notification-instance-toolbar { margin-bottom: 10px; gap: 16px; }
-.quota-notifications-module .notification-instance-toolbar h2 { margin: 4px 0 2px; font-size: 18px; }
-.quota-notifications-module .notification-instance-toolbar p { font-size: 11.5px; }
-.quota-notifications-module .notification-instance-toolbar .button { min-height: 32px; font-size: 12px; }
-.quota-notifications-module .notification-config-list { gap: 7px; }
-.quota-notifications-module .notification-config-row { gap: 14px; padding: 10px 13px; border-radius: 10px; }
-.quota-notifications-module .notification-config-row > div { gap: 2px; }
-.quota-notifications-module .notification-config-row > div > span { font-size: 10px; }
-.quota-notifications-module .notification-config-row > div > strong { font-size: 12.5px; }
-.quota-notifications-module .notification-config-row .button { min-height: 30px; padding-inline: 11px; font-size: 12px; }
-.quota-notifications-module .quota-empty-message { margin-top: 10px; padding: 13px; font-size: 12px; }
-.quota-notifications-module .settings-inline-error { margin-bottom: 12px; padding: 10px 13px; font-size: 12px; }
+/* 实例配置弹窗：收紧内边距与标题区 */
+.quota-instance-config-dialog { width: min(600px, 100%); max-height: calc(100vh - 32px); padding: 18px 20px 16px; border-radius: 12px; }
+.quota-instance-config-dialog .eyebrow { font-size: 8.5px; }
+.quota-instance-config-dialog > h2 { margin: 3px 0 3px; font-size: 17px; }
+.quota-instance-config-dialog > p { font-size: 11.5px; line-height: 1.45; }
+.quota-instance-config-dialog .dialog-close { top: 7px; right: 9px; }
+.quota-instance-config-dialog .quota-instance-selector-field { margin-top: 10px; }
+
+.quota-notifications-module .notification-instance-section { margin-top: 12px; padding-top: 11px; }
+.quota-notifications-module .notification-instance-toolbar { margin-bottom: 8px; gap: 14px; }
+.quota-notifications-module .notification-instance-toolbar h2 { margin: 2px 0 2px; font-size: 16px; }
+.quota-notifications-module .notification-instance-toolbar p { font-size: 11px; line-height: 1.45; }
+.quota-notifications-module .notification-instance-toolbar .button { min-height: 30px; font-size: 11.5px; }
+.quota-notifications-module .notification-config-list { gap: 6px; }
+.quota-notifications-module .notification-config-row { gap: 12px; padding: 8px 11px; border-radius: 9px; }
+.quota-notifications-module .notification-config-row > div { gap: 1px; }
+.quota-notifications-module .notification-config-row > div > span { font-size: 9.5px; }
+.quota-notifications-module .notification-config-row > div > strong { font-size: 12px; }
+.quota-notifications-module .notification-config-row .button { min-height: 28px; padding-inline: 10px; font-size: 11.5px; }
+.quota-notifications-module .quota-empty-message { margin-top: 8px; padding: 11px; font-size: 11.5px; }
+.quota-notifications-module .settings-inline-error { margin-bottom: 10px; padding: 8px 11px; font-size: 11.5px; }
+.quota-notifications-module .settings-inline-notice { margin: 0 0 10px; padding: 8px 11px; border: 1px solid rgb(8 116 67 / 30%); border-radius: 8px; background: var(--green-soft); color: #087443; font-size: 11.5px; }
+.quota-notifications-module .notification-config-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
+/* 全局配置与单独配置并排两列：窄屏仍为上下堆叠 */
+.quota-notification-columns { display: grid; gap: 11px; }
+@media (min-width: 1200px) {
+  .quota-notification-columns { grid-template-columns: minmax(0, 1.32fr) minmax(0, 1fr); align-items: start; }
+  .quota-notification-columns > .quota-settings-panel { margin-bottom: 0; }
+  .quota-notification-columns > .notification-instance-section { margin-top: 0; padding: 13px 15px 12px; border-top: 0; border: 1px solid var(--line); border-radius: 11px; background: var(--bg-primary); box-shadow: var(--shadow); }
+  .quota-notification-columns .notification-instance-toolbar { display: grid; gap: 9px; margin-bottom: 10px; }
+  .quota-notification-columns .notification-instance-toolbar .button { justify-self: start; }
+  /* 窄列内配置行改为「实例 + 按钮」一行、三个指标一行 */
+  .quota-notification-columns .notification-config-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; }
+  .quota-notification-columns .notification-config-identity { grid-column: 1 / -1; }
+  .quota-notification-columns .notification-config-row > div { gap: 1px; }
+  /* 窄列放不下两个按钮，测试按钮与编辑按钮换到第三行右对齐 */
+  .quota-notification-columns .notification-config-row > .notification-config-actions { grid-column: 1 / -1; grid-row: 3; justify-self: end; }
+  .quota-notification-columns .notification-config-actions .button { min-height: 26px; padding-inline: 9px; font-size: 11px; }
+}
 
 @media (max-width: 760px) {
-  .quota-notifications-module .quota-settings-panel { padding: 15px 14px 13px; }
+  .quota-notifications-module .quota-settings-panel { padding: 12px 12px 11px; }
   .quota-notifications-module .notification-work-hours small { flex-basis: 100%; }
 }

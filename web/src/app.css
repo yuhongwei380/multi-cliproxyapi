@@ -919,7 +919,7 @@ body { background: var(--bg-secondary); }
 .quota-window-title { overflow-wrap: anywhere; color: var(--muted); font-size: 16px; font-weight: 680; line-height: 1.3; }
 .quota-window-meta { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
 .quota-window-meta strong { color: var(--ink); font-size: 23px; font-weight: 780; letter-spacing: -.035em; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.quota-window-meta span.quota-reset-time { display: grid; gap: 3px; min-width: 0; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 23px; font-weight: 750; line-height: 1.4; }
+.quota-window-meta span.quota-reset-time { display: grid; gap: 3px; min-width: 0; color: var(--ink); font-family: inherit; font-size: 23px; font-weight: 600; line-height: 1.4; }
 .quota-window-meta time { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .quota-reset-time > small, .quota-reset-unknown { font-size: 12px; font-weight: 600; }
 .quota-progress { height: 10px; overflow: hidden; border-radius: 999px; background: #ecebed; }
@@ -1057,7 +1057,7 @@ body { background: var(--bg-secondary); }
 .quota-summary-value { text-align: right; font-variant-numeric: tabular-nums; }
 .quota-summary-value > strong { font-size: 13px; }
 .quota-summary-value .quota-progress { height: 4px; margin-top: 4px; background: var(--bg-tertiary); }
-.quota-summary-reset { display: grid; gap: 2px; margin-top: 5px; color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 14px; font-weight: 750; line-height: 1.4; }
+.quota-summary-reset { display: grid; gap: 2px; margin-top: 5px; color: var(--ink); font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1.4; }
 .quota-summary-reset > small { font-family: inherit; font-size: 11px; font-weight: 600; }
 .quota-summary-reset > time { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 4px; }
 .quota-summary-reset > time > span { white-space: nowrap; }

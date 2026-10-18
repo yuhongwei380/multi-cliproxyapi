@@ -70,9 +70,31 @@ test('instance limit settings require authentication, validate changes and audit
   } finally { await closeFixture(f) }
 })
 async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const branding = new BrandingService({ store }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, branding, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, branding, quota, controller, server, url: `http://127.0.0.1:${server.address().port}` }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-'))
+  // Backend tests run before the web build in CI. Use an isolated shell so
+  // route/security checks never depend on ignored or stale build output.
+  const staticRoot = path.join(root, 'static')
+  fs.mkdirSync(path.join(staticRoot, 'assets'), { recursive: true })
+  fs.writeFileSync(path.join(staticRoot, 'index.html'), '<!doctype html><html><head><title>HTTP fixture</title></head><body><div id="root"></div><script type="module" src="/assets/fixture.js"></script></body></html>')
+  fs.writeFileSync(path.join(staticRoot, 'assets', 'fixture.js'), 'document.getElementById("root").textContent = "HTTP fixture";')
+  const store = new Store(path.join(root, 'control.db'))
+  const auth = new AuthService(store); auth.initializeAdmin('controller admin password')
+  const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key'))
+  const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false })
+  const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth })
+  const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) })
+  const upgrade = new UpgradeService({ store, instances, runtime })
+  const installer = new Installer({ source: {}, root: path.join(root, 'versions') })
+  const versionService = new VersionService({ store, instances, installer }); const branding = new BrandingService({ store })
+  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, branding, store, staticRoot, logger: { error() {} } })
+  const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return { root, staticRoot, store, instances, branding, quota, controller, server, url: `http://127.0.0.1:${server.address().port}` }
 }
-async function closeFixture(f) { f.server.closeAllConnections?.(); f.server.close(); f.store.close() }
+async function closeFixture(f) {
+  f.server.closeAllConnections?.()
+  try { await new Promise((resolve, reject) => f.server.close(error => error ? reject(error) : resolve())) }
+  finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+}
 
 test('lock API rejects direct mutations and records lock audit events', async () => {
   const f = await fixture()
@@ -112,7 +134,31 @@ test('HTTP API protects management routes and completes create/delete flow', asy
   } finally { await closeFixture(f) }
 })
 
-test('management.html aliases the embedded frontend shell with browser security headers', async () => { const f = await fixture(); try { const response = await fetch(`${f.url}/management.html`); assert.equal(response.status, 200); assert.match(await response.text(), /<div id="root"><\/div>/); assert.equal(response.headers.get('x-content-type-options'), 'nosniff'); assert.equal(response.headers.get('x-frame-options'), 'DENY'); assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/) } finally { await closeFixture(f) } })
+test('management.html aliases the embedded frontend shell with browser security headers', async () => {
+  const f = await fixture()
+  try {
+    const shell = fs.readFileSync(path.join(f.staticRoot, 'index.html'), 'utf8')
+    for (const alias of ['/', '/index.html', '/management.html']) {
+      const response = await fetch(`${f.url}${alias}`)
+      assert.equal(response.status, 200)
+      assert.equal(await response.text(), shell)
+      assert.match(shell, /<div id="root"><\/div>/)
+      assert.equal(response.headers.get('content-type'), 'text/html; charset=utf-8')
+      assert.equal(response.headers.get('cache-control'), 'no-cache')
+      assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+      assert.equal(response.headers.get('x-frame-options'), 'DENY')
+      assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/)
+    }
+    const asset = await fetch(`${f.url}/assets/fixture.js`)
+    assert.equal(asset.status, 200)
+    assert.equal(await asset.text(), fs.readFileSync(path.join(f.staticRoot, 'assets', 'fixture.js'), 'utf8'))
+    assert.equal(asset.headers.get('content-type'), 'text/javascript; charset=utf-8')
+    assert.equal(asset.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal((await fetch(`${f.url}/assets/missing.js`)).status, 404)
+    fs.unlinkSync(path.join(f.staticRoot, 'index.html'))
+    assert.equal((await fetch(`${f.url}/management.html`)).status, 404)
+  } finally { await closeFixture(f) }
+})
 
 test('version uninstall API removes an old cache and records the audit action', async () => {
   const f = await fixture(); try {

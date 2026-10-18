@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import { invalid } from './errors.js'
 import { ConflictError } from './store.js'
 import { generateApiKey } from '../shared/api-key.js'
+import { recordRuntimeEvent } from './logging.js'
 
 export class KeyService {
   constructor({ store, instances, clients, secrets, auth }) { Object.assign(this, { store, instances, clients, secrets, auth }) }
@@ -67,6 +68,8 @@ export class KeyService {
       if (remove) { key.deleting = true; this.store.saveManagedKey(key) }
       const secret = this.secrets.decrypt(key.ciphertext)
       const results = []
+      const action = revoke ? '撤销' : '推送'
+      recordRuntimeEvent(this.store, 'key', `API Key ${action}开始`, { event: 'key.started', key_id: id, action, targets: bindings.filter(item => instanceId === null || item.instance_id === instanceId).length })
       for (const binding of bindings.filter(item => instanceId === null || item.instance_id === instanceId)) {
         const target = binding.instance_id
         try {
@@ -104,10 +107,13 @@ export class KeyService {
           results.push({ instance_id: target, status: 'failed', message })
         }
         const result = results.at(-1)
+        recordRuntimeEvent(this.store, 'key', `API Key ${action}${result.status === 'failed' ? '失败' : result.status === 'exists' ? '完成（已存在）' : '成功'}`, { level: result.status === 'failed' ? 'error' : 'info', instanceId: target, event: 'key.result', key_id: id, action, status: result.status, ...(result.status === 'failed' ? { reason: result.message } : {}) })
         this.store.appendAuditLog({ actor, action: revoke ? 'key.revoke.instance' : 'key.deploy.instance', resource_type: 'instance', resource_id: target, outcome: result.status === 'failed' ? 'failed' : 'success', detail: `Key ${id}: ${result.status}` })
       }
       const deleted = remove && this.store.keyBindings(id).length === 0
       if (deleted) this.store.deleteManagedKey(id)
+      const failed = results.filter(item => item.status === 'failed').length
+      recordRuntimeEvent(this.store, 'key', `API Key ${action}结束：${results.length - failed} 个成功，${failed} 个失败`, { level: failed ? 'error' : 'info', event: 'key.completed', key_id: id, action, succeeded: results.length - failed, failed, deleted })
       return { deleted, results, ...(deleted ? {} : { item: this.view(this.store.getManagedKey(id)) }) }
     })
   }

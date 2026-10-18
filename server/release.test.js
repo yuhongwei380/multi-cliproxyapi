@@ -29,6 +29,7 @@ test('upgrade resource preparation failure leaves running processes and versions
     let stops = 0
     f.runtime.stop = async () => { stops++; throw new Error('must not stop') }
     await assert.rejects(f.upgrade.upgrade('v2'), /management resource unavailable/)
+    assert.ok(f.store.listRuntimeLogs(500, { source: 'upgrade' }).some(item => item.context.event === 'upgrade.failed'))
     assert.deepEqual(prepared, ['v1', 'v2'])
     assert.equal(stops, 0)
     assert.deepEqual(await f.runtime.status(f.first), before)
@@ -210,6 +211,12 @@ for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'roll
     await f.instances.start(f.first.id)
     if (permanent) await assert.rejects(f.upgrade.upgrade('v2'), /after waiting/)
     else await f.upgrade.upgrade('v2')
+    const logs = f.store.listRuntimeLogs(500, { source: 'upgrade' })
+    assert.ok(logs.some(item => item.context.event === 'upgrade.started'))
+    assert.ok(logs.some(item => item.context.event === (permanent ? 'upgrade.failed' : 'upgrade.completed')))
+    assert.equal(logs.some(item => item.context.event === 'upgrade.completed'), !permanent)
+    assert.equal(logs.some(item => item.context.event === 'upgrade.rollback.completed'), permanent)
+    assert.ok(logs.some(item => item.instance_id === f.first.id && item.context.event === 'upgrade.instance.verifying'))
     assert.equal(probes, 3)
     assert.deepEqual(keys, ['existing'])
     for (const item of [f.first, f.second]) assert.equal(f.store.getInstance(item.id).version, permanent ? 'v1' : 'v2')

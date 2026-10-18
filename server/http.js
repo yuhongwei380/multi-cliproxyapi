@@ -7,6 +7,7 @@ import { instanceView } from './domain.js'
 import { normalizeBearer } from './security.js'
 import { statusForError } from './errors.js'
 import { NotFoundError } from './store.js'
+import { RUNTIME_LOG_SOURCES } from './logging.js'
 
 const cookieName = 'multi_cpa_session'
 const securityHeaders = {
@@ -76,7 +77,7 @@ export class Controller {
   token(request) { const cookies = parseCookies(request.headers.cookie || ''); return cookies[cookieName] || normalizeBearer(request.headers.authorization || '') }
   authenticated(request) { return this.auth.authenticate(this.token(request)) }
   audit(entry) { try { this.store.appendAuditLog?.(entry) } catch (error) { this.logger?.error?.(error) } }
-  runtimeError(request, error) { try { this.store.appendRuntimeLog?.({ level: 'error', source: 'http', message: error?.message || 'request failed', context: { method: request.method, path: new URL(request.url, 'http://localhost').pathname, status: statusForError(error) } }) } catch {} }
+  runtimeError(request, error) { try { this.store.appendRuntimeLog?.({ level: 'error', source: 'http', message: 'HTTP 请求失败，请查看对应操作日志及任务状态', context: { method: request.method, path: new URL(request.url, 'http://localhost').pathname, status: statusForError(error) } }) } catch {} }
   async handle(request, response) {
     try {
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`); const pathname = url.pathname
@@ -94,7 +95,7 @@ export class Controller {
         if (target) this.audit({ actor: username, ...target, outcome: 'success', client_address: safeClientAddress(request) })
         return result
       } catch (error) {
-        if (target) this.audit({ actor: username, ...target, outcome: 'failed', client_address: safeClientAddress(request), detail: error?.message || 'request failed' })
+        if (target) this.audit({ actor: username, ...target, outcome: 'failed', client_address: safeClientAddress(request), detail: statusForError(error) >= 500 ? '操作失败，请查看运行日志及任务状态' : (error?.message || 'request failed') })
         throw error
       }
     } catch (error) { this.logger?.error?.(error); if (statusForError(error) >= 500) this.runtimeError(request, error); return writeError(response, error) }
@@ -141,7 +142,11 @@ export class Controller {
     if (route === '/versions' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listVersions().map(item => { const { path: _path, ...publicVersion } = item; return publicVersion }) })
     if (route === '/upgrade/state' && request.method === 'GET') { try { return writeJson(response, 200, this.store.getUpgradeState()) } catch (error) { if (error.code === 'ERR_NOT_FOUND') return writeJson(response, 200, { state: 'idle' }); throw error } }
     if (route === '/operations' && request.method === 'GET') { const limit = Number(url.searchParams.get('limit') || 50); if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Object.assign(new Error('invalid limit'), { status: 400 }); return writeJson(response, 200, { items: this.store.listOperations(limit) }) }
-    if (route === '/logs/runtime' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url)) })
+    if (route === '/logs/runtime' && request.method === 'GET') {
+      const source = url.searchParams.get('source') || ''; const level = url.searchParams.get('level') || ''
+      if ((source && !RUNTIME_LOG_SOURCES.includes(source)) || (level && !['debug', 'info', 'warn', 'error'].includes(level))) throw Object.assign(new Error('invalid runtime log filter'), { status: 400 })
+      return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url), { source, level }) })
+    }
     if (route === '/logs/audit' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listAuditLogs(logLimit(url)) })
     if (route === '/branding' && request.method === 'PATCH') { if (!this.branding) throw new Error('branding service unavailable'); const body = await readJson(request, 512 * 1024); return writeJson(response, 200, this.branding.update(body)) }
     if (route === '/quota/settings' && request.method === 'GET') return writeJson(response, 200, this.quota.getSettings())

@@ -31,6 +31,22 @@ function fixture(t, file = ':memory:') {
 }
 const secret = 'sk-test-abcdefgh12345678'
 
+test('Key pushes log partial failures and success without plaintext keys or upstream errors', async t => {
+  const f = fixture(t); const key = await f.service.create({ key: secret })
+  await f.service.mutate(key.id, 'bind', { instances: ['one', 'two'] }); f.failures.add('two')
+  await f.service.distribute(key.id)
+  const logs = f.store.listRuntimeLogs(500, { source: 'key' })
+  assert.ok(logs.some(item => item.context.event === 'key.started'))
+  assert.ok(logs.some(item => item.instance_id === 'one' && item.context.status === 'deployed'))
+  assert.ok(logs.some(item => item.instance_id === 'two' && item.level === 'error'))
+  assert.ok(logs.some(item => item.context.succeeded === 1 && item.context.failed === 1))
+  assert.equal(JSON.stringify(logs).includes(secret), false)
+  assert.equal(JSON.stringify(logs).includes('remote-secret'), false)
+  f.failures.clear()
+  f.store.appendRuntimeLog = () => { throw new Error('log unavailable') }
+  assert.ok((await f.service.distribute(key.id)).results.every(item => item.status !== 'failed'))
+})
+
 test('encrypted keys, locks, delete intent and failed bindings survive reopening the database', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'managed-keys-'))
   const f = fixture(t, path.join(root, 'control.db')); t.after(() => fs.rmSync(root, { recursive: true, force: true }))

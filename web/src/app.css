@@ -872,7 +872,7 @@ body { background: var(--bg-secondary); }
 .log-summary span { display: block; color: var(--quiet); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
 .log-summary strong { display: block; margin-top: 9px; color: var(--ink); font-size: 24px; font-weight: 760; font-variant-numeric: tabular-nums; letter-spacing: -.035em; }
 .log-workbench { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--floating-surface); }
-.log-toolbar { display: flex; align-items: flex-end; gap: 12px; padding: 15px 16px; border-bottom: 1px solid var(--line); background: var(--bg-primary); }
+.log-toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; padding: 15px 16px; border-bottom: 1px solid var(--line); background: var(--bg-primary); }
 .log-toolbar label, .log-filter-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .log-toolbar .log-search { width: min(420px, 48vw); }
 .log-toolbar input { height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 8px; outline: none; background: var(--bg-secondary); color: var(--ink); font: inherit; font-size: 13px; }
@@ -890,6 +890,9 @@ body { background: var(--bg-secondary); }
 .log-time, .log-address { color: var(--quiet); }
 .log-resource { max-width: 220px !important; overflow: hidden; color: var(--muted); text-overflow: ellipsis; }
 .log-message { min-width: 220px; overflow-wrap: anywhere; line-height: 1.5; }
+.log-context { margin-top: 6px; color: var(--muted); }
+.log-context summary { cursor: pointer; font-size: 11px; }
+.log-context pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .log-badge { display: inline-flex; min-width: 45px; justify-content: center; padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--bg-secondary); font-size: 10px; font-weight: 750; }
 .log-badge.info { color: var(--blue-dark); border-color: var(--hero-line); background: var(--blue-soft); }
 .log-badge.warn { color: var(--amber); border-color: var(--amber-line); background: var(--amber-soft); }

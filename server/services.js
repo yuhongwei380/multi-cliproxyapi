@@ -11,6 +11,7 @@ import { unsupported } from './cpa.js'
 import { prepareInstanceBinary } from './instance-binary.js'
 import { editChildConfig } from './child-config.js'
 import { backupMetadata, copyBackupTree, relocateBackupConfig } from './instance-backup.js'
+import { recordRuntimeEvent } from './logging.js'
 
 export const ErrInvalidCredentials = Object.assign(new Error('invalid credentials'), { code: 'ERR_INVALID_CREDENTIALS', status: 401 })
 export const ErrRateLimited = Object.assign(new Error('too many authentication attempts'), { code: 'ERR_RATE_LIMITED', status: 429 })
@@ -633,6 +634,7 @@ export class QuotaService {
     }
     delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_id; delete next.instance_name; delete next.instance_port; delete next.configured
     this.store.saveQuotaInstanceSettings({ ...next, instance_id: instanceId, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext })
+    recordRuntimeEvent(this.store, 'quota', '实例额度通知配置已更新', { event: 'quota.settings.updated', instanceId, enabled: next.webhook_enabled })
     if (typeof this.store.listQuotaGlobalInstanceIds === 'function' && typeof this.store.saveQuotaGlobalInstanceIds === 'function') this.store.saveQuotaGlobalInstanceIds(this.store.listQuotaGlobalInstanceIds().filter(id => id !== instanceId))
     this.wakeScheduler?.()
     return this.publicInstanceNotificationSettings(this.store.getInstance(instanceId))
@@ -640,34 +642,42 @@ export class QuotaService {
   deleteNotificationSettings(instanceId) {
     const instance = this.store.getInstance(instanceId)
     this.store.deleteQuotaInstanceSettings?.(instanceId)
+    recordRuntimeEvent(this.store, 'quota', '实例额度通知配置已移除，恢复全局配置', { event: 'quota.settings.deleted', instanceId })
     this.wakeScheduler?.()
     return this.publicInstanceNotificationSettings(instance)
   }
   async sendTestNotification(instanceId = '') {
-    const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.settingsWithSecret()
-    if (!settings.webhook_enabled) throw Object.assign(new Error(instanceId ? '该实例的钉钉机器人通知未启用' : '全局钉钉机器人通知未启用'), { status: 400 })
-    if (!settings.webhook_url) throw Object.assign(new Error('尚未配置钉钉机器人 Webhook 地址'), { status: 400 })
-    const globalIds = new Set(settings.instance_ids || [])
-    const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
-    const targets = instanceId ? [this.store.getInstance(instanceId)] : this.store.listInstances().filter(instance => globalIds.has(instance.id) && !customIds.has(instance.id))
-    if (!targets.length) throw Object.assign(new Error('请先选择下发到 CPA 实例并保存配置'), { status: 400 })
-    const items = []
-    for (const instance of targets) {
-      const snapshots = await this.refreshInstance(instance.id, undefined, { notify: false })
-      if (!snapshots.length) items.push({ instance, snapshot: { account_id: 'OAuth 账户' }, percent: null, message: '未配置 OAuth 账户' })
-      for (const snapshot of snapshots) {
-        if (snapshot.status !== 'ok') {
-          items.push({ instance, snapshot, percent: null, message: snapshot.status === 'unsupported' ? '不支持读取额度' : '额度读取失败' })
-          continue
+    recordRuntimeEvent(this.store, 'quota', '额度测试通知开始：读取当前周额度和重置时间', { event: 'quota.test.started', instanceId, mode: 'test' })
+    try {
+      const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.settingsWithSecret()
+      if (!settings.webhook_enabled) throw Object.assign(new Error(instanceId ? '该实例的钉钉机器人通知未启用' : '全局钉钉机器人通知未启用'), { status: 400 })
+      if (!settings.webhook_url) throw Object.assign(new Error('尚未配置钉钉机器人 Webhook 地址'), { status: 400 })
+      const globalIds = new Set(settings.instance_ids || [])
+      const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+      const targets = instanceId ? [this.store.getInstance(instanceId)] : this.store.listInstances().filter(instance => globalIds.has(instance.id) && !customIds.has(instance.id))
+      if (!targets.length) throw Object.assign(new Error('请先选择下发到 CPA 实例并保存配置'), { status: 400 })
+      const items = []
+      for (const instance of targets) {
+        const snapshots = await this.refreshInstance(instance.id, undefined, { notify: false })
+        if (!snapshots.length) items.push({ instance, snapshot: { account_id: 'OAuth 账户' }, percent: null, message: '未配置 OAuth 账户' })
+        for (const snapshot of snapshots) {
+          if (snapshot.status !== 'ok') {
+            items.push({ instance, snapshot, percent: null, message: snapshot.status === 'unsupported' ? '不支持读取额度' : '额度读取失败' })
+            continue
+          }
+          const weekly = (snapshot.values || []).filter(value => /周|week|seven_day|7d/i.test(value.name || ''))
+          if (!weekly.length) items.push({ instance, snapshot, percent: null, message: '未提供周额度' })
+          for (const value of weekly) items.push({ instance, snapshot, value, percent: quotaPercent(value) })
         }
-        const weekly = (snapshot.values || []).filter(value => /周|week|seven_day|7d/i.test(value.name || ''))
-        if (!weekly.length) items.push({ instance, snapshot, percent: null, message: '未提供周额度' })
-        for (const value of weekly) items.push({ instance, snapshot, value, percent: quotaPercent(value) })
       }
+      const sent = await this.notifier.notify(settings, formatQuotaNotification(items, true))
+      if (!sent) throw Object.assign(new Error('测试消息未发送，请检查 Webhook 配置'), { status: 502 })
+      recordRuntimeEvent(this.store, 'quota', '额度测试通知发送成功', { event: 'quota.test.sent', instanceId, mode: 'test', instances: targets.length, windows: items.length })
+      return { status: 'sent', instance_id: instanceId || '' }
+    } catch (error) {
+      recordRuntimeEvent(this.store, 'quota', '额度测试通知失败，请检查通知配置、实例状态及网络', { event: 'quota.test.failed', instanceId, mode: 'test', level: 'error' })
+      throw error
     }
-    const sent = await this.notifier.notify(settings, formatQuotaNotification(items, true))
-    if (!sent) throw Object.assign(new Error('测试消息未发送，请检查 Webhook 配置'), { status: 502 })
-    return { status: 'sent', instance_id: instanceId || '' }
   }
   updateSettings(input = {}) {
     const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url'); const hasInstanceIds = Object.prototype.hasOwnProperty.call(input, 'instance_ids')
@@ -695,6 +705,7 @@ export class QuotaService {
     delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_ids; delete next.targets_configured
     const targetInput = hasInstanceIds ? { instance_ids: instanceIds } : {}
     const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, ...targetInput, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, ...targetInput, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
+    recordRuntimeEvent(this.store, 'quota', '全局额度通知配置已更新', { event: 'quota.settings.updated', enabled: next.webhook_enabled, instances: instanceIds.length })
     if (next.refresh_interval_minutes !== current.refresh_interval_minutes) this.wakeScheduler?.()
     return typeof this.store.getQuotaSettings === 'function' ? this.getSettings() : saved
   }
@@ -730,21 +741,28 @@ export class QuotaService {
         try { if (!this.clients) throw new Error('CPA client factory unavailable'); client = await this.clients(instance); const accounts = await client.listAccounts(signal); const previous = this.store.listQuotas(instanceId); const previousBy = new Map(previous.map(item => [item.account_id, item])); if (!accounts.length) { this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'empty', message: 'no OAuth accounts configured', attempted_at: attempt, collected_at: attempt }) }
           const results = []; let index = 0; const worker = async () => { while (index < accounts.length) { const account = accounts[index++]; let snapshot; try { snapshot = await client.fetchQuota(account, signal); snapshot = { ...snapshot, instance_id: instanceId, account_id: account.id, provider: account.provider || '', attempted_at: attempt, status: 'ok', collected_at: attempt } } catch (error) { const old = previousBy.get(account.id); snapshot = { instance_id: instanceId, account_id: account.id, provider: account.provider || '', values: old?.values || [], collected_at: old?.collected_at || '', attempted_at: attempt, status: error.code === 'ERR_UNSUPPORTED' ? 'unsupported' : 'failed', message: error.code === 'ERR_UNSUPPORTED' ? 'quota endpoint is not supported for this account' : error.message } } results.push(snapshot) } }
           await Promise.all(Array.from({ length: Math.max(1, Math.min(this.maxConcurrent, accounts.length || 1)) }, worker)); for (const snapshot of results) this.store.saveQuota(snapshot)
+          const failedAccounts = results.filter(item => item.status !== 'ok').length
+          recordRuntimeEvent(this.store, 'quota', failedAccounts ? '额度刷新完成，部分账户读取失败或不支持' : '额度刷新完成', { event: 'quota.refresh.completed', instanceId, accounts: results.length, failed: failedAccounts, level: failedAccounts ? 'warn' : 'info' })
           const settings = this.instanceSettingsWithSecret(instanceId); const alertAt = Date.parse(attempt)
           const low = results.filter(snapshot => snapshot.status === 'ok').flatMap(snapshot => (snapshot.values || []).map(value => ({ snapshot, value, percent: quotaPercent(value) })).filter(item => item.percent !== null && item.percent < settings.alert_threshold_percent))
           const pendingNotifications = low.map(item => ({ ...item, key: quotaNotificationKey(instanceId, item.snapshot, item.value) })).filter(item => !this.notificationCoolingDown(item.key, alertAt))
           if (notify && pendingNotifications.length && isQuotaNotificationWorkTime(new Date(attempt)) && this.notifier && settings.webhook_enabled && settings.webhook_url) {
+            recordRuntimeEvent(this.store, 'quota', '额度通知开始发送', { event: 'quota.notification.started', instanceId, mode: 'scheduled', windows: pendingNotifications.length })
             try {
               const delivered = await this.notifier.notify(settings, formatQuotaNotification(pendingNotifications.map(item => ({ ...item, instance }))))
               if (delivered !== false) for (const item of pendingNotifications) this.rememberNotification(item.key, attempt)
+              recordRuntimeEvent(this.store, 'quota', delivered === false ? '额度通知未发送，请检查通知配置' : '额度通知发送成功', { event: delivered === false ? 'quota.notification.failed' : 'quota.notification.sent', instanceId, mode: 'scheduled', windows: pendingNotifications.length, level: delivered === false ? 'warn' : 'info' })
             } catch {
               // Transport errors may contain the full signed webhook URL.
-              this.store.appendRuntimeLog?.({ level: 'error', source: 'quota', instance_id: instanceId, message: 'DingTalk quota notification failed; check webhook settings and network access', context: {} })
+              recordRuntimeEvent(this.store, 'quota', '额度通知发送失败，请检查 Webhook 配置及网络', { event: 'quota.notification.failed', instanceId, mode: 'scheduled', level: 'error' })
             }
+          } else if (notify && low.length) {
+            const reason = !settings.webhook_enabled || !settings.webhook_url ? '通知未启用或未配置' : !pendingNotifications.length ? '处于五小时通知冷却期' : '当前不在通知工作时段'
+            recordRuntimeEvent(this.store, 'quota', `额度通知已跳过：${reason}`, { event: 'quota.notification.skipped', instanceId, reason, windows: low.length })
           }
           const seen = new Set(accounts.map(account => account.id)); for (const old of previous) if ((old.account_id === DiscoveryAccountId && accounts.length) || (old.account_id !== DiscoveryAccountId && !seen.has(old.account_id))) this.store.deleteQuota(instanceId, old.account_id)
           return results
-        } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); throw new Error(`list OAuth accounts: ${error.message}`) }
+        } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); recordRuntimeEvent(this.store, 'quota', '额度刷新失败，请检查 OAuth 账户及 CPA 连接', { event: 'quota.refresh.failed', instanceId, level: 'error' }); throw new Error(`list OAuth accounts: ${error.message}`) }
       }))
     } finally { this.running.delete(instanceId) }
   }

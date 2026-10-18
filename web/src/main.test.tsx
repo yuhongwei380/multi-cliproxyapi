@@ -514,6 +514,43 @@ test('shows separate runtime and audit timelines with status filtering', async (
   expect(fetchMock.mock.calls[5][0]).toBe('/api/logs/audit?limit=500')
 })
 
+test('runtime logs combine server category and level filters, show details and retain filters on refresh', async () => {
+  const logs = [
+    { id: 1, source: 'upgrade', level: 'info', message: '升级完成', context: { version: 'v2' }, created_at: '2030-01-01T00:00:00Z' },
+    { id: 2, source: 'upgrade', level: 'error', message: '升级失败并回滚', context: { version: 'v3' }, created_at: '2030-01-01T00:01:00Z' },
+    { id: 3, source: 'key', level: 'info', message: 'Key 推送成功', context: {}, created_at: '2030-01-01T00:02:00Z' }
+  ]
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+    .mockImplementation(url => {
+      const params = new URL(String(url), 'http://localhost').searchParams
+      return response({ items: logs.filter(item => (!params.get('source') || item.source === params.get('source')) && (!params.get('level') || item.level === params.get('level'))) }) as any
+    })
+  const user = userEvent.setup(); render(<App />)
+  await screen.findByText('静候流量。')
+  await user.click(screen.getByRole('link', { name: '运行日志' }))
+  expect(await screen.findByText('Key 推送成功')).toBeInTheDocument()
+  await user.click(screen.getByRole('combobox', { name: '日志分类: 全部分类' }))
+  await user.click(screen.getByRole('option', { name: 'CPA 升级' }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/logs/runtime?limit=500&source=upgrade', expect.anything()))
+  expect(screen.queryByText('Key 推送成功')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('combobox', { name: '状态: 全部' }))
+  await user.click(screen.getByRole('option', { name: '错误' }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/logs/runtime?limit=500&source=upgrade&level=error', expect.anything()))
+  expect(await screen.findByText('升级失败并回滚')).toBeInTheDocument()
+  expect(screen.queryByText('升级完成')).not.toBeInTheDocument()
+  await user.click(screen.getByText('查看详情'))
+  expect(screen.getByText(/"version": "v3"/)).toBeVisible()
+  await waitFor(() => expect(screen.getByRole('button', { name: '刷新日志' })).toBeEnabled())
+  await user.click(screen.getByRole('button', { name: '刷新日志' }))
+  expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/logs/runtime?limit=500&source=upgrade&level=error')
+  await user.type(screen.getByRole('searchbox'), 'CPA 升级')
+  expect(screen.getByText('升级失败并回滚')).toBeInTheDocument()
+})
+
 test('opens administrator settings from the avatar and submits a password change', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)

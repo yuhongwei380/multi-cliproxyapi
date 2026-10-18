@@ -204,7 +204,29 @@ test('log APIs are protected and mutations create audit and runtime entries', as
     const created = await fetch(`${f.url}/api/instances`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ name: 'logged-instance', port: await freePort() }) }); assert.equal(created.status, 201); const instance = await created.json()
     const started = await fetch(`${f.url}/api/instances/${instance.id}/start`, { method: 'POST', headers: { cookie } }); assert.equal(started.status, 202)
     const runtime = await (await fetch(`${f.url}/api/logs/runtime?limit=20`, { headers: { cookie } })).json(); assert.ok(runtime.items.some(item => item.instance_id === instance.id && item.message === 'instance start succeeded'))
+    f.store.appendRuntimeLog({ source: 'upgrade', level: 'error', message: 'upgrade failed' })
+    f.store.appendRuntimeLog({ source: 'plugin', level: 'info', message: 'plugin completed' })
+    const filtered = await (await fetch(`${f.url}/api/logs/runtime?source=upgrade&level=error&limit=1`, { headers: { cookie } })).json()
+    assert.deepEqual(filtered.items.map(item => item.message), ['upgrade failed'])
+    for (const query of ['source=invalid', 'level=invalid', 'limit=501']) assert.equal((await fetch(`${f.url}/api/logs/runtime?${query}`, { headers: { cookie } })).status, 400)
+    assert.equal((await fetch(`${f.url}/api/logs/runtime?source=key`)).status, 401)
     const audit = await (await fetch(`${f.url}/api/logs/audit?limit=20`, { headers: { cookie } })).json(); assert.ok(audit.items.some(item => item.action === 'auth.login' && item.outcome === 'failed')); assert.ok(audit.items.some(item => item.action === 'instance.create' && item.outcome === 'success')); assert.ok(audit.items.some(item => item.action === 'instance.start' && item.resource_id === instance.id))
+  } finally { await closeFixture(f) }
+})
+
+test('failed quota test requests never copy signed webhook URLs into runtime or audit logs', async () => {
+  const f = await fixture()
+  try {
+    const instance = await f.instances.create({ name: 'safe-notification-log', port: await freePort() }); await f.instances.start(instance.id)
+    f.quota.updateNotificationSettings(instance.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=private-http-log-token' })
+    f.quota.notifier = { notify: async () => { throw new Error('https://oapi.dingtalk.com/robot/send?access_token=private-http-log-token&sign=private-sign') } }
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const cookie = login.headers.get('set-cookie').split(';')[0]
+    const result = await fetch(`${f.url}/api/quota/notifications/${instance.id}/test`, { method: 'POST', headers: { cookie } })
+    assert.equal(result.status, 500)
+    assert.ok(f.store.listRuntimeLogs(500, { source: 'quota' }).some(item => item.context.event === 'quota.test.failed'))
+    assert.equal(JSON.stringify(f.store.listRuntimeLogs(500)).includes('private-'), false)
+    assert.equal(JSON.stringify(f.store.listAuditLogs(500)).includes('private-'), false)
   } finally { await closeFixture(f) }
 })
 

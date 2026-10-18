@@ -390,8 +390,11 @@ export class Store {
     this.db.prepare('DELETE FROM runtime_logs WHERE id <= (SELECT COALESCE(MAX(id),0) - 10000 FROM runtime_logs)').run()
     return { id: Number(result.lastInsertRowid), level: entry.level || 'info', source: entry.source || 'controller', instance_id: entry.instance_id || '', message: entry.message || '', context: entry.context || {}, created_at: createdAt }
   }
-  listRuntimeLogs(limit = 200) {
-    return this.db.prepare('SELECT * FROM runtime_logs ORDER BY created_at DESC, id DESC LIMIT ?').all(Math.max(1, Math.min(500, Number(limit) || 200))).map(row => ({ id: Number(row.id), level: row.level, source: row.source, instance_id: row.instance_id || '', message: row.message, context: parse(row.context_json, {}), created_at: row.created_at }))
+  listRuntimeLogs(limit = 200, { source = '', level = '' } = {}) {
+    const conditions = []; const parameters = []
+    if (source) { conditions.push('source = ?'); parameters.push(source) }
+    if (level) { conditions.push('level = ?'); parameters.push(level) }
+    return this.db.prepare(`SELECT * FROM runtime_logs${conditions.length ? ` WHERE ${conditions.join(' AND ')}` : ''} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...parameters, Math.max(1, Math.min(500, Number(limit) || 200))).map(row => ({ id: Number(row.id), level: row.level, source: row.source, instance_id: row.instance_id || '', message: row.message, context: parse(row.context_json, {}), created_at: row.created_at }))
   }
   appendAuditLog(entry) {
     const createdAt = entry.created_at || new Date().toISOString()

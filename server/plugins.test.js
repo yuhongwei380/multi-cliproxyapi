@@ -22,6 +22,22 @@ function fixture() {
 }
 async function child(f, name, port) { return f.instances.create({ name, port, management_password: 'testing' }) }
 
+for (const fail of [false, true]) test(`plugin runtime events record ${fail ? 'failure and rollback' : 'completion'} without leaking upstream data`, async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'runtime-log', 19394); await f.instances.start(instance.id)
+    if (fail) f.service.verify = async () => { throw new Error('sk-private-plugin-token https://example.invalid/?access_token=private') }
+    const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [instance.id], enable: true })
+    await f.service.pending
+    const logs = f.store.listRuntimeLogs(500, { source: 'plugin' })
+    assert.ok(logs.some(item => item.context.status === 'running'))
+    assert.ok(logs.some(item => item.context.status === (fail ? 'failed' : 'completed')))
+    assert.ok(logs.some(item => item.instance_id === instance.id && item.context.status === (fail ? 'rolled-back' : 'verified')))
+    assert.ok(logs.every(item => item.context.job_id === job.id))
+    assert.equal(JSON.stringify(logs).includes('private'), false)
+  } finally { f.close() }
+})
+
 test('insufficient automatic backup capacity prevents all plugin writes and restarts', async () => {
   const f = fixture()
   try {

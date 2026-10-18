@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { nowIso, ObservedState, DesiredState, isStopped } from './domain.js'
 import { ConflictError, NotFoundError } from './store.js'
+import { recordRuntimeEvent } from './logging.js'
 
 const execFileAsync = promisify(execFile)
 const safeTag = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
@@ -303,35 +304,54 @@ export class UpgradeService {
   persist(state) { state.updated_at = this.clock().toISOString(); this.store.saveUpgradeState(state) }
   async upgrade(newVersion) {
     return this.instances.operations.run('global', async () => {
-      this.instances.pluginService?.assertIdle()
-      if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable')
-      const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked && instance.version !== newVersion)
-      if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
-      let oldState = null
-      try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
-      if (!instances.length || instances.every(item => item.version === newVersion)) return { verified: false, verification_skipped: true, checked: [], backups_removed: true }
-      const oldVersion = instances[0].version
-      // Complete network-dependent preparation before disrupting any process.
-      // Keep the old version ready too, so rollback needs no network access.
-      if (this.prepareVersion) {
-        for (const version of new Set(instances.map(item => item.version))) await this.prepareVersion(version)
-        await this.prepareVersion(newVersion)
-      }
-      const backups = (await this.instances.automaticBackups(instances.map(instance => instance.id), `CPA ${newVersion}`)) || []
-      const state = { id: 'singleton', state: UpgradeState.PREPARED, old_version: oldVersion, new_version: newVersion, original_running: [], original_desired: {}, instance_stages: {}, backup_instances: backups.map(backup => backup.id), message: '', updated_at: this.clock().toISOString() }
-      const checked = []
+      const logContext = { version: safeTag(newVersion) ? newVersion : '' }
+      recordRuntimeEvent(this.store, 'upgrade', 'CPA 统一升级开始', { ...logContext, event: 'upgrade.started' })
       try {
-        this.persist(state)
-        for (const instance of instances) { state.original_desired[instance.id] = { desired_state: instance.desired_state, version: instance.version }; const status = await this.runtime.status(instance); if (status.state === ObservedState.UNKNOWN) throw new Error(`inspect ${instance.id}: runtime state is unknown`); state.instance_stages[instance.id] = status.state; if (instance.desired_state === DesiredState.RUNNING && [ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) state.original_running.push(instance.id) }
-        this.persist(state); state.state = UpgradeState.STOPPING_OLD; this.persist(state)
-        for (const instance of instances) { const status = await this.runtime.status(instance); if (!isStopped(status.state)) { state.instance_stages[instance.id] = 'stopping-old'; this.persist(state); await this.runtime.stop(instance); const stopped = await this.runtime.status(instance); if (!isStopped(stopped.state)) throw new Error(`confirm ${instance.id} stopped`) } state.instance_stages[instance.id] = 'old-stopped'; this.persist(state) }
-        state.state = UpgradeState.OLD_STOPPED; this.persist(state); if (this.activator) await this.activator.activateVersion(newVersion)
-        for (const instance of instances) { const current = this.store.getInstance(instance.id); const updated = { ...current, version: newVersion, revision: current.revision + 1, updated_at: this.clock().toISOString() }; await this.instances.prepareBinary(updated); this.store.updateInstance(updated, current.revision); await this.units?.install(updated); state.instance_stages[instance.id] = 'new-configured'; this.persist(state) }
-        state.state = UpgradeState.STARTING_NEW; this.persist(state)
-        for (const id of state.original_running) { const instance = this.store.getInstance(id); state.instance_stages[id] = 'starting-new'; this.persist(state); await this.instances.prepareBinary(instance); await this.runtime.start(instance); const status = await this.runtime.status(instance); if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`confirm ${id} ready`); if (this.verifyInstance) { state.instance_stages[id] = 'verifying-service'; this.persist(state); checked.push({ id, ...(await this.verifyInstance(instance)) }) }; state.instance_stages[id] = 'new-running'; this.persist(state) }
-        state.state = UpgradeState.COMMITTED; this.persist(state); const cleanup = this.verifyInstance ? await this.removeBackups(state) : { failures: [] }; this.store.clearUpgradeState(); this.instances.defaultVersion = newVersion
-        return { verified: Boolean(this.verifyInstance) && checked.length > 0 && checked.length === state.original_running.length, checked, verification_skipped: checked.length === 0, backups_removed: cleanup.failures.length === 0 }
-      } catch (error) { await this.rollback(state, instances, error); throw error }
+        this.instances.pluginService?.assertIdle()
+        if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable')
+        const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked && instance.version !== newVersion)
+        if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
+        let oldState = null
+        try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
+        if (!instances.length || instances.every(item => item.version === newVersion)) { recordRuntimeEvent(this.store, 'upgrade', 'CPA 统一升级已跳过：没有需要升级的实例', { ...logContext, event: 'upgrade.skipped' }); return { verified: false, verification_skipped: true, checked: [], backups_removed: true } }
+        const oldVersion = instances[0].version
+        // Complete network-dependent preparation before disrupting any process.
+        // Keep the old version ready too, so rollback needs no network access.
+        if (this.prepareVersion) {
+          for (const version of new Set(instances.map(item => item.version))) await this.prepareVersion(version)
+          await this.prepareVersion(newVersion)
+        }
+        const backups = (await this.instances.automaticBackups(instances.map(instance => instance.id), `CPA ${newVersion}`)) || []
+        recordRuntimeEvent(this.store, 'upgrade', 'CPA 升级备份完成，开始切换版本', { ...logContext, event: 'upgrade.backups.ready', instances: instances.length, backups: backups.length })
+        const state = { id: 'singleton', state: UpgradeState.PREPARED, old_version: oldVersion, new_version: newVersion, original_running: [], original_desired: {}, instance_stages: {}, backup_instances: backups.map(backup => backup.id), message: '', updated_at: this.clock().toISOString() }
+        const checked = []
+        try {
+          this.persist(state)
+          for (const instance of instances) { state.original_desired[instance.id] = { desired_state: instance.desired_state, version: instance.version }; const status = await this.runtime.status(instance); if (status.state === ObservedState.UNKNOWN) throw new Error(`inspect ${instance.id}: runtime state is unknown`); state.instance_stages[instance.id] = status.state; if (instance.desired_state === DesiredState.RUNNING && [ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) state.original_running.push(instance.id) }
+          this.persist(state); state.state = UpgradeState.STOPPING_OLD; this.persist(state)
+          for (const instance of instances) { const status = await this.runtime.status(instance); if (!isStopped(status.state)) { state.instance_stages[instance.id] = 'stopping-old'; this.persist(state); await this.runtime.stop(instance); const stopped = await this.runtime.status(instance); if (!isStopped(stopped.state)) throw new Error(`confirm ${instance.id} stopped`) } state.instance_stages[instance.id] = 'old-stopped'; this.persist(state) }
+          state.state = UpgradeState.OLD_STOPPED; this.persist(state); if (this.activator) await this.activator.activateVersion(newVersion)
+          for (const instance of instances) { const current = this.store.getInstance(instance.id); const updated = { ...current, version: newVersion, revision: current.revision + 1, updated_at: this.clock().toISOString() }; await this.instances.prepareBinary(updated); this.store.updateInstance(updated, current.revision); await this.units?.install(updated); state.instance_stages[instance.id] = 'new-configured'; this.persist(state) }
+          state.state = UpgradeState.STARTING_NEW; this.persist(state)
+          for (const id of state.original_running) {
+            const instance = this.store.getInstance(id); state.instance_stages[id] = 'starting-new'; this.persist(state)
+            recordRuntimeEvent(this.store, 'upgrade', 'CPA 实例开始启动新版本', { ...logContext, event: 'upgrade.instance.starting', instanceId: id })
+            await this.instances.prepareBinary(instance); await this.runtime.start(instance)
+            const status = await this.runtime.status(instance)
+            if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`confirm ${id} ready`)
+            if (this.verifyInstance) {
+              state.instance_stages[id] = 'verifying-service'; this.persist(state)
+              recordRuntimeEvent(this.store, 'upgrade', 'CPA 实例开始服务验证', { ...logContext, event: 'upgrade.instance.verifying', instanceId: id })
+              checked.push({ id, ...(await this.verifyInstance(instance)) })
+            }
+            state.instance_stages[id] = 'new-running'; this.persist(state)
+            recordRuntimeEvent(this.store, 'upgrade', this.verifyInstance ? 'CPA 实例升级验证通过' : 'CPA 实例已切换版本，未执行服务验证', { ...logContext, event: 'upgrade.instance.ready', instanceId: id, level: this.verifyInstance ? 'info' : 'warn' })
+          }
+          state.state = UpgradeState.COMMITTED; this.persist(state); const cleanup = this.verifyInstance ? await this.removeBackups(state) : { failures: [] }; this.store.clearUpgradeState(); this.instances.defaultVersion = newVersion
+          recordRuntimeEvent(this.store, 'upgrade', 'CPA 统一升级成功', { ...logContext, event: 'upgrade.completed', old_version: oldVersion, checked: checked.length, instances: instances.length, backups_removed: cleanup.failures.length === 0 })
+          return { verified: Boolean(this.verifyInstance) && checked.length > 0 && checked.length === state.original_running.length, checked, verification_skipped: checked.length === 0, backups_removed: cleanup.failures.length === 0 }
+        } catch (error) { await this.rollback(state, instances, error); throw error }
+      } catch (error) { recordRuntimeEvent(this.store, 'upgrade', 'CPA 统一升级失败，请查看升级状态及实例详情', { ...logContext, event: 'upgrade.failed', level: 'error' }); throw error }
     })
   }
   async removeBackups(state) {
@@ -339,6 +359,7 @@ export class UpgradeService {
     for (const id of state.backup_instances || []) {
       try { await this.instances.removeAutomaticBackup(id) } catch (error) {
         if (error?.code === 'ERR_NOT_FOUND') continue
+        recordRuntimeEvent(this.store, 'upgrade', 'CPA 升级自动备份清理失败', { event: 'upgrade.backup.cleanup.failed', instanceId: id, level: 'warn', version: state.new_version })
         failures.push(`${id}: ${error.message}`)
       }
     }
@@ -349,18 +370,21 @@ export class UpgradeService {
     return { failures }
   }
   async rollback(state, originalInstances, cause) {
+    recordRuntimeEvent(this.store, 'upgrade', 'CPA 升级回滚开始', { event: 'upgrade.rollback.started', old_version: state.old_version, version: state.new_version })
     state.state = UpgradeState.RESTORING_OLD; state.message = cause.message; this.persist(state); let blocked = null
     for (const old of originalInstances) { try { const current = this.store.getInstance(old.id); const status = await this.runtime.status(current); if (!isStopped(status.state)) { await this.runtime.stop(current); const stopped = await this.runtime.status(current); if (!isStopped(stopped.state)) throw new Error(`instance ${old.id} did not stop`) } } catch (error) { blocked ||= error } }
     if (blocked) {
       state.state = UpgradeState.BLOCKED
       state.message = `${cause.message}; ${blocked.message}`
       this.persist(state)
+      recordRuntimeEvent(this.store, 'upgrade', 'CPA 回滚失败：新进程未确认停止，等待恢复', { event: 'upgrade.rollback.blocked', level: 'error', old_version: state.old_version, version: state.new_version })
       return
     }
     try { if (this.activator) await this.activator.activateVersion(state.old_version) } catch (error) { blocked ||= error }
     for (const old of originalInstances) { try { const current = this.store.getInstance(old.id); const originalVersion = state.original_desired?.[old.id]?.version || state.old_version; const restored = current.version !== originalVersion ? { ...current, version: originalVersion, revision: current.revision + 1, updated_at: this.clock().toISOString() } : current; await this.instances.prepareBinary(restored); if (restored !== current) { this.store.updateInstance(restored, current.revision); await this.units?.install(restored) } } catch (error) { blocked ||= error } }
     if (!blocked) for (const old of originalInstances) if (state.original_running.includes(old.id)) { try { const current = this.store.getInstance(old.id); await this.instances.prepareBinary(current); await this.runtime.start(current); const status = await this.runtime.status(current); if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`old ${old.id} did not start`) } catch (error) { blocked ||= error } }
     state.state = blocked ? UpgradeState.BLOCKED : UpgradeState.ROLLED_BACK; state.message = blocked ? `${cause.message}; ${blocked.message}` : cause.message; this.persist(state)
+    recordRuntimeEvent(this.store, 'upgrade', blocked ? 'CPA 回滚失败，等待恢复' : 'CPA 回滚完成，已恢复原版本', { event: blocked ? 'upgrade.rollback.blocked' : 'upgrade.rollback.completed', level: blocked ? 'error' : 'warn', old_version: state.old_version, version: state.new_version })
   }
   async recover() {
     return this.instances.operations.run('global', async () => {

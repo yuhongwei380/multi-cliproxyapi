@@ -389,6 +389,28 @@ test('DingTalk notifier signs requests with timestamp and HMAC-SHA256', async ()
   assert.equal(parsed.searchParams.get('timestamp'), timestamp); assert.equal(parsed.searchParams.get('sign'), expected); assert.match(String(request.options.body), /quota alert/)
 })
 
+for (const mode of ['scheduled', 'test']) for (const outcome of ['sent', 'not-sent', 'failed']) test(`${mode} quota notifications log ${outcome} without webhook secrets`, async () => {
+  const f = fixture()
+  try {
+    const instance = await f.instances.create({ name: 'notification-log', port: await port() }); await f.instances.start(instance.id)
+    const client = new StaticClient({ accounts: [{ id: 'a', provider: 'codex' }], quotas: { a: { values: [{ name: 'week', remaining: 1, total: 10, reset_at: '2026-10-20T00:00:00Z' }] } } })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets, clock: () => new Date('2026-10-13T02:00:00Z'), notifier: { notify: async () => {
+      if (outcome === 'failed') throw new Error('https://oapi.dingtalk.com/robot/send?access_token=private-log-token')
+      return outcome === 'sent'
+    } } })
+    quota.updateNotificationSettings(instance.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=private-log-token' })
+    if (mode === 'scheduled') await quota.refreshInstance(instance.id)
+    else if (outcome === 'sent') await quota.sendTestNotification(instance.id)
+    else await assert.rejects(quota.sendTestNotification(instance.id))
+    const logs = f.store.listRuntimeLogs(500, { source: 'quota' })
+    const prefix = mode === 'test' ? 'quota.test' : 'quota.notification'
+    assert.ok(logs.some(item => item.context.event === `${prefix}.started`))
+    assert.ok(logs.some(item => item.context.event === `${prefix}.${outcome === 'sent' ? 'sent' : 'failed'}` && item.instance_id === instance.id))
+    assert.equal(JSON.stringify(logs).includes('private-log-token'), false)
+    assert.equal((await quota.list(instance.id))[0].status, 'ok')
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('notification failure is logged without losing successful quota data or leaking credentials', async () => {
   const f = fixture()
   try {

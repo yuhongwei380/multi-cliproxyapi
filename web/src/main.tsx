@@ -549,39 +549,54 @@ function QuotaSettingsPanel({ title = '配额周期与通知', instances, config
   </section>
 }
 
+const runtimeSourceLabels: Record<string, string> = { controller: '总控', instance: '实例', upgrade: 'CPA 升级', plugin: '插件安装', key: 'API Key', quota: '额度通知', http: 'HTTP' }
+
 function LogPage({ kind, instances }: { kind: 'runtime' | 'audit'; instances: Instance[] }) {
   const [items, setItems] = useState<Array<RuntimeLog | AuditLog>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [stateFilter, setStateFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState('all')
+  const requestSequence = useRef(0)
+  const runtimeLevel = kind === 'runtime' ? stateFilter : 'all'
   const instanceNames = useMemo(() => Object.fromEntries(instances.map(instance => [instance.id, instance.name])), [instances])
-  const refresh = async () => { setLoading(true); setError(''); try { const response = await api.get(`/logs/${kind}?limit=500`); setItems(response.items ?? []) } catch (cause) { setError(cause instanceof Error ? cause.message : '日志加载失败') } finally { setLoading(false) } }
-  useEffect(() => { void refresh() }, [kind])
+  const refresh = async () => {
+    const sequence = ++requestSequence.current
+    const params = new URLSearchParams({ limit: '500' })
+    if (kind === 'runtime' && sourceFilter !== 'all') params.set('source', sourceFilter)
+    if (runtimeLevel !== 'all') params.set('level', runtimeLevel)
+    setLoading(true); setError('')
+    try { const response = await api.get(`/logs/${kind}?${params}`); if (sequence === requestSequence.current) setItems(response.items ?? []) }
+    catch (cause) { if (sequence === requestSequence.current) setError(cause instanceof Error ? cause.message : '日志加载失败') }
+    finally { if (sequence === requestSequence.current) setLoading(false) }
+  }
+  useEffect(() => { void refresh(); return () => { requestSequence.current++ } }, [kind, sourceFilter, runtimeLevel])
   const filtered = items.filter(item => {
     const state = kind === 'runtime' ? (item as RuntimeLog).level : (item as AuditLog).outcome
     if (stateFilter !== 'all' && state !== stateFilter) return false
+    if (kind === 'runtime' && sourceFilter !== 'all' && (item as RuntimeLog).source !== sourceFilter) return false
     if (!query.trim()) return true
-    return JSON.stringify(item).toLowerCase().includes(query.trim().toLowerCase())
+    return `${JSON.stringify(item)} ${kind === 'runtime' ? `${sourceLabel((item as RuntimeLog).source)} ${instanceNames[(item as RuntimeLog).instance_id || ''] || ''}` : ''}`.toLowerCase().includes(query.trim().toLowerCase())
   })
   const runtime = kind === 'runtime'
   const problemCount = items.filter(item => runtime ? (item as RuntimeLog).level === 'error' : (item as AuditLog).outcome === 'failed').length
   const stateOptions: DropdownOption[] = [
     { value: 'all', label: '全部' },
     ...(runtime
-      ? [{ value: 'info', label: '信息' }, { value: 'warn', label: '警告' }, { value: 'error', label: '错误' }]
+      ? [{ value: 'info', label: '信息' }, { value: 'warn', label: '警告' }, { value: 'error', label: '错误' }, { value: 'debug', label: '调试' }]
       : [{ value: 'success', label: '成功' }, { value: 'failed', label: '失败' }])
   ]
-  return <section className="module-pane logs-module"><section className="section-heading module-heading"><div><div className="eyebrow">{runtime ? 'RUNTIME TIMELINE' : 'AUDIT TRAIL'}</div><h1>{runtime ? '运行日志' : '审计日志'}</h1><p>{runtime ? '追踪总控、实例生命周期和后台任务的运行事件。' : '记录管理员登录、配置变更与实例操作的执行结果。'}</p></div><div className="section-actions"><button className="button ghost" disabled={loading} onClick={refresh}>{loading ? '刷新中…' : '刷新日志'}</button></div></section>
+  return <section className="module-pane logs-module"><section className="section-heading module-heading"><div><div className="eyebrow">{runtime ? 'RUNTIME TIMELINE' : 'AUDIT TRAIL'}</div><h1>{runtime ? '运行日志' : '审计日志'}</h1><p>{runtime ? '追踪 CPA 升级、插件安装、Key 推送、额度通知和实例运行事件。' : '记录管理员登录、配置变更与实例操作的执行结果。'}</p></div><div className="section-actions"><button className="button ghost" disabled={loading} onClick={refresh}>{loading ? '刷新中…' : '刷新日志'}</button></div></section>
     <div className="log-summary" aria-label="日志摘要"><div><span>当前记录</span><strong>{items.length}</strong></div><div><span>{runtime ? '错误事件' : '失败操作'}</span><strong className={problemCount ? 'warn-text' : ''}>{problemCount}</strong></div><div><span>展示范围</span><strong>最近 500</strong></div></div>
-    <div className="log-workbench"><div className="log-toolbar"><label className="log-search">搜索日志<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={runtime ? '消息、来源或实例 ID' : '操作者、动作或资源 ID'} /></label><div className="log-filter-field"><span>状态</span><Dropdown id={`log-${kind}-state`} label="状态" className="log-filter-dropdown" options={stateOptions} value={stateFilter} onChange={setStateFilter} /></div><span className="log-result-count">显示 {filtered.length} 条</span></div>
+    <div className="log-workbench"><div className="log-toolbar"><label className="log-search">搜索日志<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={runtime ? '消息、分类或实例' : '操作者、动作或资源 ID'} /></label>{runtime && <div className="log-filter-field"><span>分类</span><Dropdown id="log-runtime-source" label="日志分类" className="log-filter-dropdown" options={[{ value: 'all', label: '全部分类' }, ...Object.entries(runtimeSourceLabels).map(([value, label]) => ({ value, label }))]} value={sourceFilter} onChange={setSourceFilter} /></div>}<div className="log-filter-field"><span>状态</span><Dropdown id={`log-${kind}-state`} label="状态" className="log-filter-dropdown" options={stateOptions} value={stateFilter} onChange={setStateFilter} /></div><span className="log-result-count">显示 {filtered.length} 条</span></div>
       {error ? <div className="settings-inline-error" role="alert">{error}</div> : loading && !items.length ? <div className="log-empty">正在读取日志…</div> : !filtered.length ? <div className="log-empty">没有符合当前筛选条件的日志。</div> : <div className="log-table-wrap"><table className="log-table"><thead><tr><th>时间</th><th>状态</th>{runtime ? <><th>来源</th><th>实例</th><th>消息</th></> : <><th>操作者</th><th>动作</th><th>资源</th><th>来源地址</th><th>详情</th></>}</tr></thead><tbody>{filtered.map(item => runtime ? <RuntimeLogRow key={item.id} item={item as RuntimeLog} instanceNames={instanceNames} /> : <AuditLogRow key={item.id} item={item as AuditLog} />)}</tbody></table></div>}
     </div>
   </section>
 }
 
 function RuntimeLogRow({ item, instanceNames }: { item: RuntimeLog; instanceNames: Record<string, string> }) {
-  return <tr><td className="log-time">{formatLogTime(item.created_at)}</td><td><span className={`log-badge ${item.level}`}>{runtimeLevelLabel(item.level)}</span></td><td>{sourceLabel(item.source)}</td><td className="log-resource">{item.instance_id ? (instanceNames[item.instance_id] || item.instance_id) : '—'}</td><td className="log-message">{item.message}</td></tr>
+  return <tr><td className="log-time">{formatLogTime(item.created_at)}</td><td><span className={`log-badge ${item.level}`}>{runtimeLevelLabel(item.level)}</span></td><td>{sourceLabel(item.source)}</td><td className="log-resource">{item.instance_id ? (instanceNames[item.instance_id] || item.instance_id) : '—'}</td><td className="log-message">{item.message}{item.context && Object.keys(item.context).length > 0 && <details className="log-context"><summary>查看详情</summary><pre>{JSON.stringify(item.context, null, 2)}</pre></details>}</td></tr>
 }
 
 function AuditLogRow({ item }: { item: AuditLog }) {
@@ -589,8 +604,8 @@ function AuditLogRow({ item }: { item: AuditLog }) {
 }
 
 function formatLogTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
-function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误' } as Record<string, string>)[level] ?? level }
-function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
+function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误', debug: '调试' } as Record<string, string>)[level] ?? level }
+function sourceLabel(source: string) { return runtimeSourceLabels[source] ?? source }
 function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.backup': '备份实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'quota.notification.update': '更新实例配额配置', 'quota.notification.delete': '移除实例配额配置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
 
 const LOGIN_COPY = {

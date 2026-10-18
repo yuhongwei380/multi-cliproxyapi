@@ -9,6 +9,19 @@ import { Store, ConflictError, NotFoundError } from './store.js'
 function tempStore() { const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-store-')); return { directory, store: new Store(path.join(directory, 'control.db')) } }
 function instance(directory, id = 'cpa-test') { const now = new Date().toISOString(); return { id, name: 'demo', port: 19001, directory: path.join(directory, 'instances', id), management_secret_ciphertext: 'v1:test', desired_state: 'stopped', version: 'v1', revision: 1, created_at: now, updated_at: now } }
 
+test('runtime log category and level filters apply before the result limit', () => {
+  const store = new Store(':memory:')
+  try {
+    store.appendRuntimeLog({ source: 'upgrade', level: 'error', message: 'old upgrade failure', created_at: '2020-01-01T00:00:00Z' })
+    store.appendRuntimeLog({ source: 'upgrade', level: 'info', message: 'upgrade completed', created_at: '2020-01-02T00:00:00Z' })
+    for (let index = 0; index < 501; index++) store.appendRuntimeLog({ source: 'instance', message: 'new instance event', created_at: '2021-01-01T00:00:00Z' })
+    assert.ok(store.listRuntimeLogs(500).every(item => item.source === 'instance'))
+    assert.equal(store.listRuntimeLogs(1, { source: 'upgrade' })[0].message, 'upgrade completed')
+    assert.equal(store.listRuntimeLogs(1, { source: 'upgrade', level: 'error' })[0].message, 'old upgrade failure')
+    assert.deepEqual(store.listRuntimeLogs(500, { source: "upgrade' OR 1=1 --" }), [])
+  } finally { store.close() }
+})
+
 test('instance removal and binding cleanup commit together or roll back together', () => {
   const store = new Store(':memory:')
   try {

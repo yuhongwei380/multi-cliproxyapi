@@ -122,6 +122,7 @@ test('delete confirmation requires a challenge and administrator password', asyn
   await screen.findByText('one')
   await user.click(screen.getByRole('button', { name: '删除' }))
   expect(await screen.findByText('删除 one？')).toBeInTheDocument()
+  expect(screen.getByText(/同时自动清理该实例的 API Key 绑定，无需先启动或手动解绑/)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '确认删除' })).toBeDisabled()
   await user.type(screen.getByLabelText('输入总控管理员密码确认删除'), 'administrator-password')
   await waitFor(() => expect(screen.getByRole('button', { name: '确认删除' })).toBeEnabled())

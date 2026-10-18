@@ -278,10 +278,15 @@ export class Store {
       throw new ConflictError('instance revision conflict')
     }
   }
-  deleteInstance(id) {
-    this.assertNoKeyBindings(id)
-    const result = this.db.prepare('DELETE FROM instances WHERE id = ?').run(id)
-    if (Number(result.changes) !== 1) throw new NotFoundError('instance not found')
+  deleteInstance(id, { removeKeyBindings = false } = {}) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (removeKeyBindings) this.deleteKeyBindingsForInstance(id)
+      else this.assertNoKeyBindings(id)
+      const result = this.db.prepare('DELETE FROM instances WHERE id = ?').run(id)
+      if (Number(result.changes) !== 1) throw new NotFoundError('instance not found')
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
   saveQuota(snapshot) {

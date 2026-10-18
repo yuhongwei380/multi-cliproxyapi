@@ -9,9 +9,10 @@ import { GitHubSource, Installer, UpgradeService, UpgradeState, VersionService }
 import { Store } from './store.js'
 import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
-import { InstanceService } from './services.js'
+import { AuthService, DeleteService, InstanceService } from './services.js'
 import { instanceBinaryPath } from './instance-binary.js'
 import { HTTPClient, verifyServiceWithTestKey } from './cpa.js'
+import { KeyService } from './keys.js'
 
 const trustedAsset = 'https://github.com/router-for-me/CLIProxyAPI/releases/download/v1.0.0/CLIProxyAPI_1.0.0_linux_amd64.tar.gz'
 
@@ -216,6 +217,38 @@ for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'roll
     assert.equal(running.state, 'running')
     assert.equal(running.version, permanent ? 'v1' : 'v2')
     assert.equal((await f.runtime.status(f.second)).state, 'stopped')
+  } finally { f.close() }
+})
+
+test('a rolled-back upgrade backup can be deleted without starting it or revoking its inherited keys', async () => {
+  const f = await upgradeFixture()
+  try {
+    const keys = new KeyService({ store: f.store, instances: f.instances, secrets: f.instances.secrets })
+    const key = await keys.create({ key: 'sk-backup-cleanup-test' })
+    await keys.mutate(key.id, 'bind', { instances: [f.first.id] })
+    await keys.mutate(key.id, 'lock')
+    await f.instances.start(f.first.id)
+    f.upgrade.verifyInstance = async () => { throw new Error('service verification failed') }
+    await assert.rejects(f.upgrade.upgrade('v2'), /service verification failed/)
+    const backup = f.store.listInstances().find(item => item.is_backup && f.store.keyBindings(key.id).some(binding => binding.instance_id === item.id))
+    assert.ok(backup)
+    assert.equal(backup.locked, true)
+    assert.equal((await f.runtime.status(backup)).state, 'stopped')
+    const auth = new AuthService(f.store); auth.initializeAdmin('cleanup-password')
+    const deletion = new DeleteService({ store: f.store, runtime: f.runtime, instances: f.instances, units: new NoopUnitManager(), auth })
+    assert.throws(() => deletion.preview(backup.id), /锁定|locked/)
+    await f.instances.setLocked(backup.id, false)
+    f.runtime.start = async () => assert.fail('Cleanup must not start a CPA instance')
+    const challenge = deletion.preview(backup.id)
+    await assert.rejects(deletion.confirm(backup.id, challenge.id, 'wrong-password'))
+    assert.equal(f.store.keyBindings(key.id).length, 2)
+    await deletion.confirm(backup.id, challenge.id, 'cleanup-password')
+    assert.throws(() => f.store.getInstance(backup.id), /not found/)
+    assert.equal(fs.existsSync(backup.directory), false)
+    assert.deepEqual(f.store.keyBindings(key.id).map(item => item.instance_id), [f.first.id])
+    assert.equal(f.store.getManagedKey(key.id).locked, true)
+    assert.equal((await f.runtime.status(f.first)).state, 'running')
+    assert.equal(f.store.getInstance(f.first.id).version, 'v1')
   } finally { f.close() }
 })
 

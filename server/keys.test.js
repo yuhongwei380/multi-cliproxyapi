@@ -73,7 +73,7 @@ test('bindings do not deploy; repeated deploy is idempotent and preserves existi
   assert.equal(f.writes.length, 0)
   assert.throws(() => f.store.deleteManagedKey(key.id), /未撤销绑定/)
   assert.throws(() => f.store.assertNoKeyBindings('one'), /仍绑定/)
-  assert.throws(() => new DeleteService({ store: f.store, instances: f.instances }).preview('one'), /仍绑定/)
+  assert.ok(new DeleteService({ store: f.store, instances: f.instances }).preview('one').id)
   const deployed = await f.service.distribute(key.id); assert.deepEqual(deployed.results.map(item => item.status), ['deployed', 'deployed'])
   assert.deepEqual(f.remote.get('one'), ['existing-key', secret])
   const repeated = await f.service.distribute(key.id); assert.ok(repeated.results.every(item => item.status === 'exists')); assert.equal(f.writes.length, 2)

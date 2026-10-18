@@ -9,6 +9,27 @@ import { Store, ConflictError, NotFoundError } from './store.js'
 function tempStore() { const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-store-')); return { directory, store: new Store(path.join(directory, 'control.db')) } }
 function instance(directory, id = 'cpa-test') { const now = new Date().toISOString(); return { id, name: 'demo', port: 19001, directory: path.join(directory, 'instances', id), management_secret_ciphertext: 'v1:test', desired_state: 'stopped', version: 'v1', revision: 1, created_at: now, updated_at: now } }
 
+test('instance removal and binding cleanup commit together or roll back together', () => {
+  const store = new Store(':memory:')
+  try {
+    const item = instance('/test')
+    store.createInstance(item)
+    store.createManagedKey({ id: 'key', note: '', ciphertext: 'encrypted', fingerprint: 'fingerprint', locked: true, deleting: false, created_at: 'now' })
+    store.saveManagedKey({ ...store.getManagedKey('key'), locked: true })
+    store.bindKey('key', item.id)
+    assert.throws(() => store.deleteInstance(item.id), ConflictError)
+    store.db.exec("CREATE TRIGGER fail_instance_delete BEFORE DELETE ON instances BEGIN SELECT RAISE(ABORT, 'database delete failed'); END")
+    assert.throws(() => store.deleteInstance(item.id, { removeKeyBindings: true }), /database delete failed/)
+    assert.equal(store.getInstance(item.id).id, item.id)
+    assert.equal(store.keyBindings('key').length, 1)
+    store.db.exec('DROP TRIGGER fail_instance_delete')
+    store.deleteInstance(item.id, { removeKeyBindings: true })
+    assert.throws(() => store.getInstance(item.id), NotFoundError)
+    assert.deepEqual(store.keyBindings('key'), [])
+    assert.equal(store.getManagedKey('key').locked, true)
+  } finally { store.close() }
+})
+
 test('SQLite store persists instances and protects optimistic revisions', () => {
   const fixture = tempStore(); const item = instance(fixture.directory); fixture.store.createInstance(item); assert.equal(fixture.store.getInstance(item.id).name, 'demo'); assert.equal(fixture.store.listInstances().length, 1)
   const updated = { ...item, name: 'updated', revision: 2, updated_at: new Date().toISOString() }; fixture.store.updateInstance(updated, 1); assert.equal(fixture.store.getInstance(item.id).name, 'updated'); assert.throws(() => fixture.store.updateInstance({ ...updated, revision: 3 }, 1), ConflictError); fixture.store.close()

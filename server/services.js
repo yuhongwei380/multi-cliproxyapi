@@ -269,8 +269,7 @@ export class InstanceService {
       await this.units?.unregister(instance)
       validateDeletePath(this.root, instance.directory)
       await fsp.rm(instance.directory, { recursive: true, force: true })
-      this.store.deleteKeyBindingsForInstance?.(instance.id)
-      this.store.deleteInstance(instance.id)
+      this.store.deleteInstance(instance.id, { removeKeyBindings: true })
       this.runtimeLog('info', instance, 'automatic upgrade backup removed', { source_instance_id: metadata.source_id, reason: metadata.reason })
       return instance
     })
@@ -425,13 +424,12 @@ export class InstanceService {
 
 export class DeleteService {
   constructor({ store, runtime, units, instances, auth, clock = () => new Date(), challengeTtlMs = 10 * 60 * 1000 } = {}) { this.store = store; this.runtime = runtime; this.units = units; this.instances = instances; this.auth = auth; this.clock = clock; this.challengeTtlMs = challengeTtlMs; this.running = new Set() }
-  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.store.assertNoKeyBindings(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
+  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
   async confirm(instanceId, challengeId, password) {
     if (!this.auth) throw new Error('authentication service unavailable'); this.auth.verifyAdminPassword(password); if (this.running.has(instanceId)) throw new Error('delete already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
         this.instances.pluginService?.assertIdle()
-        this.store.assertNoKeyBindings(instanceId)
         const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); this.store.consumeDeleteChallenge(challengeId, instanceId, instance.revision, this.clock().toISOString()); const operation = { id: id('op'), kind: 'delete', instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }; this.store.saveOperation(operation)
         try { await this.remove(instance); operation.state = 'succeeded'; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation) }
         catch (error) { operation.state = 'failed'; operation.message = error.message; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation); throw error }
@@ -445,7 +443,9 @@ export class DeleteService {
     await this.units?.unregister(instance)
     validateDeletePath(this.instances.root, instance.directory)
     await fsp.rm(instance.directory, { recursive: true, force: true })
-    this.store.deleteInstance(instance.id)
+    // The process and its configuration are gone; no CPA call is needed to
+    // revoke keys on this instance. Keep bindings until removal succeeds.
+    this.store.deleteInstance(instance.id, { removeKeyBindings: true })
   }
 }
 

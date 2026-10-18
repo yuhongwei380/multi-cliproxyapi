@@ -11,6 +11,7 @@ import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
 import { InstanceService } from './services.js'
 import { instanceBinaryPath } from './instance-binary.js'
+import { HTTPClient, verifyServiceWithTestKey } from './cpa.js'
 
 const trustedAsset = 'https://github.com/router-for-me/CLIProxyAPI/releases/download/v1.0.0/CLIProxyAPI_1.0.0_linux_amd64.tar.gz'
 
@@ -194,6 +195,29 @@ async function upgradeFixture() {
     close() { store.close(); fs.rmSync(root, { recursive: true, force: true }) }
   }
 }
+
+for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'rolls back persistent rejection' : 'waits for authentication reload'} and cleans its service key`, async () => {
+  const f = await upgradeFixture()
+  let keys = ['existing']; let probes = 0
+  const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'management', maxRetries: 0, fetchImpl: async (url, options) => {
+    if (url.endsWith('/v1/models')) return Response.json({ data: [{ id: 'model' }] }, { status: ++probes < 3 || permanent ? 401 : 200 })
+    if (options.method === 'PUT') { keys = JSON.parse(options.body); return Response.json({ status: 'ok' }) }
+    return Response.json(keys)
+  } })
+  f.upgrade.verifyInstance = () => verifyServiceWithTestKey(client, { maxAttempts: 3, retryDelayMs: 0 })
+  try {
+    await f.instances.start(f.first.id)
+    if (permanent) await assert.rejects(f.upgrade.upgrade('v2'), /after waiting/)
+    else await f.upgrade.upgrade('v2')
+    assert.equal(probes, 3)
+    assert.deepEqual(keys, ['existing'])
+    for (const item of [f.first, f.second]) assert.equal(f.store.getInstance(item.id).version, permanent ? 'v1' : 'v2')
+    const running = await f.runtime.status(f.store.getInstance(f.first.id))
+    assert.equal(running.state, 'running')
+    assert.equal(running.version, permanent ? 'v1' : 'v2')
+    assert.equal((await f.runtime.status(f.second)).state, 'stopped')
+  } finally { f.close() }
+})
 
 test('GitHub release source only downloads bounded assets from the configured repository', async () => {
   let calls = 0

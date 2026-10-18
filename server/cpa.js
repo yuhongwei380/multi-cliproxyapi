@@ -6,9 +6,16 @@ export class CPAError extends Error { constructor(message, code = 'ERR_CPA') { s
 export const unsupported = message => new CPAError(message || 'CPA endpoint is unsupported', 'ERR_UNSUPPORTED')
 export const authentication = message => new CPAError(message || 'CPA management authentication failed', 'ERR_AUTHENTICATION')
 export const rateLimited = message => new CPAError(message || 'CPA endpoint is rate limited', 'ERR_RATE_LIMITED')
+// Prefix for a unique, short-lived post-upgrade smoke-test key.
+export const SERVICE_TEST_KEY = 'sk-multi-cliproxyapi-upgrade-check'
 
 const stringify = value => typeof value === 'string' ? value : typeof value === 'number' ? String(value) : value && typeof value === 'object' && typeof value.toString === 'function' ? value.toString() : ''
-const sleep = (ms, signal) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason || new Error('aborted')) }, { once: true }) })
+const sleep = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(signal.reason || new Error('aborted')); return }
+  const onAbort = () => { clearTimeout(timer); reject(signal.reason || new Error('aborted')) }
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, ms)
+  signal?.addEventListener('abort', onAbort, { once: true })
+})
 const retryableNetworkError = error => {
   if (!error) return false
   if (error.name === 'TypeError' || error.name === 'AbortError') return true
@@ -23,11 +30,12 @@ export class HTTPClient {
     this.baseUrl = parsed.toString(); this.baseOrigin = parsed.origin; this.managementSecret = managementSecret; this.quotaPath = quotaPath; this.fetchImpl = fetchImpl; this.timeoutMs = timeoutMs; this.maxResponseBytes = maxResponseBytes; this.maxRetries = maxRetries; this.retryBaseMs = retryBaseMs
   }
   endpoint(requestPath) { const result = new URL(requestPath.replace(/^\/+/, ''), `${String(this.baseUrl).replace(/\/+$/, '')}/`); if (result.origin !== this.baseOrigin) throw new Error('CPA request URL must remain on loopback'); return result.toString() }
-  async singleRequest(method, requestPath, signal, body) {
+  async singleRequest(method, requestPath, signal, body, bearer = this.managementSecret) {
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    if (signal) { if (signal.aborted) controller.abort(); else signal.addEventListener('abort', () => controller.abort(), { once: true }) }
+    const onAbort = () => controller.abort(signal.reason)
+    if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }) }
     try {
-      const response = await this.fetchImpl(this.endpoint(requestPath), { method, redirect: 'error', signal: controller.signal, headers: { Accept: 'application/json', Authorization: `Bearer ${this.managementSecret}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+      const response = await this.fetchImpl(this.endpoint(requestPath), { method, redirect: 'error', signal: controller.signal, headers: { Accept: 'application/json', Authorization: `Bearer ${bearer}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
       const reader = response.body?.getReader?.(); let text = ''
       if (reader) {
         let size = 0
@@ -38,15 +46,15 @@ export class HTTPClient {
         text = await response.text(); if (Buffer.byteLength(text) > this.maxResponseBytes) throw new Error('CPA response exceeds size limit')
       }
       return { body: text, status: response.status, retryAfter: parseRetryAfter(response.headers.get('retry-after')) }
-    } finally { clearTimeout(timer) }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) }
   }
-  async request(method, requestPath, signal, body) {
+  async request(method, requestPath, signal, body, bearer = this.managementSecret) {
     let retries = Number.isInteger(this.maxRetries) ? this.maxRetries : 2
     if (retries > 5) retries = 5
     for (let attempt = 0; ; attempt += 1) {
       let result
       try {
-        result = await this.singleRequest(method, requestPath, signal, body)
+        result = await this.singleRequest(method, requestPath, signal, body, bearer)
       } catch (error) {
         if (!retryableNetworkError(error) || retries < 0 || attempt >= retries || signal?.aborted) throw error
         await sleep(Math.min(5000, this.retryBaseMs * (2 ** attempt)), signal)
@@ -57,11 +65,48 @@ export class HTTPClient {
       await sleep(delay, signal)
     }
   }
+  async readClientKeys(signal) {
+    for (const requestPath of ['/v8/management/config/access/api-keys', '/v0/management/api-keys']) {
+      const result = await this.request('GET', requestPath, signal)
+      if (result.status === 404) continue
+      if ([401, 403].includes(result.status)) throw authentication()
+      if (result.status < 200 || result.status >= 300) throw new CPAError('CPA key read failed')
+      let payload; try { payload = JSON.parse(result.body) } catch { throw new CPAError('Invalid CPA key response') }
+      // CPA 8.0.23 serializes an empty legacy key list as null, not [].
+      const rawKeys = requestPath.startsWith('/v8/') ? payload : payload?.['api-keys']
+      const keys = rawKeys === null ? [] : rawKeys
+      if (payload?.error) throw new CPAError('Invalid CPA key response')
+      if (!Array.isArray(keys) || keys.some(value => typeof value !== 'string')) throw new CPAError('Invalid CPA key list')
+      return { path: requestPath, keys }
+    }
+    throw unsupported('CPA client key API unavailable')
+  }
+  async writeClientKeys(requestPath, keys, signal) {
+    if (!['/v8/management/config/access/api-keys', '/v0/management/api-keys'].includes(requestPath)) throw new CPAError('Invalid CPA key path')
+    // Ambiguous mutation failures must be reconciled by reading, never blindly retried.
+    const result = await this.singleRequest('PUT', requestPath, signal, keys)
+    if (result.status < 200 || result.status >= 300) throw new CPAError('CPA key write failed')
+  }
   async health(signal) {
     const result = await this.request('GET', '/v0/management/config', signal)
     if (result.status === 401 || result.status === 403) throw authentication()
     if (result.status === 429) throw rateLimited()
     if (result.status < 200 || result.status >= 300) throw new Error(`CPA health returned HTTP ${result.status}`)
+  }
+  async listModels(apiKey = SERVICE_TEST_KEY, signal) {
+    if (typeof apiKey !== 'string' || !apiKey) throw new CPAError('CPA service test key is invalid')
+    const result = await this.request('GET', '/v1/models', signal, undefined, apiKey)
+    if (result.status === 401 || result.status === 403) {
+      const error = authentication('CPA model list rejected the service test key')
+      error.upstreamStatus = result.status
+      throw error
+    }
+    if (result.status === 429) throw rateLimited()
+    if (result.status < 200 || result.status >= 300) throw new CPAError(`CPA model list returned HTTP ${result.status}`)
+    let payload
+    try { payload = JSON.parse(result.body) } catch { throw new CPAError('Invalid CPA model list response') }
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.data)) throw new CPAError('CPA model list response is invalid')
+    return payload
   }
   async listAccounts(signal) {
     const result = await this.request('GET', '/v0/management/auth-files', signal)
@@ -134,6 +179,49 @@ export class HTTPClient {
       for (const field of ['remaining', 'total']) if (value[field] !== undefined && value[field] !== null && (typeof value[field] !== 'number' || !Number.isFinite(value[field]) || value[field] < 0)) throw new Error(`invalid CPA quota ${field}`)
     }
     return { ...snapshot, values, status: 'ok', message: payload.message || '', collected_at: new Date().toISOString() }
+  }
+}
+
+// Verify the public service path instead of treating a running process as a
+// successful upgrade. CPA acknowledges config saves before asynchronously
+// reloading runtime authentication, so a newly added key can briefly get 401.
+export async function verifyServiceWithTestKey(client, { testKey = `${SERVICE_TEST_KEY}-${crypto.randomBytes(16).toString('hex')}`, signal, maxAttempts = 20, retryDelayMs = 500, timeoutMs = 30000 } = {}) {
+  if (!client || typeof client.readClientKeys !== 'function' || typeof client.writeClientKeys !== 'function' || typeof client.listModels !== 'function') throw new Error('CPA service verifier is unavailable')
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0 || !Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error('CPA service verification retry settings are invalid')
+  if (typeof testKey !== 'string' || !testKey) throw new CPAError('CPA service test key is invalid')
+  const deadline = AbortSignal.timeout(timeoutMs)
+  const verificationSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
+  verificationSignal.throwIfAborted()
+  const current = await client.readClientKeys(verificationSignal)
+  const hadKey = current.keys.includes(testKey)
+  try {
+    // Include the mutation in cleanup: a disconnected PUT may already be saved.
+    if (!hadKey) await client.writeClientKeys(current.path, [...current.keys, testKey], verificationSignal)
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      verificationSignal.throwIfAborted()
+      const saved = await client.readClientKeys(verificationSignal)
+      if (!saved.keys.includes(testKey)) throw new CPAError('CPA service test key was not retained in configuration')
+      try {
+        const payload = await client.listModels(testKey, verificationSignal)
+        return { model_count: payload.data.length }
+      } catch (error) {
+        // 403 is a policy rejection, not a key-propagation delay.
+        if (hadKey || error.upstreamStatus !== 401) throw error
+        if (attempt + 1 === maxAttempts) {
+          error.message = 'CPA model list rejected the service test key after waiting for authentication configuration to reload'
+          throw error
+        }
+        await sleep(retryDelayMs, verificationSignal)
+      }
+    }
+  } finally {
+    if (!hadKey) {
+      // Cleanup must still run after cancellation and preserve unrelated keys.
+      const latest = await client.readClientKeys()
+      if (latest.keys.includes(testKey)) await client.writeClientKeys(latest.path, latest.keys.filter(key => key !== testKey))
+      const cleaned = await client.readClientKeys()
+      if (cleaned.keys.includes(testKey)) throw new CPAError('CPA service test key cleanup failed')
+    }
   }
 }
 

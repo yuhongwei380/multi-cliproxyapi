@@ -9,6 +9,40 @@ import { Store, ConflictError, NotFoundError } from './store.js'
 function tempStore() { const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-store-')); return { directory, store: new Store(path.join(directory, 'control.db')) } }
 function instance(directory, id = 'cpa-test') { const now = new Date().toISOString(); return { id, name: 'demo', port: 19001, directory: path.join(directory, 'instances', id), management_secret_ciphertext: 'v1:test', desired_state: 'stopped', version: 'v1', revision: 1, created_at: now, updated_at: now } }
 
+test('runtime log category and level filters apply before the result limit', () => {
+  const store = new Store(':memory:')
+  try {
+    store.appendRuntimeLog({ source: 'upgrade', level: 'error', message: 'old upgrade failure', created_at: '2020-01-01T00:00:00Z' })
+    store.appendRuntimeLog({ source: 'upgrade', level: 'info', message: 'upgrade completed', created_at: '2020-01-02T00:00:00Z' })
+    for (let index = 0; index < 501; index++) store.appendRuntimeLog({ source: 'instance', message: 'new instance event', created_at: '2021-01-01T00:00:00Z' })
+    assert.ok(store.listRuntimeLogs(500).every(item => item.source === 'instance'))
+    assert.equal(store.listRuntimeLogs(1, { source: 'upgrade' })[0].message, 'upgrade completed')
+    assert.equal(store.listRuntimeLogs(1, { source: 'upgrade', level: 'error' })[0].message, 'old upgrade failure')
+    assert.deepEqual(store.listRuntimeLogs(500, { source: "upgrade' OR 1=1 --" }), [])
+  } finally { store.close() }
+})
+
+test('instance removal and binding cleanup commit together or roll back together', () => {
+  const store = new Store(':memory:')
+  try {
+    const item = instance('/test')
+    store.createInstance(item)
+    store.createManagedKey({ id: 'key', note: '', ciphertext: 'encrypted', fingerprint: 'fingerprint', locked: true, deleting: false, created_at: 'now' })
+    store.saveManagedKey({ ...store.getManagedKey('key'), locked: true })
+    store.bindKey('key', item.id)
+    assert.throws(() => store.deleteInstance(item.id), ConflictError)
+    store.db.exec("CREATE TRIGGER fail_instance_delete BEFORE DELETE ON instances BEGIN SELECT RAISE(ABORT, 'database delete failed'); END")
+    assert.throws(() => store.deleteInstance(item.id, { removeKeyBindings: true }), /database delete failed/)
+    assert.equal(store.getInstance(item.id).id, item.id)
+    assert.equal(store.keyBindings('key').length, 1)
+    store.db.exec('DROP TRIGGER fail_instance_delete')
+    store.deleteInstance(item.id, { removeKeyBindings: true })
+    assert.throws(() => store.getInstance(item.id), NotFoundError)
+    assert.deepEqual(store.keyBindings('key'), [])
+    assert.equal(store.getManagedKey('key').locked, true)
+  } finally { store.close() }
+})
+
 test('SQLite store persists instances and protects optimistic revisions', () => {
   const fixture = tempStore(); const item = instance(fixture.directory); fixture.store.createInstance(item); assert.equal(fixture.store.getInstance(item.id).name, 'demo'); assert.equal(fixture.store.listInstances().length, 1)
   const updated = { ...item, name: 'updated', revision: 2, updated_at: new Date().toISOString() }; fixture.store.updateInstance(updated, 1); assert.equal(fixture.store.getInstance(item.id).name, 'updated'); assert.throws(() => fixture.store.updateInstance({ ...updated, revision: 3 }, 1), ConflictError); fixture.store.close()
@@ -32,13 +66,13 @@ test('runtime and audit logs are structured and ordered newest first', () => {
 })
 
 test('quota settings use defaults and persist webhook configuration', () => {
-  const fixture = tempStore(); assert.deepEqual(fixture.store.getQuotaSettings(), { refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false })
-  fixture.store.saveQuotaSettings({ refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_ciphertext: 'v1:url', alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_signing_secret_ciphertext: 'v1:secret' }); assert.deepEqual(fixture.store.getQuotaSettings(), { refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret_configured: true }); const privateSettings = fixture.store.getQuotaSettings({ includeSecretCiphertext: true }); assert.equal(privateSettings.webhook_signing_secret_ciphertext, 'v1:secret'); assert.equal(privateSettings.webhook_url_ciphertext, 'v1:url'); fixture.store.close()
+  const fixture = tempStore(); assert.deepEqual(fixture.store.getQuotaSettings(), { refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, instance_ids: [], targets_configured: false })
+  fixture.store.saveQuotaSettings({ refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_ciphertext: 'v1:url', alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_signing_secret_ciphertext: 'v1:secret' }); assert.deepEqual(fixture.store.getQuotaSettings(), { refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret_configured: true, instance_ids: [], targets_configured: false }); const privateSettings = fixture.store.getQuotaSettings({ includeSecretCiphertext: true }); assert.equal(privateSettings.webhook_signing_secret_ciphertext, 'v1:secret'); assert.equal(privateSettings.webhook_url_ciphertext, 'v1:url'); fixture.store.close()
 })
 
 test('quota settings migrate an existing database before reading signing columns', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-store-legacy-')); const file = path.join(directory, 'control.db'); const db = new DatabaseSync(file)
   db.exec("CREATE TABLE quota_settings (id INTEGER PRIMARY KEY CHECK (id = 1), refresh_interval_minutes INTEGER NOT NULL DEFAULT 360, webhook_enabled INTEGER NOT NULL DEFAULT 0, webhook_url TEXT NOT NULL DEFAULT '', alert_threshold_percent REAL NOT NULL DEFAULT 20); INSERT INTO quota_settings VALUES (1, 120, 1, 'https://oapi.dingtalk.com/robot/send?access_token=legacy', 15);")
   db.close()
-  const store = new Store(file); assert.deepEqual(store.getQuotaSettings(), { refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: false, webhook_secret_configured: false }); assert.equal(store.getQuotaSettings({ includeSecretCiphertext: true }).webhook_url_legacy, 'https://oapi.dingtalk.com/robot/send?access_token=legacy'); store.close()
+  const store = new Store(file); assert.deepEqual(store.getQuotaSettings(), { refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: false, webhook_secret_configured: false, instance_ids: [], targets_configured: false }); assert.equal(store.getQuotaSettings({ includeSecretCiphertext: true }).webhook_url_legacy, 'https://oapi.dingtalk.com/robot/send?access_token=legacy'); store.close()
 })

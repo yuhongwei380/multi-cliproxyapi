@@ -1,16 +1,19 @@
-import { InputHTMLAttributes, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
-import { api, AuditLog, BrandingSettings, Instance, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
+import { api, AuditLog, BrandingSettings, Instance, QuotaNotificationSettings, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
 import './app.css'
 import './management-link.css'
+import { Dropdown, DropdownOption, MultiSelect } from './Dropdown'
 import { PluginPanel } from './PluginPanel'
+import { KeyPanel } from './KeyPanel'
 
-type Modal = 'create' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
-type Module = 'overview' | 'instances' | 'quotas' | 'versions' | 'plugins' | 'runtime-logs' | 'audit-logs'
+type Modal = 'create' | 'backup' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
+type Module = 'overview' | 'instances' | 'quotas' | 'quota-notifications' | 'versions' | 'plugins' | 'keys' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
+  instance_ids: [],
   refresh_interval_minutes: 360,
   webhook_enabled: false,
   webhook_url: '',
@@ -37,9 +40,11 @@ const DEFAULT_BRANDING: BrandingSettings = {
 const MODULE_LABELS: Record<Module, string> = {
   overview: '总览',
   instances: 'CLIProxyAPI 实例管理',
-  quotas: '配额观察',
+  quotas: '额度观察',
+  'quota-notifications': '定时额度通知',
   versions: '版本管理',
   plugins: '插件管理',
+  keys: 'API Key 管理',
   'runtime-logs': '运行日志',
   'audit-logs': '审计日志'
 }
@@ -48,9 +53,10 @@ const LOGO_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif'
 const MAX_LOGO_BYTES = 256 * 1024
 
 function moduleFromHash(hash: string): Module {
+  if (hash === '#keys') return 'keys'
   if (hash === '#plugins') return 'plugins'
   const value = hash.replace(/^#/, '')
-  if (value === 'instances' || value === 'quotas' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
+  if (value === 'instances' || value === 'quotas' || value === 'quota-notifications' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
   return 'overview'
 }
 
@@ -58,128 +64,6 @@ function moduleHref(module: Module) {
   return module === 'overview' ? '#dashboard' : '#' + module
 }
 
-type DropdownOption = { value: string; label: string }
-
-function Dropdown({ id, label, options, value, onChange, placeholder, className = '' }: {
-  id: string
-  label: string
-  options: readonly DropdownOption[]
-  value: string
-  onChange: (value: string) => void
-  placeholder?: string
-  className?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(0)
-  const pickerRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
-  const selectedIndex = options.findIndex(option => option.value === value)
-  const selectedLabel = selectedIndex >= 0 ? options[selectedIndex].label : placeholder
-  const listboxId = `${id}-listbox`
-
-  useEffect(() => {
-    if (open) optionRefs.current[activeIndex]?.focus()
-  }, [open, activeIndex])
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!pickerRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
-  }, [open])
-
-  const toggle = () => {
-    if (!open) setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
-    setOpen(current => !current)
-  }
-
-  const choose = (option: DropdownOption) => {
-    onChange(option.value)
-    setOpen(false)
-    triggerRef.current?.focus()
-  }
-
-  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const lastIndex = options.length - 1
-    let nextIndex: number | null = null
-    if (event.key === 'ArrowDown') nextIndex = (activeIndex + 1) % options.length
-    if (event.key === 'ArrowUp') nextIndex = (activeIndex - 1 + options.length) % options.length
-    if (event.key === 'Home') nextIndex = 0
-    if (event.key === 'End') nextIndex = lastIndex
-    if (nextIndex !== null) {
-      event.preventDefault()
-      setActiveIndex(nextIndex)
-      optionRefs.current[nextIndex]?.focus()
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setOpen(false)
-      triggerRef.current?.focus()
-    }
-  }
-
-  return <div
-    className={`dropdown-picker ${className}`.trim()}
-    ref={pickerRef}
-    onBlur={event => {
-      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
-    }}
-  >
-    <button
-      ref={triggerRef}
-      type="button"
-      className="dropdown-trigger"
-      role="combobox"
-      aria-label={`${label}${selectedLabel ? `: ${selectedLabel}` : ''}`}
-      aria-haspopup="listbox"
-      aria-expanded={open}
-      aria-controls={listboxId}
-      onClick={toggle}
-      onKeyDown={event => {
-        if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End')) {
-          event.preventDefault()
-          const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : selectedIndex >= 0 ? selectedIndex : 0
-          setActiveIndex(index)
-          setOpen(true)
-        }
-      }}
-    >
-      <span className="dropdown-value">{selectedLabel || placeholder || '\u00a0'}</span>
-      <svg className={`dropdown-chevron${open ? ' is-open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
-        <path d="m4.5 6 3.5 3.5L11.5 6" />
-      </svg>
-    </button>
-    {open && <div
-      className="dropdown-menu"
-      id={listboxId}
-      role="listbox"
-      aria-label={label}
-      onKeyDown={handleMenuKeyDown}
-    >
-      {options.map((option, index) => <button
-        key={option.value}
-        ref={element => { optionRefs.current[index] = element }}
-        type="button"
-        className="dropdown-option"
-        role="option"
-        aria-selected={value === option.value}
-        tabIndex={activeIndex === index ? 0 : -1}
-        data-active={activeIndex === index}
-        onFocus={() => setActiveIndex(index)}
-        onClick={() => choose(option)}
-      >
-        <span>{option.label}</span>
-        <svg className="dropdown-option-check" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="m3.5 8.25 2.75 2.5 6-5.5" />
-        </svg>
-      </button>)}
-    </div>}
-  </div>
-}
 
 function App() {
   const [user, setUser] = useState<string | null>(null)
@@ -204,7 +88,10 @@ function App() {
   const [quotaSettingsLoaded, setQuotaSettingsLoaded] = useState(false)
   const [quotaSettingsLoading, setQuotaSettingsLoading] = useState(false)
   const [quotaSettingsError, setQuotaSettingsError] = useState('')
-  const [quotaPeriodOpen, setQuotaPeriodOpen] = useState(false)
+  const [quotaNotificationSettings, setQuotaNotificationSettings] = useState<QuotaNotificationSettings[]>([])
+  const [quotaNotificationSettingsLoaded, setQuotaNotificationSettingsLoaded] = useState(false)
+  const [quotaNotificationSettingsLoading, setQuotaNotificationSettingsLoading] = useState(false)
+  const [quotaNotificationSettingsError, setQuotaNotificationSettingsError] = useState('')
   const [settingsNotice, setSettingsNotice] = useState('')
   const instanceActionLock = useRef(new Set<string>())
 
@@ -217,6 +104,7 @@ function App() {
       setInstances(items)
       const currentIDs = new Set(items.map(instance => instance.id))
       setQuotas(previous => Object.fromEntries(Object.entries(previous).filter(([id]) => currentIDs.has(id))))
+      setQuotaNotificationSettings(previous => previous.filter(item => currentIDs.has(item.instance_id)))
       await Promise.all(items.map(async instance => {
         try {
           const q = await api.get('/instances/' + instance.id + '/quotas')
@@ -263,6 +151,24 @@ function App() {
     }
   }
 
+  const loadQuotaNotificationSettings = async () => {
+    if (quotaNotificationSettingsLoading) return
+    setQuotaNotificationSettingsLoading(true)
+    setQuotaNotificationSettingsError('')
+    try {
+      const response = await api.get('/quota/notifications')
+      setQuotaNotificationSettings((response.items ?? []) as QuotaNotificationSettings[])
+      setQuotaNotificationSettingsLoaded(true)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : '定时额度通知配置加载失败'
+      setQuotaNotificationSettingsError(message)
+      setError(message)
+      setQuotaNotificationSettingsLoaded(true)
+    } finally {
+      setQuotaNotificationSettingsLoading(false)
+    }
+  }
+
   useEffect(() => {
     const onHashChange = () => setActiveModule(moduleFromHash(window.location.hash))
     window.addEventListener('hashchange', onHashChange)
@@ -270,8 +176,11 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (user && activeModule === 'quotas' && !quotaSettingsLoaded && !quotaSettingsLoading) void loadQuotaSettings()
-  }, [user, activeModule, quotaSettingsLoaded, quotaSettingsLoading])
+    if (user && activeModule === 'quota-notifications') {
+      if (!quotaSettingsLoaded && !quotaSettingsLoading) void loadQuotaSettings()
+      if (!quotaNotificationSettingsLoaded && !quotaNotificationSettingsLoading) void loadQuotaNotificationSettings()
+    }
+  }, [user, activeModule, quotaSettingsLoaded, quotaSettingsLoading, quotaNotificationSettingsLoaded, quotaNotificationSettingsLoading])
 
   useEffect(() => {
     api.get('/auth/status')
@@ -303,10 +212,11 @@ function App() {
     setError('')
   }
 
-  const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => {
+  const act = async (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => {
     if (instanceActionLock.current.has(instance.id)) return
     if (instance.locked && (action === 'restart' || action === 'stop')) return
     if (action === 'unlock') { beginUnlock(instance); return }
+    if (action === 'backup') { if (!instance.locked) { setEditTarget(instance); setModal('backup'); setError('') }; return }
     if ((action === 'restart' || action === 'stop') && !window.confirm(`确认${action === 'restart' ? '重启' : '停止'}实例「${instance.name}」？这会中断当前请求。`)) return
     instanceActionLock.current.add(instance.id)
     setInstanceBusy(previous => ({ ...previous, [instance.id]: action }))
@@ -373,7 +283,7 @@ function App() {
   const upgradeVersion = async (tag: string) => {
     setBusy('version:upgrade:' + tag)
     setError('')
-    try { await api.post('/versions/upgrade', { version: tag }); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败') } finally { setBusy(null) }
+    try { const result = await api.post('/versions/upgrade', { version: tag }); const checked = Array.isArray(result?.checked) ? result.checked.length : 0; setSettingsNotice(result?.backups_removed === false && result?.verified === true ? '升级完成且服务验证通过，但自动备份清理失败，请在实例管理中手动清理。' : result?.backups_removed === false ? '升级完成，但自动备份清理失败，请在实例管理中手动清理。' : result?.verified === true ? `升级完成，已通过 ${checked} 个实例的模型列表验证，升级前的自动备份已清理。` : '升级完成，但服务验证未执行；请检查实例状态。'); await load() } catch (cause) { setError(cause instanceof Error ? cause.message : '版本升级失败'); await load() } finally { setBusy(null) }
   }
 
   const recoverUpgrade = async () => {
@@ -392,6 +302,12 @@ function App() {
     setQuotaSettings(settings)
     setQuotaSettingsLoaded(true)
     setQuotaSettingsError('')
+  }
+
+  const saveQuotaNotificationSettings = (settings: QuotaNotificationSettings) => {
+    setQuotaNotificationSettings(previous => previous.some(item => item.instance_id === settings.instance_id) ? previous.map(item => item.instance_id === settings.instance_id ? settings : item) : [...previous, settings])
+    setQuotaNotificationSettingsLoaded(true)
+    setQuotaNotificationSettingsError('')
   }
 
   const saveBranding = (settings: BrandingSettings) => {
@@ -413,12 +329,14 @@ function App() {
       <div className="sidebar-caption nav-section-caption">控制</div>
       <nav className="sidebar-nav">
         <NavigationLink module="instances" activeModule={activeModule} onNavigate={navigate} icon="◈" ariaLabel="CLIProxyAPI 实例管理（实例运行轨）">CLIProxyAPI 实例管理<span className="nav-count">{instances.length}</span></NavigationLink>
+        <NavigationLink module="quotas" activeModule={activeModule} onNavigate={navigate} icon="◌">额度观察</NavigationLink>
         <NavigationLink module="versions" activeModule={activeModule} onNavigate={navigate} icon="↥">版本管理</NavigationLink>
         <NavigationLink module="plugins" activeModule={activeModule} onNavigate={navigate} icon="◇">插件管理</NavigationLink>
+        <NavigationLink module="keys" activeModule={activeModule} onNavigate={navigate} icon="⚿">API Key 管理</NavigationLink>
       </nav>
       <div className="sidebar-caption nav-section-caption">观测</div>
       <nav className="sidebar-nav">
-        <NavigationLink module="quotas" activeModule={activeModule} onNavigate={navigate} icon="◌">配额观察</NavigationLink>
+        <NavigationLink module="quota-notifications" activeModule={activeModule} onNavigate={navigate} icon="◷">定时额度通知</NavigationLink>
         <NavigationLink module="runtime-logs" activeModule={activeModule} onNavigate={navigate} icon="≋">运行日志</NavigationLink>
         <NavigationLink module="audit-logs" activeModule={activeModule} onNavigate={navigate} icon="◎">审计日志</NavigationLink>
       </nav>
@@ -438,21 +356,24 @@ function App() {
     <div className="workspace">
       <header className="topbar">
         <div className="breadcrumb"><span>控制中心</span><b>/</b><strong>{MODULE_LABELS[activeModule]}</strong></div>
-        <div className="topbar-actions"><span className="connection-toast"><span className="dot" />已连接</span><span className="user-chip"><span className="dot" />{user}</span><button type="button" className="icon-button topbar-settings" aria-label="管理员设置" title="管理员设置" onClick={() => { setSettingsNotice(''); setError(''); setModal('admin-settings') }}><SettingsIcon /></button><button className="button ghost" onClick={async () => { await api.post('/auth/logout'); setUser(null) }}>退出</button></div>
+        <div className="topbar-actions"><a className="button ghost upstream-repository" href="https://github.com/router-for-me/CLIProxyAPI" target="_blank" rel="noreferrer">上游CPA仓库</a><span className="connection-toast"><span className="dot" />已连接</span><span className="user-chip"><span className="dot" />{user}</span><button type="button" className="icon-button topbar-settings" aria-label="管理员设置" title="管理员设置" onClick={() => { setSettingsNotice(''); setError(''); setModal('admin-settings') }}><SettingsIcon /></button><button className="button ghost" onClick={async () => { await api.post('/auth/logout'); setUser(null) }}>退出</button></div>
       </header>
       <main id={activeModule === 'overview' ? 'dashboard' : activeModule} className="dashboard-content">
         {error && <div className="alert" role="alert"><span>!</span>{error}<button aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
         {settingsNotice && <div className="success-toast" role="status"><span>✓</span>{settingsNotice}<button aria-label="关闭提示" onClick={() => setSettingsNotice('')}>×</button></div>}
         {activeModule === 'overview' && <Overview branding={branding} instances={instances} quotas={quotas} versions={versions} upgradeState={upgradeState} loading={loading} busy={busy} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} onNavigate={navigate} />}
         {activeModule === 'instances' && <InstanceManagement instances={instances} quotas={quotas} loading={loading} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} />}
-        {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} periodOpen={quotaPeriodOpen} busy={busy} instanceBusy={instanceBusy} onTogglePeriod={() => { setQuotaPeriodOpen(open => !open); if (!quotaSettingsLoaded) void loadQuotaSettings() }} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} />}
+        {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} busy={busy} instanceBusy={instanceBusy} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onNavigate={navigate} />}
+        {activeModule === 'quota-notifications' && <QuotaNotificationModule instances={instances} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} notificationSettings={quotaNotificationSettings} notificationSettingsLoaded={quotaNotificationSettingsLoaded} notificationSettingsLoading={quotaNotificationSettingsLoading} notificationSettingsError={quotaNotificationSettingsError} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} onNotificationSaved={saveQuotaNotificationSettings} onNotificationError={message => { setQuotaNotificationSettingsError(message); setError(message) }} onRefresh={() => { void loadQuotaSettings(); void loadQuotaNotificationSettings() }} />}
         {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
         {activeModule === 'plugins' && <PluginPanel />}
+        {activeModule === 'keys' && <KeyPanel />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
       <footer className="content-copyright" aria-label="版权信息"><span>{branding.copyright}</span><span className="content-version">v{APP_VERSION}</span></footer>
     </div>
+    {modal === 'backup' && editTarget && <BackupDialog instance={editTarget} instances={instances} onClose={() => setModal(null)} onSaved={() => { setModal(null); setSettingsNotice('备份实例已保存，可单独启动进行测试升级。'); void load() }} />}
     {modal === 'create' && <CreateDialog onClose={() => setModal(null)} onCreated={() => { setModal(null); void load() }} onError={setError} />}
     {modal === 'edit' && editTarget && <EditDialog instance={editTarget} onClose={() => setModal(null)} onSaved={() => { setModal(null); setEditTarget(null); void load() }} onError={setError} />}
     {modal === 'delete' && deleteTarget && <DeleteDialog instance={deleteTarget} challenge={challenge} onClose={() => setModal(null)} onDeleted={() => { setModal(null); void load() }} onError={setError} />}
@@ -466,7 +387,7 @@ function NavigationLink({ module, activeModule, onNavigate, icon, ariaLabel, chi
   return <a className={'nav-item ' + (module === activeModule ? 'active' : '')} href={moduleHref(module)} aria-label={ariaLabel} aria-current={module === activeModule ? 'page' : undefined} onClick={event => { event.preventDefault(); onNavigate(module) }}><span className="nav-icon" aria-hidden="true">{icon}</span>{children}</a>
 }
 
-function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
+function Overview({ branding, instances, quotas, versions, upgradeState, loading, busy, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure, onInstall, onUpgrade, onRecover, onUninstall, onNavigate }: { branding: BrandingSettings; instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; versions: VersionInstall[]; upgradeState: UpgradeState; loading: boolean; busy: string | null; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void; onInstall: (tag: string) => void; onUpgrade: (tag: string) => void; onRecover: () => void; onUninstall: (version: VersionInstall) => void; onNavigate: (module: Module) => void }) {
   const running = instances.filter(instance => instance.status?.ready).length
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
@@ -485,8 +406,8 @@ function Overview({ branding, instances, quotas, versions, upgradeState, loading
       <div><span>当前版本</span><strong className="metric-version">{instances[0]?.version || '—'}</strong><em>{loading ? '正在同步版本' : instances.length ? '由实例统一使用' : versions.some(version => version.usable) ? '版本已安装，等待创建实例' : '尚未安装 CPA 版本'}</em></div>
     </section>
     <section className="overview-combined-card" aria-label="实例 + 配额">
-      <div className="combined-card-head"><div><div className="eyebrow">CONTROL PLANE PULSE</div><h2>实例 + 配额</h2><p>从一个视图确认服务数量、OAuth 账户和配额健康度。</p></div><button className="button ghost" onClick={() => onNavigate('quotas')}>查看配额观察 →</button></div>
-      <div className="combined-metrics"><div><span>实例</span><strong>{instances.length}<small> / 5</small></strong><em>{running ? running + ' 个运行中' : '暂无运行实例'}</em></div><div><span>OAuth 账户</span><strong>{accounts}</strong><em>{successful ? successful + ' 个成功快照' : '等待首次采集'}</em></div><div><span>低配额提醒</span><strong className={low ? 'warn-text' : ''}>{low}</strong><em>{low ? '请打开配额观察处理' : '当前没有低于 20% 的窗口'}</em></div></div>
+      <div className="combined-card-head"><div><div className="eyebrow">CONTROL PLANE PULSE</div><h2>实例 + 配额</h2><p>从一个视图确认服务数量、OAuth 账户和配额健康度。</p></div><button className="button ghost" onClick={() => onNavigate('quotas')}>查看额度观察 →</button></div>
+      <div className="combined-metrics"><div><span>实例</span><strong>{instances.length}<small> / 5</small></strong><em>{running ? running + ' 个运行中' : '暂无运行实例'}</em></div><div><span>OAuth 账户</span><strong>{accounts}</strong><em>{successful ? successful + ' 个成功快照' : '等待首次采集'}</em></div><div><span>低配额提醒</span><strong className={low ? 'warn-text' : ''}>{low}</strong><em>{low ? '请打开额度观察处理' : '当前没有低于 20% 的窗口'}</em></div></div>
     </section>
     <section className="overview-preview">
       <section className="section-heading"><div><div className="eyebrow">INSTANCE SUMMARY</div><h2>实例概览</h2><p>每个实例独立运行，状态与 OAuth 配额在这里汇合。</p></div><button className="button ghost" onClick={onRefresh}>重新同步</button></section>
@@ -496,24 +417,139 @@ function Overview({ branding, instances, quotas, versions, upgradeState, loading
   </>
 }
 
-function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   return <section className="module-pane instances-module"><section className="section-heading module-heading"><div><div className="eyebrow">CLIPROXYAPI INSTANCES</div><h1>CLIProxyAPI 实例管理</h1><p>创建、停止、重启和配置独立的 CLIProxyAPI 子实例。</p></div><div className="section-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><button className="button ghost" onClick={onRefresh}>重新同步</button></div></section>{loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}</section>
 }
 
-function QuotaObservation({ instances, quotas, settings, settingsLoaded, settingsLoading, settingsError, periodOpen, busy, instanceBusy, onTogglePeriod, onRefreshAll, onRefreshInstance, onCreate, onSettingsSaved, onSettingsError }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; settings: QuotaSettings; settingsLoaded: boolean; settingsLoading: boolean; settingsError: string; periodOpen: boolean; busy: string | null; instanceBusy: Record<string, string>; onTogglePeriod: () => void; onRefreshAll: () => void; onRefreshInstance: (instance: Instance) => void; onCreate: () => void; onSettingsSaved: (settings: QuotaSettings) => void; onSettingsError: (message: string) => void }) {
+function QuotaObservation({ instances, quotas, busy, instanceBusy, onRefreshAll, onRefreshInstance, onCreate, onNavigate }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; busy: string | null; instanceBusy: Record<string, string>; onRefreshAll: () => void; onRefreshInstance: (instance: Instance) => void; onCreate: () => void; onNavigate: (module: Module) => void }) {
   const snapshots = Object.values(quotas).flat()
   const successful = snapshots.filter(quota => quota.status === 'ok').length
   const stale = snapshots.filter(quota => quota.status === 'stale').length
   const accountCount = snapshots.filter(quota => quota.account_id !== '__discovery__').length
-  return <section className="module-pane quotas-module"><section className="section-heading module-heading"><div><div className="eyebrow">QUOTA OBSERVATION</div><h1>配额观察</h1><p>从子实例读取 OAuth 配额，按周期刷新并在低于阈值时通知。</p></div><div className="section-actions quota-toolbar"><button className="button primary" disabled={!!busy || settingsLoading} onClick={onRefreshAll}>手动查看配额</button><button className="button ghost" aria-expanded={periodOpen} onClick={onTogglePeriod}>配额周期</button></div></section><div className="quota-overview-card"><div><span>成功快照</span><strong>{successful}</strong></div><div><span>OAuth 账户</span><strong>{accountCount}</strong></div><div><span>已过期</span><strong className={stale ? 'warn-text' : ''}>{stale}</strong></div><div><span>自动获取</span><strong>{settings.refresh_interval_minutes}<small> 分钟</small></strong></div></div>{settingsError && <div className="settings-inline-error" role="status">{settingsError}</div>}{periodOpen && <QuotaSettingsPanel settings={settings} loading={settingsLoading} loaded={settingsLoaded} onSaved={onSettingsSaved} onError={onSettingsError} />}{instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="quota-instance-list">{instances.map(instance => { const instanceQuotas = quotas[instance.id] ?? []; const instanceAction = instanceBusy[instance.id]; return <article className="quota-instance-card" key={instance.id}><div className="quota-instance-head"><div><div className="eyebrow">INSTANCE QUOTA</div><h2>{instance.name}</h2><p>{instance.id} · 端口 {instance.port}</p></div><button className="button ghost" disabled={!!busy || !!instanceAction} onClick={() => onRefreshInstance(instance)}>{instanceAction ? '读取中…' : '手动查看'}</button></div>{instanceQuotas.length ? <QuotaDetailPanel quotas={instanceQuotas} /> : <div className="quota-empty-message">尚未采集配额；点击“手动查看”从子实例读取。</div>}</article> })}</div>}</section>
+  return <section className="module-pane quotas-module"><section className="section-heading module-heading"><div><div className="eyebrow">QUOTA OBSERVATION</div><h1>额度观察</h1><p>从子实例读取 OAuth 配额，按实例配置的周期刷新。</p></div><div className="section-actions quota-toolbar"><button className="button primary" disabled={!!busy} onClick={onRefreshAll}>手动查看配额</button><button className="button ghost" onClick={() => onNavigate('quota-notifications')}>定时额度通知 →</button></div></section><div className="quota-overview-card"><div><span>成功快照</span><strong>{successful}</strong></div><div><span>OAuth 账户</span><strong>{accountCount}</strong></div><div><span>已过期</span><strong className={stale ? 'warn-text' : ''}>{stale}</strong></div><div><span>自动获取</span><strong>{instances.length ? '按实例配置' : '—'}</strong></div></div>{instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="quota-instance-list">{instances.map(instance => { const instanceQuotas = quotas[instance.id] ?? []; const instanceAction = instanceBusy[instance.id]; return <article className="quota-instance-card" key={instance.id}><div className="quota-instance-head"><div><div className="eyebrow">INSTANCE QUOTA</div><h2>{instance.name}</h2><p>{instance.id} · 端口 {instance.port}</p></div><button className="button ghost" disabled={!!busy || !!instanceAction} onClick={() => onRefreshInstance(instance)}>{instanceAction ? '读取中…' : '手动查看'}</button></div>{instanceQuotas.length ? <QuotaDetailPanel quotas={instanceQuotas} /> : <div className="quota-empty-message">尚未采集配额；点击“手动查看”从子实例读取。</div>}</article> })}</div>}</section>
 }
 
-function QuotaSettingsPanel({ settings, loading, loaded, onSaved, onError }: { settings: QuotaSettings; loading: boolean; loaded: boolean; onSaved: (settings: QuotaSettings) => void; onError: (message: string) => void }) {
+function QuotaNotificationModule({ instances, settings, settingsLoaded, settingsLoading, settingsError, notificationSettings, notificationSettingsLoaded, notificationSettingsLoading, notificationSettingsError, onSettingsSaved, onSettingsError, onNotificationSaved, onNotificationError, onRefresh }: { instances: Instance[]; settings: QuotaSettings; settingsLoaded: boolean; settingsLoading: boolean; settingsError: string; notificationSettings: QuotaNotificationSettings[]; notificationSettingsLoaded: boolean; notificationSettingsLoading: boolean; notificationSettingsError: string; onSettingsSaved: (settings: QuotaSettings) => void; onSettingsError: (message: string) => void; onNotificationSaved: (settings: QuotaNotificationSettings) => void; onNotificationError: (message: string) => void; onRefresh: () => void }) {
+  const [dialogInstanceId, setDialogInstanceId] = useState<string | null>(null)
+  const [testingTarget, setTestingTarget] = useState<string | null>(null)
+  const [testFeedback, setTestFeedback] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
+  const sendTestMessage = async (instanceId = '') => {
+    setTestingTarget(instanceId || 'global'); setTestFeedback(null)
+    try {
+      await api.post(instanceId ? `/quota/notifications/${encodeURIComponent(instanceId)}/test` : '/quota/settings/test', {})
+      setTestFeedback({ tone: 'ok', text: '测试消息已发送，请到钉钉群确认是否收到。' })
+    } catch (cause) {
+      setTestFeedback({ tone: 'error', text: cause instanceof Error ? cause.message : '测试消息发送失败' })
+    } finally { setTestingTarget(null) }
+  }
+  const allSettings = instances.map(instance => notificationSettings.find(item => item.instance_id === instance.id) ?? ({ ...settings, instance_id: instance.id, instance_name: instance.name, instance_port: instance.port, configured: false, timezone: 'UTC+8', work_windows: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }] } as QuotaNotificationSettings))
+  const configuredSettings = allSettings.filter(item => item.configured)
+  const availableSettings = allSettings.filter(item => !item.configured)
+  const configuredIds = configuredSettings.map(item => item.instance_id)
+  const dialogSettings = dialogInstanceId === 'new' ? availableSettings : allSettings.filter(item => item.instance_id === dialogInstanceId)
+  return <section className="module-pane quota-notifications-module">
+    <section className="section-heading module-heading"><div><div className="eyebrow">SCHEDULED QUOTA NOTIFICATION</div><h1>定时额度通知</h1><p>先在全局配置的下拉框中选择需要下发规则的 CPA 实例，再为个别实例建立单独配置。</p></div><div className="section-actions"><button className="button ghost" disabled={settingsLoading || notificationSettingsLoading} onClick={onRefresh}>刷新配置</button></div></section>
+    <div className="notification-work-hours" role="note"><strong>通知工作时间（UTC+8）</strong><span>09:00–12:00、13:30–18:00</span><small>工作时间外继续采集配额，但不发送 Webhook 通知。</small></div>
+    {settingsError && <div className="settings-inline-error" role="alert">{settingsError}</div>}{notificationSettingsError && <div className="settings-inline-error" role="alert">{notificationSettingsError}</div>}
+    {testFeedback && <div className={testFeedback.tone === 'ok' ? 'settings-inline-notice' : 'settings-inline-error'} role="status">{testFeedback.text}</div>}
+    <div className="quota-notification-columns">
+      <QuotaSettingsPanel title="全局额度观察配置" instances={instances} configuredInstanceIds={configuredIds} settings={settings} loading={settingsLoading} loaded={settingsLoaded} onSaved={onSettingsSaved} onError={onSettingsError} onTest={() => sendTestMessage()} testing={testingTarget === 'global'} />
+      <section className="notification-instance-section">
+        <div className="notification-instance-toolbar"><div><div className="eyebrow">INSTANCE OVERRIDES</div><h2>单独配置</h2><p>这里只展示已建立的实例配置，单独配置会覆盖该实例的全局规则。</p></div><button type="button" className="button primary" disabled={!availableSettings.length || notificationSettingsLoading} onClick={() => setDialogInstanceId('new')}>+ 新增实例配置</button></div>
+        {notificationSettingsLoading && !notificationSettingsLoaded ? <LoadingState label="正在读取实例配置…" /> : !instances.length ? <div className="quota-empty-message">暂无 CPA 实例，请先创建实例。</div> : !configuredSettings.length ? <div className="quota-empty-message">当前没有单独配置。需要特殊周期或 Webhook 的实例，可点击“新增实例配置”。</div> : <div className="notification-config-list">{configuredSettings.map(item => <QuotaNotificationSummary key={item.instance_id} settings={item} onEdit={() => setDialogInstanceId(item.instance_id)} onTest={() => sendTestMessage(item.instance_id)} testing={testingTarget === item.instance_id} />)}</div>}
+      </section>
+    </div>
+    {dialogInstanceId && createPortal(<QuotaInstanceConfigDialog settingsOptions={dialogSettings} editing={dialogInstanceId !== 'new'} onClose={() => setDialogInstanceId(null)} onSaved={saved => { onNotificationSaved(saved); setDialogInstanceId(null); onRefresh() }} onRemoved={saved => { onNotificationSaved(saved); setDialogInstanceId(null); onRefresh() }} onError={onNotificationError} />, document.body)}
+  </section>
+}
+
+function QuotaNotificationSummary({ settings, onEdit, onTest, testing }: { settings: QuotaNotificationSettings; onEdit: () => void; onTest: () => void; testing: boolean }) {
+  return <article className="notification-config-row"><div className="notification-config-identity"><strong title={settings.instance_name}>{settings.instance_name}</strong><span>{settings.instance_id} · 端口 {settings.instance_port}</span></div><div><span>采集周期</span><strong>{settings.refresh_interval_minutes} 分钟</strong></div><div><span>告警阈值</span><strong>{settings.alert_threshold_percent}%</strong></div><div><span>钉钉通知</span><strong className={settings.webhook_enabled ? 'state-on' : 'state-off'}>{settings.webhook_enabled ? '已启用' : '未启用'}</strong></div><div className="notification-config-actions"><button type="button" className="button ghost" disabled={testing} onClick={onTest} title="按该实例已保存的配置发送一条测试消息">{testing ? '发送中…' : '发送测试消息'}</button><button type="button" className="button ghost" onClick={onEdit}>编辑配置</button></div></article>
+}
+
+function QuotaInstanceConfigDialog({ settingsOptions, editing, onClose, onSaved, onRemoved, onError }: { settingsOptions: QuotaNotificationSettings[]; editing: boolean; onClose: () => void; onSaved: (settings: QuotaNotificationSettings) => void; onRemoved: (settings: QuotaNotificationSettings) => void; onError: (message: string) => void }) {
+  const [instanceId, setInstanceId] = useState(settingsOptions[0]?.instance_id || '')
+  const selected = settingsOptions.find(item => item.instance_id === instanceId) ?? settingsOptions[0]
+  const [draft, setDraft] = useState<QuotaNotificationSettings | null>(selected ?? null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => { if (selected) setDraft({ ...selected, webhook_url: '', webhook_secret: '' }) }, [selected?.instance_id])
+  if (!draft) return <dialog open className="modal-backdrop"><div className="dialog quota-instance-config-dialog"><button type="button" className="dialog-close" onClick={onClose} aria-label="关闭">×</button><h2>没有可配置的 CPA 实例</h2><p>所有实例都已经建立单独配置。</p><div className="dialog-actions"><button type="button" className="button primary" onClick={onClose}>关闭</button></div></div></dialog>
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault(); setSaving(true)
+    try {
+      const { instance_id, instance_name, instance_port, configured, timezone, work_windows, webhook_secret, webhook_url, ...settingsPayload } = draft
+      const payload = { ...settingsPayload, ...(webhook_url ? { webhook_url } : {}), ...(webhook_secret ? { webhook_secret } : {}) }
+      const response = await api.patch('/quota/notifications/' + encodeURIComponent(instance_id), payload)
+      onSaved({ ...draft, ...response, webhook_url: '', webhook_secret: '' } as QuotaNotificationSettings)
+    } catch (cause) { onError(cause instanceof Error ? cause.message : '实例配额配置保存失败') } finally { setSaving(false) }
+  }
+  const remove = async () => {
+    setSaving(true)
+    try { onRemoved(await api.delete('/quota/notifications/' + encodeURIComponent(draft.instance_id)) as QuotaNotificationSettings) }
+    catch (cause) { onError(cause instanceof Error ? cause.message : '移除实例配额配置失败') }
+    finally { setSaving(false) }
+  }
+  return <dialog open className="modal-backdrop" aria-labelledby="quota-instance-dialog-title"><div className="dialog quota-instance-config-dialog"><button type="button" className="dialog-close" disabled={saving} onClick={onClose} aria-label="关闭">×</button><div className="eyebrow">INSTANCE QUOTA OVERRIDE</div><h2 id="quota-instance-dialog-title">{editing ? `编辑 ${draft.instance_name}` : '新增实例配置'}</h2><p>{editing ? '修改该实例独立使用的采集周期、阈值和通知方式。' : '先选择 CPA 实例，再设置它独立使用的额度观察规则。'}</p><form onSubmit={save}>
+    {!editing && <label className="quota-field quota-instance-selector-field"><span className="quota-field-label">CPA 实例</span><Dropdown id="quota-instance-dialog-selector" label="选择 CPA 实例" options={settingsOptions.map(item => ({ value: item.instance_id, label: `${item.instance_name} · 端口 ${item.instance_port}` }))} value={draft.instance_id} onChange={setInstanceId} /><small>仅列出尚未建立单独配置的实例。</small></label>}
+    {editing && <div className="quota-instance-identity"><div><span className="quota-field-label">CPA 实例</span><strong>{draft.instance_name}</strong></div><span className="quota-instance-meta">{draft.instance_id} · 端口 {draft.instance_port}</span></div>}
+    <div className="quota-rules-grid quota-instance-rules"><label>自动采集周期（分钟）<input aria-label={`${draft.instance_name} 自动采集周期（分钟）`} type="number" min="1" max="10080" value={draft.refresh_interval_minutes} onChange={event => setDraft({ ...draft, refresh_interval_minutes: Number(event.target.value) })} required /><small>仅影响当前实例。</small></label><label>告警阈值（%）<input aria-label={`${draft.instance_name} 告警阈值（%）`} type="number" min="0" max="100" step="0.01" value={draft.alert_threshold_percent} onChange={event => setDraft({ ...draft, alert_threshold_percent: Number(event.target.value) })} required /><small>剩余配额低于此值时发送通知。</small></label></div>
+    <div className="quota-webhook-section"><div className="quota-section-head"><div><div className="eyebrow">WEBHOOK NOTIFICATION</div><h3>钉钉机器人通知</h3><p>仅覆盖当前实例的通知规则。</p></div><label className="checkbox-label quota-enable-toggle"><input type="checkbox" checked={draft.webhook_enabled} onChange={event => setDraft({ ...draft, webhook_enabled: event.target.checked })} />启用通知</label></div><div className="quota-webhook-fields"><label className="quota-field quota-webhook-url"><span className="quota-field-label">钉钉机器人 Webhook URL</span><input aria-label={`${draft.instance_name} 钉钉机器人 Webhook URL`} type="url" value={draft.webhook_url} onChange={event => setDraft({ ...draft, webhook_url: event.target.value })} placeholder={draft.webhook_url_configured ? '已配置；留空保持当前地址' : 'https://oapi.dingtalk.com/robot/send?access_token=…'} /><small>{draft.webhook_url_configured ? '地址已加密保存；输入新地址才会替换。' : '仅支持钉钉 HTTPS 机器人地址。'}</small></label><div className="quota-field quota-signing-switch"><span className="quota-field-label">加签校验</span><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_signing_enabled} onChange={event => setDraft({ ...draft, webhook_signing_enabled: event.target.checked })} />启用 Webhook 加签</label><small>开启后按钉钉加签规则计算签名。</small></div><label className="quota-field"><span className="quota-field-label">加签密钥</span><PasswordInput aria-label={`${draft.instance_name} 钉钉机器人加签密钥`} value={draft.webhook_secret ?? ''} onChange={event => setDraft({ ...draft, webhook_secret: event.target.value })} autoComplete="new-password" placeholder={draft.webhook_secret_configured ? '留空保持当前密钥' : '请输入加签密钥'} /><small>{draft.webhook_secret_configured ? '已配置密钥；留空保持当前密钥。' : '启用加签时必须配置密钥。'}</small></label></div></div>
+    <div className="dialog-actions quota-instance-dialog-actions">{editing && <button type="button" className="button ghost danger-outline" disabled={saving} onClick={remove}>移除单独配置</button>}<span /><button type="button" className="button ghost" disabled={saving} onClick={onClose}>取消</button><button type="submit" className="button primary" disabled={saving}>{saving ? '处理中…' : '保存实例配置'}</button></div>
+  </form></div></dialog>
+}
+
+function QuotaSettingsPanel({ title = '配额周期与通知', instances, configuredInstanceIds, settings, loading, loaded, onSaved, onError, onTest, testing }: { title?: string; instances: Instance[]; configuredInstanceIds: string[]; settings: QuotaSettings; loading: boolean; loaded: boolean; onSaved: (settings: QuotaSettings) => void; onError: (message: string) => void; onTest: () => void; testing: boolean }) {
   const [draft, setDraft] = useState<QuotaSettings>(settings)
   const [saving, setSaving] = useState(false)
-  useEffect(() => setDraft(settings), [settings])
-  return <section className="quota-settings-panel" aria-label="配额周期和 Webhook 通知设置"><div className="settings-panel-head"><div><div className="eyebrow">SCHEDULE & NOTIFICATIONS</div><h2>配额周期与通知</h2><p>{loaded ? '自动获取周期和告警规则会保存到总控配置。' : loading ? '正在读取当前配置…' : '使用默认配置，保存后生效。'}</p></div></div><form onSubmit={async event => { event.preventDefault(); setSaving(true); try { const { webhook_secret, webhook_url, ...settingsPayload } = draft; const payload = { ...settingsPayload, ...(webhook_url ? { webhook_url } : {}), ...(webhook_secret ? { webhook_secret } : {}) }; const response = await api.patch('/quota/settings', payload); onSaved({ ...draft, ...response, webhook_url: '', webhook_secret: '' } as QuotaSettings) } catch (cause) { onError(cause instanceof Error ? cause.message : '保存配额设置失败') } finally { setSaving(false) } }}><div className="settings-grid"><label>自动获取周期（分钟）<input aria-label="自动获取周期（分钟）" type="number" min="1" max="10080" value={draft.refresh_interval_minutes} onChange={event => setDraft({ ...draft, refresh_interval_minutes: Number(event.target.value) })} required /><small>默认 360 分钟，可手动查看即时刷新。</small></label><div className="webhook-section"><div className="eyebrow">WEBHOOK NOTIFICATION</div><h3>Webhook 通知</h3><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_enabled} onChange={event => setDraft({ ...draft, webhook_enabled: event.target.checked })} />启用钉钉机器人通知</label><label>钉钉机器人 Webhook URL<input aria-label="钉钉机器人 Webhook URL" type="url" value={draft.webhook_url} onChange={event => setDraft({ ...draft, webhook_url: event.target.value })} placeholder={draft.webhook_url_configured ? '已配置；留空保持当前地址' : 'https://oapi.dingtalk.com/robot/send?access_token=…'} /><small>{draft.webhook_url_configured ? 'Webhook 地址已加密保存；输入新地址才会替换。' : '仅支持钉钉 HTTPS 机器人地址。'}</small></label><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_signing_enabled} onChange={event => setDraft({ ...draft, webhook_signing_enabled: event.target.checked })} />启用 Webhook 加签</label><label>钉钉机器人加签密钥<PasswordInput aria-label="钉钉机器人加签密钥" value={draft.webhook_secret ?? ''} onChange={event => setDraft({ ...draft, webhook_secret: event.target.value })} autoComplete="new-password" placeholder={draft.webhook_secret_configured ? '留空保持当前密钥' : '请输入钉钉机器人加签密钥'} /><small>{draft.webhook_secret_configured ? '已配置密钥；留空保持当前密钥。' : '启用加签时必须配置密钥。'}</small></label><label>告警阈值（%）<input aria-label="告警阈值（%）" type="number" min="0" max="100" step="0.01" value={draft.alert_threshold_percent} onChange={event => setDraft({ ...draft, alert_threshold_percent: Number(event.target.value) })} required /><small>当剩余配额低于此百分比时发送通知。</small></label></div></div><div className="dialog-actions settings-actions"><button className="button primary" disabled={saving}>{saving ? '保存中…' : '保存配额设置'}</button></div></form></section>
+  const configuredKey = configuredInstanceIds.join('|')
+  useEffect(() => setDraft({ ...settings, instance_ids: (settings.instance_ids || []).filter(id => !configuredInstanceIds.includes(id)) }), [settings, configuredKey])
+  const selectableIds = instances.filter(instance => !configuredInstanceIds.includes(instance.id)).map(instance => instance.id)
+  const selectedInstances = instances.filter(instance => draft.instance_ids.includes(instance.id))
+  const toggleInstance = (instanceId: string) => setDraft(current => ({ ...current, instance_ids: current.instance_ids.includes(instanceId) ? current.instance_ids.filter(id => id !== instanceId) : [...current.instance_ids, instanceId] }))
+  return <section className="quota-settings-panel" aria-label={`${title}设置`}>
+    <div className="settings-panel-head"><div><div className="eyebrow">GLOBAL QUOTA POLICY</div><h2>{title}</h2><p>{loaded ? '下拉框中选中的 CPA 实例会使用下面的统一采集和通知规则。' : loading ? '正在读取当前配置…' : '保存后开始按全局规则观察配额。'}</p></div></div>
+    <form onSubmit={async event => { event.preventDefault(); setSaving(true); try { const { webhook_secret, webhook_url, ...settingsPayload } = draft; const payload = { ...settingsPayload, ...(webhook_url ? { webhook_url } : {}), ...(webhook_secret ? { webhook_secret } : {}) }; const response = await api.patch('/quota/settings', payload); onSaved({ ...draft, ...response, webhook_url: '', webhook_secret: '' } as QuotaSettings) } catch (cause) { onError(cause instanceof Error ? cause.message : '保存配额设置失败') } finally { setSaving(false) } }}>
+      <div className="quota-target-section">
+        <div className="quota-section-head">
+          <div><h3>下发到 CPA 实例</h3><p>选中的实例按全局规则自动采集配额；已建立单独配置的实例不再跟随全局规则。</p></div>
+          <span className="quota-count-pill">{selectedInstances.length} / {selectableIds.length} 已选择</span>
+        </div>
+        {!instances.length ? <div className="quota-target-empty">暂无 CPA 实例，请先在实例管理中创建。</div> : <div className="quota-target-picker">
+          <MultiSelect
+            id="quota-target-instances"
+            label="选择下发到 CPA 实例"
+            summaryPlaceholder={`已选择 ${selectedInstances.length} 个实例`}
+            placeholder="选择一个或多个 CPA 实例"
+            disabled={saving}
+            values={draft.instance_ids}
+            onChange={instanceIds => setDraft(current => ({ ...current, instance_ids: instanceIds }))}
+            options={instances.map(instance => ({ value: instance.id, label: `${instance.name} · 端口 ${instance.port}`, hint: configuredInstanceIds.includes(instance.id) ? '已单独配置' : undefined, disabled: configuredInstanceIds.includes(instance.id) }))}
+          />
+          {selectedInstances.length > 0 && <div className="quota-selection-chips" role="list" aria-label="已下发实例">{selectedInstances.map(instance => <span className="quota-selection-chip" role="listitem" key={instance.id}><strong title={instance.name}>{instance.name}</strong><small>端口 {instance.port}</small><button type="button" disabled={saving} aria-label={`取消下发 ${instance.name}`} onClick={() => toggleInstance(instance.id)}>×</button></span>)}</div>}
+          <small className="quota-target-hint">下拉框内可多选，也可在底部一键全选、清空。</small>
+        </div>}
+      </div>
+      <div className="quota-rules-grid">
+        <label>自动获取周期（分钟）<input aria-label="自动获取周期（分钟）" type="number" min="1" max="10080" value={draft.refresh_interval_minutes} onChange={event => setDraft({ ...draft, refresh_interval_minutes: Number(event.target.value) })} required /><small>默认 360 分钟，可手动查看即时刷新。</small></label>
+        <label>告警阈值（%）<input aria-label="告警阈值（%）" type="number" min="0" max="100" step="0.01" value={draft.alert_threshold_percent} onChange={event => setDraft({ ...draft, alert_threshold_percent: Number(event.target.value) })} required /><small>全局默认低于此百分比时发送通知；同一实例、账户和配额窗口 5 小时内只发送一次。</small></label>
+      </div>
+      <div className="quota-webhook-section">
+        <div className="quota-section-head">
+          <div><div className="eyebrow">WEBHOOK NOTIFICATION</div><h3>钉钉机器人通知</h3><p>配额低于阈值时向钉钉群推送提醒。</p></div>
+          <label className="checkbox-label quota-enable-toggle"><input type="checkbox" checked={draft.webhook_enabled} onChange={event => setDraft({ ...draft, webhook_enabled: event.target.checked })} />启用钉钉机器人通知</label>
+        </div>
+        <div className="quota-webhook-fields">
+          <label className="quota-field quota-webhook-url"><span className="quota-field-label">钉钉机器人 Webhook URL</span><input aria-label="钉钉机器人 Webhook URL" type="url" value={draft.webhook_url} onChange={event => setDraft({ ...draft, webhook_url: event.target.value })} placeholder={draft.webhook_url_configured ? '已配置；留空保持当前地址' : 'https://oapi.dingtalk.com/robot/send?access_token=…'} /><small>{draft.webhook_url_configured ? 'Webhook 地址已加密保存；输入新地址才会替换。' : '仅支持钉钉 HTTPS 机器人地址。'}</small></label>
+          <div className="quota-field quota-signing-switch"><span className="quota-field-label">加签校验</span><label className="checkbox-label"><input type="checkbox" checked={draft.webhook_signing_enabled} onChange={event => setDraft({ ...draft, webhook_signing_enabled: event.target.checked })} />启用 Webhook 加签</label><small>开启后按钉钉加签规则计算签名。</small></div>
+          <label className="quota-field"><span className="quota-field-label">加签密钥</span><PasswordInput aria-label="钉钉机器人加签密钥" value={draft.webhook_secret ?? ''} onChange={event => setDraft({ ...draft, webhook_secret: event.target.value })} autoComplete="new-password" placeholder={draft.webhook_secret_configured ? '留空保持当前密钥' : '请输入钉钉机器人加签密钥'} /><small>{draft.webhook_secret_configured ? '已配置密钥；留空保持当前密钥。' : '启用加签时必须配置密钥。'}</small></label>
+        </div>
+      </div>
+      <div className="dialog-actions settings-actions"><button type="button" className="button ghost" disabled={saving || testing} onClick={onTest} title="按已保存的全局配置发送一条测试消息">{testing ? '发送中…' : '发送测试消息'}</button><button type="submit" className="button primary" disabled={saving}>{saving ? '保存中…' : '保存并下发全局配置'}</button></div>
+    </form>
+  </section>
 }
+
+const runtimeSourceLabels: Record<string, string> = { controller: '总控', instance: '实例', upgrade: 'CPA 升级', plugin: '插件安装', key: 'API Key', quota: '额度通知', http: 'HTTP' }
 
 function LogPage({ kind, instances }: { kind: 'runtime' | 'audit'; instances: Instance[] }) {
   const [items, setItems] = useState<Array<RuntimeLog | AuditLog>>([])
@@ -521,33 +557,46 @@ function LogPage({ kind, instances }: { kind: 'runtime' | 'audit'; instances: In
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [stateFilter, setStateFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState('all')
+  const requestSequence = useRef(0)
+  const runtimeLevel = kind === 'runtime' ? stateFilter : 'all'
   const instanceNames = useMemo(() => Object.fromEntries(instances.map(instance => [instance.id, instance.name])), [instances])
-  const refresh = async () => { setLoading(true); setError(''); try { const response = await api.get(`/logs/${kind}?limit=500`); setItems(response.items ?? []) } catch (cause) { setError(cause instanceof Error ? cause.message : '日志加载失败') } finally { setLoading(false) } }
-  useEffect(() => { void refresh() }, [kind])
+  const refresh = async () => {
+    const sequence = ++requestSequence.current
+    const params = new URLSearchParams({ limit: '500' })
+    if (kind === 'runtime' && sourceFilter !== 'all') params.set('source', sourceFilter)
+    if (runtimeLevel !== 'all') params.set('level', runtimeLevel)
+    setLoading(true); setError('')
+    try { const response = await api.get(`/logs/${kind}?${params}`); if (sequence === requestSequence.current) setItems(response.items ?? []) }
+    catch (cause) { if (sequence === requestSequence.current) setError(cause instanceof Error ? cause.message : '日志加载失败') }
+    finally { if (sequence === requestSequence.current) setLoading(false) }
+  }
+  useEffect(() => { void refresh(); return () => { requestSequence.current++ } }, [kind, sourceFilter, runtimeLevel])
   const filtered = items.filter(item => {
     const state = kind === 'runtime' ? (item as RuntimeLog).level : (item as AuditLog).outcome
     if (stateFilter !== 'all' && state !== stateFilter) return false
+    if (kind === 'runtime' && sourceFilter !== 'all' && (item as RuntimeLog).source !== sourceFilter) return false
     if (!query.trim()) return true
-    return JSON.stringify(item).toLowerCase().includes(query.trim().toLowerCase())
+    return `${JSON.stringify(item)} ${kind === 'runtime' ? `${sourceLabel((item as RuntimeLog).source)} ${instanceNames[(item as RuntimeLog).instance_id || ''] || ''}` : ''}`.toLowerCase().includes(query.trim().toLowerCase())
   })
   const runtime = kind === 'runtime'
   const problemCount = items.filter(item => runtime ? (item as RuntimeLog).level === 'error' : (item as AuditLog).outcome === 'failed').length
   const stateOptions: DropdownOption[] = [
     { value: 'all', label: '全部' },
     ...(runtime
-      ? [{ value: 'info', label: '信息' }, { value: 'warn', label: '警告' }, { value: 'error', label: '错误' }]
+      ? [{ value: 'info', label: '信息' }, { value: 'warn', label: '警告' }, { value: 'error', label: '错误' }, { value: 'debug', label: '调试' }]
       : [{ value: 'success', label: '成功' }, { value: 'failed', label: '失败' }])
   ]
-  return <section className="module-pane logs-module"><section className="section-heading module-heading"><div><div className="eyebrow">{runtime ? 'RUNTIME TIMELINE' : 'AUDIT TRAIL'}</div><h1>{runtime ? '运行日志' : '审计日志'}</h1><p>{runtime ? '追踪总控、实例生命周期和后台任务的运行事件。' : '记录管理员登录、配置变更与实例操作的执行结果。'}</p></div><div className="section-actions"><button className="button ghost" disabled={loading} onClick={refresh}>{loading ? '刷新中…' : '刷新日志'}</button></div></section>
+  return <section className="module-pane logs-module"><section className="section-heading module-heading"><div><div className="eyebrow">{runtime ? 'RUNTIME TIMELINE' : 'AUDIT TRAIL'}</div><h1>{runtime ? '运行日志' : '审计日志'}</h1><p>{runtime ? '追踪 CPA 升级、插件安装、Key 推送、额度通知和实例运行事件。' : '记录管理员登录、配置变更与实例操作的执行结果。'}</p></div><div className="section-actions"><button className="button ghost" disabled={loading} onClick={refresh}>{loading ? '刷新中…' : '刷新日志'}</button></div></section>
     <div className="log-summary" aria-label="日志摘要"><div><span>当前记录</span><strong>{items.length}</strong></div><div><span>{runtime ? '错误事件' : '失败操作'}</span><strong className={problemCount ? 'warn-text' : ''}>{problemCount}</strong></div><div><span>展示范围</span><strong>最近 500</strong></div></div>
-    <div className="log-workbench"><div className="log-toolbar"><label className="log-search">搜索日志<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={runtime ? '消息、来源或实例 ID' : '操作者、动作或资源 ID'} /></label><div className="log-filter-field"><span>状态</span><Dropdown id={`log-${kind}-state`} label="状态" className="log-filter-dropdown" options={stateOptions} value={stateFilter} onChange={setStateFilter} /></div><span className="log-result-count">显示 {filtered.length} 条</span></div>
+    <div className="log-workbench"><div className="log-toolbar"><label className="log-search">搜索日志<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={runtime ? '消息、分类或实例' : '操作者、动作或资源 ID'} /></label>{runtime && <div className="log-filter-field"><span>分类</span><Dropdown id="log-runtime-source" label="日志分类" className="log-filter-dropdown" options={[{ value: 'all', label: '全部分类' }, ...Object.entries(runtimeSourceLabels).map(([value, label]) => ({ value, label }))]} value={sourceFilter} onChange={setSourceFilter} /></div>}<div className="log-filter-field"><span>状态</span><Dropdown id={`log-${kind}-state`} label="状态" className="log-filter-dropdown" options={stateOptions} value={stateFilter} onChange={setStateFilter} /></div><span className="log-result-count">显示 {filtered.length} 条</span></div>
       {error ? <div className="settings-inline-error" role="alert">{error}</div> : loading && !items.length ? <div className="log-empty">正在读取日志…</div> : !filtered.length ? <div className="log-empty">没有符合当前筛选条件的日志。</div> : <div className="log-table-wrap"><table className="log-table"><thead><tr><th>时间</th><th>状态</th>{runtime ? <><th>来源</th><th>实例</th><th>消息</th></> : <><th>操作者</th><th>动作</th><th>资源</th><th>来源地址</th><th>详情</th></>}</tr></thead><tbody>{filtered.map(item => runtime ? <RuntimeLogRow key={item.id} item={item as RuntimeLog} instanceNames={instanceNames} /> : <AuditLogRow key={item.id} item={item as AuditLog} />)}</tbody></table></div>}
     </div>
   </section>
 }
 
 function RuntimeLogRow({ item, instanceNames }: { item: RuntimeLog; instanceNames: Record<string, string> }) {
-  return <tr><td className="log-time">{formatLogTime(item.created_at)}</td><td><span className={`log-badge ${item.level}`}>{runtimeLevelLabel(item.level)}</span></td><td>{sourceLabel(item.source)}</td><td className="log-resource">{item.instance_id ? (instanceNames[item.instance_id] || item.instance_id) : '—'}</td><td className="log-message">{item.message}</td></tr>
+  return <tr><td className="log-time">{formatLogTime(item.created_at)}</td><td><span className={`log-badge ${item.level}`}>{runtimeLevelLabel(item.level)}</span></td><td>{sourceLabel(item.source)}</td><td className="log-resource">{item.instance_id ? (instanceNames[item.instance_id] || item.instance_id) : '—'}</td><td className="log-message">{item.message}{item.context && Object.keys(item.context).length > 0 && <details className="log-context"><summary>查看详情</summary><pre>{JSON.stringify(item.context, null, 2)}</pre></details>}</td></tr>
 }
 
 function AuditLogRow({ item }: { item: AuditLog }) {
@@ -555,9 +604,9 @@ function AuditLogRow({ item }: { item: AuditLog }) {
 }
 
 function formatLogTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
-function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误' } as Record<string, string>)[level] ?? level }
-function sourceLabel(source: string) { return ({ controller: '总控', instance: '实例', http: 'HTTP' } as Record<string, string>)[source] ?? source }
-function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
+function runtimeLevelLabel(level: string) { return ({ info: '信息', warn: '警告', error: '错误', debug: '调试' } as Record<string, string>)[level] ?? level }
+function sourceLabel(source: string) { return runtimeSourceLabels[source] ?? source }
+function auditActionLabel(action: string) { return ({ 'auth.login': '管理员登录', 'auth.logout': '管理员退出', 'auth.password.change': '修改管理员密码', 'instance.lock': '锁定实例', 'instance.unlock': '解锁实例', 'instance.backup': '备份实例', 'instance.create': '创建实例', 'instance.update': '更新实例', 'instance.start': '启动实例', 'instance.stop': '停止实例', 'instance.restart': '重启实例', 'instance.quotas': '刷新实例配额', 'instance.delete.prepare': '准备删除实例', 'instance.delete': '删除实例', 'quota.settings.update': '更新配额设置', 'quota.notification.update': '更新实例配额配置', 'quota.notification.delete': '移除实例配额配置', 'branding.update': '更新品牌设置', 'version.install': '下载版本', 'version.upgrade': '统一升级', 'version.uninstall': '卸载版本', 'version.recover': '恢复升级' } as Record<string, string>)[action] ?? action }
 
 const LOGIN_COPY = {
   zh: {
@@ -689,7 +738,7 @@ function AdminSettingsDialog({ branding, onClose, onSaved, onBrandingSaved }: { 
     if (file.size > MAX_LOGO_BYTES) { setBrandingError('Logo 文件不能超过 256 KB'); return }
     try { update('logo', await readFileAsDataUrl(file)); setBrandingError('') } catch { setBrandingError('Logo 读取失败，请重试') }
   }
-  return <dialog open className="modal-backdrop"><div className="dialog settings-dialog"><button type="button" className="dialog-close" disabled={brandingBusy || passwordBusy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true"><SettingsIcon /></div><div className="eyebrow">CONTROL CENTER SETTINGS</div><h2>管理员设置</h2><p>在这里管理总控身份和管理员安全设置。品牌修改会同步到登录页、总览横幅、网页标题与浏览器图标。</p><section className="settings-block"><div className="settings-block-heading"><div><h3>品牌与网页信息</h3><p>控制台所有可见的品牌文案都从这里读取。</p></div><BrandIcon branding={draft} /></div><div className="logo-setting"><div><strong>品牌 Logo</strong><p>上传后会替换侧栏、登录页和浏览器标签中的图标。</p></div><div className="logo-setting-actions"><input ref={logoInput} className="visually-hidden" aria-label="上传品牌 Logo" type="file" accept={LOGO_ACCEPT} onChange={readLogo} /><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={() => logoInput.current?.click()}>{draft.logo ? '更换 Logo' : '上传 Logo'}</button>{draft.logo && <button type="button" className="button ghost danger-outline" disabled={brandingBusy || passwordBusy} onClick={() => update('logo', '')}>移除 Logo</button>}</div></div><p className="settings-hint logo-hint">支持 PNG、JPEG、WebP 或 GIF，建议使用正方形图片，文件大小不超过 256 KB。</p><form onSubmit={async event => { event.preventDefault(); setBrandingError(''); setBrandingBusy(true); try { const saved = await api.patch('/branding', draft) as BrandingSettings; onBrandingSaved({ ...DEFAULT_BRANDING, ...saved }) } catch (cause) { setBrandingError(cause instanceof Error ? cause.message : '品牌设置保存失败') } finally { setBrandingBusy(false) } }}><div className="settings-grid"><label>品牌名称<input aria-label="品牌名称" value={draft.brand_name} onChange={event => update('brand_name', event.target.value)} maxLength={48} required /></label><label>品牌副标题<input aria-label="品牌副标题" value={draft.brand_subtitle} onChange={event => update('brand_subtitle', event.target.value)} maxLength={64} placeholder="例如 CONTROL CENTER" /></label><label>登录页横幅标题<input aria-label="登录页横幅标题" value={draft.banner_title} onChange={event => update('banner_title', event.target.value)} maxLength={80} required /></label><label>网页标题<input aria-label="网页标题" value={draft.page_title} onChange={event => update('page_title', event.target.value)} maxLength={80} required /></label><label className="settings-wide">横幅描述<input aria-label="横幅描述" value={draft.banner_description} onChange={event => update('banner_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">网页描述<input aria-label="网页描述" value={draft.page_description} onChange={event => update('page_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">Copyright<input aria-label="Copyright" value={draft.copyright} onChange={event => update('copyright', event.target.value)} maxLength={160} placeholder="留空隐藏版权信息" /></label></div><p className="settings-hint">图标统一复用品牌 Logo；当前版本号显示为 v{APP_VERSION}。</p>{brandingError && <p className="form-error" role="alert">{brandingError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{brandingBusy ? '保存中…' : '保存品牌设置'}</button></div></form></section><section className="settings-block settings-security"><div className="settings-block-heading"><div><h3>管理员密码</h3><p>修改后当前会话保持有效，新密码立即生效。</p></div></div><form onSubmit={async event => { event.preventDefault(); setPasswordError(''); if (newPassword !== confirmPassword) { setPasswordError('两次输入的新密码不一致'); return } setPasswordBusy(true); try { await api.patch('/auth/password', { current_password: currentPassword, new_password: newPassword }); onSaved() } catch (cause) { setPasswordError(cause instanceof Error ? cause.message : '密码修改失败') } finally { setPasswordBusy(false) } }}><label>当前管理员密码<PasswordInput aria-label="当前管理员密码" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入当前密码" /></label><label>新管理员密码<PasswordInput aria-label="新管理员密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" required placeholder="请输入新密码" /></label><label>确认新管理员密码<PasswordInput aria-label="确认新管理员密码" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required placeholder="再次输入新密码" /></label>{passwordError && <p className="form-error" role="alert">{passwordError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{passwordBusy ? '保存中…' : '保存新密码'}</button></div></form></section></div></dialog>
+  return <dialog open className="modal-backdrop"><div className="dialog settings-dialog"><button type="button" className="dialog-close" disabled={brandingBusy || passwordBusy} onClick={onClose} aria-label="关闭">×</button><div className="settings-icon" aria-hidden="true"><SettingsIcon /></div><div className="eyebrow">CONTROL CENTER SETTINGS</div><h2>管理员设置</h2><p>在这里管理总控身份和管理员安全设置。品牌修改会同步到登录页、总览横幅、网页标题与浏览器图标。</p><section className="settings-block"><div className="settings-block-heading"><div><h3>品牌与网页信息</h3><p>控制台所有可见的品牌文案都从这里读取。</p></div><BrandIcon branding={draft} /></div><div className="logo-setting"><div><strong>品牌 Logo</strong><p>上传后会替换侧栏、登录页和浏览器标签中的图标。</p></div><div className="logo-setting-actions"><input ref={logoInput} className="visually-hidden" aria-label="上传品牌 Logo" type="file" accept={LOGO_ACCEPT} onChange={readLogo} /><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={() => logoInput.current?.click()}>{draft.logo ? '更换 Logo' : '上传 Logo'}</button>{draft.logo && <button type="button" className="button ghost danger-outline" disabled={brandingBusy || passwordBusy} onClick={() => update('logo', '')}>移除 Logo</button>}</div></div><p className="settings-hint logo-hint">支持 PNG、JPEG、WebP 或 GIF，建议使用正方形图片，文件大小不超过 256 KB。</p><form onSubmit={async event => { event.preventDefault(); setBrandingError(''); setBrandingBusy(true); try { const saved = await api.patch('/branding', draft) as BrandingSettings; onBrandingSaved({ ...DEFAULT_BRANDING, ...saved }) } catch (cause) { setBrandingError(cause instanceof Error ? cause.message : '品牌设置保存失败') } finally { setBrandingBusy(false) } }}><div className="settings-grid"><label>品牌名称<input aria-label="品牌名称" value={draft.brand_name} onChange={event => update('brand_name', event.target.value)} maxLength={48} required /></label><label>品牌副标题<input aria-label="品牌副标题" value={draft.brand_subtitle} onChange={event => update('brand_subtitle', event.target.value)} maxLength={64} placeholder="例如 CONTROL CENTER" /></label><label>登录页横幅标题<input aria-label="登录页横幅标题" value={draft.banner_title} onChange={event => update('banner_title', event.target.value)} maxLength={80} required /></label><label>网页标题<input aria-label="网页标题" value={draft.page_title} onChange={event => update('page_title', event.target.value)} maxLength={80} required /></label><label className="settings-wide">横幅描述<input aria-label="横幅描述" value={draft.banner_description} onChange={event => update('banner_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">网页描述<input aria-label="网页描述" value={draft.page_description} onChange={event => update('page_description', event.target.value)} maxLength={180} required /></label><label className="settings-wide">Copyright<input aria-label="Copyright" value={draft.copyright} onChange={event => update('copyright', event.target.value)} maxLength={160} placeholder="留空隐藏版权信息" /></label></div><p className="settings-hint">图标统一复用品牌 Logo；当前版本号显示为 v{APP_VERSION}。</p>{brandingError && <p className="form-error" role="alert">{brandingError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{brandingBusy ? '保存中…' : '保存品牌设置'}</button></div></form></section><InstanceLimitsSettings /><section className="settings-block settings-security"><div className="settings-block-heading"><div><h3>管理员密码</h3><p>修改后当前会话保持有效，新密码立即生效。</p></div></div><form onSubmit={async event => { event.preventDefault(); setPasswordError(''); if (newPassword !== confirmPassword) { setPasswordError('两次输入的新密码不一致'); return } setPasswordBusy(true); try { await api.patch('/auth/password', { current_password: currentPassword, new_password: newPassword }); onSaved() } catch (cause) { setPasswordError(cause instanceof Error ? cause.message : '密码修改失败') } finally { setPasswordBusy(false) } }}><label>当前管理员密码<PasswordInput aria-label="当前管理员密码" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" required placeholder="请输入当前密码" /></label><label>新管理员密码<PasswordInput aria-label="新管理员密码" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" required placeholder="请输入新密码" /></label><label>确认新管理员密码<PasswordInput aria-label="确认新管理员密码" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required placeholder="再次输入新密码" /></label>{passwordError && <p className="form-error" role="alert">{passwordError}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={brandingBusy || passwordBusy} onClick={onClose}>取消</button><button className="button primary" disabled={brandingBusy || passwordBusy}>{passwordBusy ? '保存中…' : '保存新密码'}</button></div></form></section></div></dialog>
 }
 
 function BrandIcon({ branding, variant = '' }: { branding: BrandingSettings; variant?: string }) {
@@ -770,14 +819,14 @@ function VersionPanel({ versions, instances, upgradeState, busy, onInstall, onUp
   const partiallyLocked = lockedCount > 0 && !allInstancesLocked
   const upgradeDisabled = busy !== null || upgradeInProgress || allInstancesLocked
   const upgradeTitle = allInstancesLocked ? '所有实例均已锁定，请先解锁至少一个实例' : partiallyLocked ? '仅升级未锁定实例，已锁定实例保持不变' : undefined
-  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>版本管理</h2><p>下载并校验版本，再切换未锁定的 CPA 实例；已锁定实例保持不变，升级完成后可清理旧版本缓存。</p>{allInstancesLocked && <p className="version-lock-hint" role="status">所有实例均已锁定，无法统一升级。请先解锁至少一个实例。</p>}{partiallyLocked && <p className="version-lock-hint" role="status">本次只会升级未锁定实例，已锁定实例保持不变。</p>}</div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空下载 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || upgradeInProgress}>{busy === 'version:install' ? '下载中…' : '下载版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未下载 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = instances.some(instance => instance.version === version.tag); const needsUpgrade = instances.some(instance => instance.version !== version.tag); const hasUnlockedUpgrade = instances.some(instance => !instance.locked && instance.version !== version.tag); const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && needsUpgrade && <button className="button ghost" disabled={upgradeDisabled || !hasUnlockedUpgrade} title={upgradeTitle || (!hasUnlockedUpgrade ? '需要升级的实例均已锁定，请先解锁' : undefined)} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || upgradeInProgress} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
+  return <section className="version-panel" aria-label="版本管理"><div className="version-heading"><div><div className="eyebrow">VERSION CONTROL</div><h2>版本管理</h2><p>升级前自动创建备份子实例，再切换未锁定的 CPA 实例。备份自动分配端口、默认停止并锁定；名额不足或备份失败时中止升级。</p>{allInstancesLocked && <p className="version-lock-hint" role="status">所有实例均已锁定，无法统一升级。请先解锁至少一个实例。</p>}{partiallyLocked && <p className="version-lock-hint" role="status">本次只会升级未锁定实例，已锁定实例保持不变。</p>}</div><form className="version-install" onSubmit={event => { event.preventDefault(); onInstall(tag.trim()) }}><input value={tag} onChange={event => setTag(event.target.value)} placeholder="留空下载 latest" aria-label="版本标签" /><button className="button ghost" disabled={busy !== null || upgradeInProgress}>{busy === 'version:install' ? '下载中…' : '下载版本'}</button></form></div>{upgradeState.state !== 'idle' && <div className={'upgrade-banner ' + (blocked ? 'blocked' : '')}><span>升级状态：{upgradeStateLabel(upgradeState.state)}</span>{upgradeState.old_version && upgradeState.new_version && <small>{upgradeState.old_version} → {upgradeState.new_version}</small>}{upgradeState.message && <p>{upgradeState.message}</p>}{blocked && <button className="button ghost" disabled={busy !== null} onClick={onRecover}>{busy === 'version:recover' ? '恢复中…' : '重试回滚'}</button>}</div>}{versions.length === 0 ? <p className="version-empty">尚未下载 CPA 版本。Linux 首次启动会尝试准备 latest，也可以在这里重试。</p> : <div className="version-list">{versions.map(version => { const isCurrent = instances.some(instance => instance.version === version.tag); const needsUpgrade = instances.some(instance => instance.version !== version.tag); const hasUnlockedUpgrade = instances.some(instance => !instance.locked && instance.version !== version.tag); const upgradeBusy = busy === 'version:upgrade:' + version.tag; const uninstallBusy = busy === 'version:uninstall:' + version.tag; return <div className="version-row" key={version.tag}><div><strong>{version.tag}</strong><small>{version.asset || '本地版本'} · {version.installed_at ? new Date(version.installed_at).toLocaleString('zh-CN') : '安装时间未知'}</small></div><div className="version-row-actions"><span className={'version-state ' + (isCurrent ? 'current' : version.usable ? 'ready' : 'bad')}>{isCurrent ? '当前运行' : version.usable ? '已安装' : '不可用'}</span>{version.usable && needsUpgrade && <button className="button ghost" disabled={upgradeDisabled || !hasUnlockedUpgrade} title={upgradeTitle || (!hasUnlockedUpgrade ? '需要升级的实例均已锁定，请先解锁' : undefined)} onClick={() => onUpgrade(version.tag)}>{upgradeBusy ? '升级中…' : '统一升级'}</button>}{!isCurrent && <button className="button ghost danger-outline version-uninstall" aria-label={'卸载版本 ' + version.tag} disabled={busy !== null || upgradeInProgress} onClick={() => onUninstall(version)}>{uninstallBusy ? '卸载中…' : '卸载版本'}</button>}</div></div> })}</div>}</section>
 }
 
 function upgradeStateLabel(state: string) {
   return ({ prepared: '准备中', 'stopping-old': '停止旧版本', 'old-stopped': '旧版本已停止', 'starting-new': '启动新版本', committed: '已完成', 'restoring-old': '正在回滚', 'rolled-back': '已回滚', blocked: '回滚受阻' } as Record<string, string>)[state] ?? state
 }
 
-function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   const running = instance.status?.ready
   const actualState = instance.status?.state ?? 'unknown'
   const actualActive = ['running', 'starting', 'stopping'].includes(actualState)
@@ -812,13 +861,15 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     </div>
     <div className="card-actions" aria-label={`${instance.name} 操作`}>
       <button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onConfigure(instance)}>配置</button>
+      <button type="button" className="button ghost" disabled={actionBusy || instance.locked} onClick={() => onAction(instance, 'backup')}>备份</button>
       <button type="button" className="button primary" disabled={actionBusy || (running && instance.locked)} onClick={() => onAction(instance, running ? 'restart' : 'start')}>{thisActionBusy ? '处理中…' : running ? '重启服务' : '启动实例'}</button>
       <button type="button" className="button danger" disabled={actionBusy || !running || instance.locked} onClick={() => onAction(instance, 'stop')}>停止</button>
       <button type="button" className="button danger delete-instance" disabled={actionBusy || instance.locked} onClick={() => onDelete(instance)}>删除</button>
     </div>
     <div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div>
-    <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>配额观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
+    <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>额度观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
     <div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>
+    {instance.backup && <div className="card-status"><span className="muted-text">{instance.backup.automatic ? '升级前自动备份' : '手动备份'} · 来源：{instance.backup.source_name}{instance.backup.reason && ` · ${instance.backup.reason}`} · {new Date(instance.backup.created_at).toLocaleString('zh-CN', { hour12: false })}</span></div>}
     <QuotaDetails quotas={quotas} />
   </article>
 }
@@ -832,12 +883,12 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   const windowColumns = [
     { name: '5 小时限额', title: '5h额度', label: '5 小时额度剩余' },
     { name: '周限额', title: '周额度', label: '周额度剩余' },
-    { name: '月限额', title: 'month limit', label: '月额度剩余' },
+    { name: '月限额', title: '月额度', label: '月额度剩余' },
   ]
   const availableColumns = windowColumns.filter(column => quotas.some(quota => quota.values?.some(value => value.name === column.name)))
   const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)
-  const gridStyle = { gridTemplateColumns: `minmax(0, 1fr) repeat(${columns.length}, 72px)` }
-  return <section ref={summary} className="quota-summary">
+  const gridStyle = { gridTemplateColumns: columns.length > 2 ? `repeat(${columns.length}, minmax(0, 1fr))` : `minmax(0, 1fr) repeat(${columns.length}, 88px)` }
+  return <section ref={summary} className={'quota-summary' + (columns.length > 2 ? ' has-many-windows' : '')}>
     <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong><button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button></div>
     <div className="quota-summary-columns" style={gridStyle}><span>账户</span>{columns.map(column => <span key={column.name}>{column.title}</span>)}</div>
     {quotas.map(quota => {
@@ -853,7 +904,17 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
 
 function QuotaSummaryValue({ value, status, label }: { value?: QuotaValue; status: QuotaSnapshot['status']; label: string }) {
   const percent = value ? quotaPercent(value) : null
-  return <div className="quota-summary-value"><strong>{value ? formatQuotaValue(value) : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
+  return <div className="quota-summary-value"><strong>{value ? formatQuotaValue(value) : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}{value && <QuotaResetTime resetAt={value.reset_at} compact />}</div>
+}
+
+function QuotaResetTime({ resetAt, compact = false }: { resetAt?: string; compact?: boolean }) {
+  const known = validTimestamp(resetAt)
+  const formatted = known ? formatQuotaReset(resetAt!) : ''
+  return <span className={compact ? 'quota-summary-reset' : 'quota-reset-time'}>
+    {compact && <small>重置时间</small>}
+    {known ? <time dateTime={resetAt} title={new Date(resetAt!).toLocaleString('zh-CN', { hour12: false })}>{compact ? formatted.split(' ').map((part, index) => <span key={index}>{part}</span>) : formatted}</time> : <span className="quota-reset-unknown">未提供重置时间</span>}
+    {!compact && known && <small>{quotaResetRelative(resetAt!)}重置</small>}
+  </span>
 }
 
 function QuotaDetailDialog({ quotas, onClose }: { quotas: QuotaSnapshot[]; onClose: () => void }) {
@@ -900,7 +961,7 @@ function QuotaWindow({ value }: { value: QuotaValue }) {
   const percent = quotaPercent(value)
   const tone = percent === null ? '' : percent <= 20 ? ' low' : percent < 60 ? ' warning' : ' healthy'
   const label = value.name || '默认窗口'
-  return <div className="quota-window"><div className="quota-window-title">{label}</div><div className="quota-window-meta"><strong>{formatQuotaValue(value)}</strong>{value.reset_at && <span><time dateTime={value.reset_at}>{formatQuotaReset(value.reset_at)}</time><i aria-hidden="true"> · </i>{quotaResetRelative(value.reset_at)}</span>}</div>{percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={`${label} 剩余配额`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
+  return <div className="quota-window"><div className="quota-window-title">{label}</div><div className="quota-window-meta"><strong>{formatQuotaValue(value)}</strong><QuotaResetTime resetAt={value.reset_at} /></div>{percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={`${label} 剩余配额`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
 }
 
 function quotaStatusLabel(status: string) {
@@ -942,6 +1003,15 @@ function CreateDialog({ onClose, onCreated, onError }: { onClose: () => void; on
   return <dialog open className="modal-backdrop"><div className="dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="eyebrow">NEW INSTANCE</div><h2>创建 CPA 实例</h2><p>总控会为实例创建独立目录；账户和 API Key 在子实例管理页配置。</p><form onSubmit={async event => { event.preventDefault(); setBusy(true); try { await api.post('/instances', { name, port: Number(port), ...(password ? { management_password: password } : {}) }); onCreated() } catch (cause) { onError(cause instanceof Error ? cause.message : '创建失败') } finally { setBusy(false) } }}><label>实例名称<input value={name} onChange={event => setName(event.target.value)} placeholder="例如 claude-work" required /></label><label>监听端口<input type="number" min="1024" max="65535" value={port} onChange={event => setPort(event.target.value)} required /></label><label>子实例管理密码（可选）<PasswordInput value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" placeholder="留空使用默认密码 admin" /></label><div className="dialog-actions"><button type="button" className="button ghost" onClick={onClose}>取消</button><button className="button primary" disabled={busy}>{busy ? '创建中…' : '创建实例'}</button></div></form></div></dialog>
 }
 
+function BackupDialog({ instance, instances, onClose, onSaved }: { instance: Instance; instances: Instance[]; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(`${instance.name.slice(0, 48)}-backup`)
+  const [port, setPort] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const conflict = instances.some(item => item.port === Number(port))
+  return <dialog open className="modal-backdrop" aria-labelledby="backup-title"><div className="dialog"><button className="dialog-close" disabled={busy} onClick={onClose} aria-label="关闭">×</button><div className="eyebrow">BACKUP INSTANCE</div><h2 id="backup-title">备份 {instance.name}</h2><p>复制当前 CPA 版本、配置、认证和插件数据，保存为独立实例。新实例默认停止，管理密码保持一致。</p><p>运行中的源实例会短暂停止，复制结束后恢复。历史日志不复制，备份占用独立的备份名额，不占普通实例名额。</p><form onSubmit={async event => { event.preventDefault(); if (busy || conflict) return; setBusy(true); setError(''); try { await api.post('/instances/' + instance.id + '/backup', { name: name.trim(), port: Number(port) }); onSaved() } catch (cause) { setError(cause instanceof Error ? cause.message : '备份失败') } finally { setBusy(false) } }}><label>备份实例名称<input value={name} disabled={busy} maxLength={64} onChange={event => setName(event.target.value)} required /></label><label>新的监听端口<input type="number" min="1024" max="65535" disabled={busy} value={port} onChange={event => setPort(event.target.value)} placeholder="填写未使用的端口" autoFocus required /></label>{(error || conflict) && <p className="settings-inline-error" role="alert">{error || '该端口已被现有实例使用，请填写新端口。'}</p>}<div className="dialog-actions"><button type="button" className="button ghost" disabled={busy} onClick={onClose}>取消</button><button className="button primary" disabled={busy || !port || !name.trim() || conflict}>{busy ? '备份中…' : '保存备份实例'}</button></div></form></div></dialog>
+}
+
 function EditDialog({ instance, onClose, onSaved, onError }: { instance: Instance; onClose: () => void; onSaved: () => void; onError: (error: string) => void }) {
   const [name, setName] = useState(instance.name)
   const [port, setPort] = useState(String(instance.port))
@@ -953,7 +1023,7 @@ function EditDialog({ instance, onClose, onSaved, onError }: { instance: Instanc
 function DeleteDialog({ instance, challenge, onClose, onDeleted, onError }: { instance: Instance; challenge: string | null; onClose: () => void; onDeleted: () => void; onError: (error: string) => void }) {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
-  return <dialog open className="modal-backdrop"><div className="dialog danger-dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="danger-mark">!</div><div className="eyebrow">IRREVERSIBLE ACTION</div><h2>删除 {instance.name}？</h2><p>这会停止实例并清除它的配置、OAuth 认证数据、日志和注册信息。版本安装缓存和其他实例不会受影响。</p><label>输入总控管理员密码确认<PasswordInput aria-label="输入总控管理员密码确认删除" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button className="button ghost" onClick={onClose}>保留实例</button><button className="button danger" disabled={!challenge || !password || busy} onClick={async () => { setBusy(true); try { await api.post('/instances/' + instance.id + '/delete', { challenge_id: challenge, admin_password: password }); onDeleted() } catch (cause) { onError(cause instanceof Error ? cause.message : '删除失败') } finally { setBusy(false) } }}>{busy ? '删除中…' : '确认删除'}</button></div></div></dialog>
+  return <dialog open className="modal-backdrop"><div className="dialog danger-dialog"><button className="dialog-close" onClick={onClose} aria-label="关闭">×</button><div className="danger-mark">!</div><div className="eyebrow">IRREVERSIBLE ACTION</div><h2>删除 {instance.name}？</h2><p>这会停止实例并清除它的配置、OAuth 认证数据、日志和注册信息，同时自动清理该实例的 API Key 绑定，无需先启动或手动解绑。Key 本身、其他实例的绑定和版本安装缓存会保留。</p><label>输入总控管理员密码确认<PasswordInput aria-label="输入总控管理员密码确认删除" value={password} onChange={event => setPassword(event.target.value)} autoComplete="current-password" autoFocus required /></label><div className="dialog-actions"><button className="button ghost" onClick={onClose}>保留实例</button><button className="button danger" disabled={!challenge || !password || busy} onClick={async () => { setBusy(true); try { await api.post('/instances/' + instance.id + '/delete', { challenge_id: challenge, admin_password: password }); onDeleted() } catch (cause) { onError(cause instanceof Error ? cause.message : '删除失败') } finally { setBusy(false) } }}>{busy ? '删除中…' : '确认删除'}</button></div></div></dialog>
 }
 
 function UnlockDialog({ instance, onClose, onUnlocked, onError }: { instance: Instance; onClose: () => void; onUnlocked: () => void; onError: (error: string) => void }) {
@@ -1002,3 +1072,13 @@ if (root) createRoot(root).render(<App />)
 
 
 
+
+function InstanceLimitsSettings() {
+  const [limits, setLimits] = useState<{ max_instances: number; max_backups: number; instances_used: number; backups_used: number } | null>(null)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const load = () => { setError(''); void api.get('/instance-limits').then(value => setLimits(value as NonNullable<typeof limits>)).catch(cause => setError(cause instanceof Error ? cause.message : '读取实例上限失败')) }
+  useEffect(load, [])
+  return <section className="settings-block" aria-label="实例名额设置"><h3>实例名额</h3><p>普通实例与备份分别计数。启动或解锁备份仍占备份名额。达到备份上限时中止升级，已有备份会保留。</p>{!limits && <button type="button" className="button ghost" onClick={load}>重新读取实例上限</button>}{limits && <form onSubmit={async event => { event.preventDefault(); setBusy(true); setError(''); setNotice(''); try { const result = await api.patch('/instance-limits', { max_instances: limits.max_instances, max_backups: limits.max_backups }); setLimits(result as NonNullable<typeof limits>); setNotice('实例上限已保存，立即生效') } catch (cause) { setError(cause instanceof Error ? cause.message : '保存实例上限失败') } finally { setBusy(false) } }}><div className="settings-grid"><label>普通实例上限<input type="number" aria-label="普通实例上限" min="1" max="1000" step="1" required disabled={busy} value={limits.max_instances} onChange={event => setLimits({ ...limits, max_instances: Number(event.target.value) })} /><small>已使用 {limits.instances_used} 个，默认 5 个。</small></label><label>备份实例上限<input type="number" aria-label="备份实例上限" min="1" max="1000" step="1" required disabled={busy} value={limits.max_backups} onChange={event => setLimits({ ...limits, max_backups: Number(event.target.value) })} /><small>已使用 {limits.backups_used} 个，默认 10 个。</small></label></div><div className="dialog-actions"><button className="button primary" disabled={busy}>{busy ? '保存中…' : '保存实例上限'}</button></div></form>}{error && <p className="form-error" role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}</section>
+}

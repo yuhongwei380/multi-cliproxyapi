@@ -10,6 +10,8 @@ import { NotFoundError, ConflictError } from './store.js'
 import { unsupported } from './cpa.js'
 import { prepareInstanceBinary } from './instance-binary.js'
 import { editChildConfig } from './child-config.js'
+import { backupMetadata, copyBackupTree, relocateBackupConfig } from './instance-backup.js'
+import { recordRuntimeEvent } from './logging.js'
 
 export const ErrInvalidCredentials = Object.assign(new Error('invalid credentials'), { code: 'ERR_INVALID_CREDENTIALS', status: 401 })
 export const ErrRateLimited = Object.assign(new Error('too many authentication attempts'), { code: 'ERR_RATE_LIMITED', status: 429 })
@@ -133,29 +135,144 @@ export class InstanceService {
     if (!['committed', 'rolled-back'].includes(state.state)) throw new ConflictError(`upgrade state is ${state.state}; recover the upgrade first`)
   }
   async create(input) {
-    return this.operations.run('global', async () => {
+    return this.operations.run('global', () => { this.assertUpgradeIdle(); return this.createUnlocked(input) })
+  }
+  getLimits() {
+    const limits = this.store.getInstanceLimits() || { max_instances: this.maxInstances, max_backups: 10 }
+    const items = this.store.listInstances()
+    return { ...limits, instances_used: items.filter(item => !item.is_backup).length, backups_used: items.filter(item => item.is_backup).length }
+  }
+  async updateLimits(input) {
+    return this.operations.run('global', () => {
       this.assertUpgradeIdle()
+      for (const key of ['max_instances', 'max_backups']) {
+        if (!Number.isInteger(input?.[key]) || input[key] < 1 || input[key] > 1000) throw Object.assign(new Error('实例上限必须为 1 到 1000 的整数'), { status: 400 })
+      }
+      const current = this.getLimits()
+      if (input.max_instances < current.instances_used || input.max_backups < current.backups_used) throw new ConflictError('上限不能低于当前已使用数量，请先删除不再需要的实例或备份')
+      this.store.saveInstanceLimits({ max_instances: input.max_instances, max_backups: input.max_backups })
+      return this.getLimits()
+    })
+  }
+  assertCapacity(backup, count = 1) {
+    const limits = this.getLimits()
+    const maximum = backup ? limits.max_backups : limits.max_instances
+    const used = backup ? limits.backups_used : limits.instances_used
+    if (maximum > 0 && used + count > maximum) throw new ConflictError(`${backup ? '备份' : '普通'}实例名额不足：需要 ${count} 个，已使用 ${used}/${maximum}；请在管理员设置中调整上限或清理实例`)
+  }
+  // Call only while holding the global operation lock.
+  async createUnlocked(input, initialize = null, { locked = false, backup = false } = {}) {
       ensureDirectory(this.root); ensureDirectory(path.join(this.root, 'instances'))
       validateName(input?.name); validatePort(input?.port)
       if (!(await portAvailable(input.port))) throw ErrPortUnavailable
       const childPassword = managementPassword(input?.management_password)
-      const existing = this.store.listInstances(); if (this.maxInstances > 0 && existing.length >= this.maxInstances) throw new ConflictError(`maximum of ${this.maxInstances} instances reached`)
+      const existing = this.store.listInstances(); this.assertCapacity(backup)
       if (existing.some(item => item.name.toLowerCase() === input.name.toLowerCase() || item.port === input.port)) throw new ConflictError()
       const version = input.version || this.defaultVersion || this.store.listVersions().find(item => item.usable)?.tag || existing[0]?.version || ''
       if (this.requireVersion && !version) throw new Error('no usable CPA version is installed')
       if (this.requireVersion) { const installed = this.store.getVersion(version); if (!installed.usable) throw new Error(`CPA version ${version} is not usable`) }
       if (!this.secrets) throw new Error('secret store is unavailable')
       const instanceId = id('cpa'); const directory = path.join(this.root, 'instances', instanceId); const timestamp = this.clock().toISOString()
-      const instance = { id: instanceId, name: input.name, port: input.port, directory, desired_state: DesiredState.STOPPED, locked: false, version, revision: 1, created_at: timestamp, updated_at: timestamp, management_secret_ciphertext: this.secrets.encrypt(childPassword.secret) }
+      const instance = { id: instanceId, name: input.name, port: input.port, directory, is_backup: backup, desired_state: DesiredState.STOPPED, locked, version, revision: 1, created_at: timestamp, updated_at: timestamp, management_secret_ciphertext: this.secrets.encrypt(childPassword.secret) }
       try {
         ensureDirectory(directory); ensureDirectory(path.join(directory, 'auths')); ensureDirectory(path.join(directory, 'logs'))
         this.writeInitialConfig(instance, childPassword.secret)
+        if (initialize) await initialize(instance)
         await this.prepareBinary(instance)
         this.store.createInstance(instance)
         await this.units?.install(instance)
         this.runtimeLog('info', instance, `instance ${instance.name} created`, { port: instance.port, version: instance.version })
         return instance
       } catch (error) { try { this.store.deleteInstance(instance.id) } catch {} try { fs.rmSync(directory, { recursive: true, force: true }) } catch {} try { await this.units?.unregister(instance) } catch {}; throw error }
+  }
+  async backup(instanceId, input) {
+    return this.operations.run('global', () => { this.assertUpgradeIdle(); return this.backupUnlocked(instanceId, input) })
+  }
+  async backupUnlocked(instanceId, input, { automatic = false, reason = '' } = {}) {
+    return this.withInstanceLock(instanceId, async () => {
+      const source = this.store.getInstance(instanceId); this.assertUnlocked(source)
+      if (path.resolve(source.directory) !== path.resolve(this.root, 'instances', source.id)) throw new ConflictError('unsafe source instance directory')
+      const sourceStat = fs.lstatSync(source.directory)
+      if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) throw new ConflictError('source instance directory must be a real directory')
+      const status = await this.runtime.status(source)
+      if (!['running', 'stopped', 'failed'].includes(status.state)) throw new ConflictError(`cannot back up instance while state is ${status.state}`)
+      const wasRunning = status.state === 'running'
+      const secret = this.decryptManagementSecret(source)
+      // Validate path isolation before interrupting the source runtime.
+      if (!fs.existsSync(path.join(source.directory, 'config.yaml'))) throw new ConflictError('instance config missing')
+      relocateBackupConfig(fs.readFileSync(path.join(source.directory, 'config.yaml'), 'utf8'), source.directory, source.directory)
+      const backup = await this.createUnlocked({ name: input?.name, port: input?.port, version: source.version, management_password: secret }, async target => {
+        let stopAttempted = false
+        try {
+          if (wasRunning) {
+            stopAttempted = true; await this.runtime.stop(source)
+            if (!isStopped((await this.runtime.status(source)).state)) throw ErrStopNotConfirmed('source did not stop before backup')
+          }
+          for (const entry of fs.readdirSync(source.directory)) {
+            if (['logs', '.multi-cpa.pid', '.plugin-backups', '.multi-cpa-backup.json'].includes(entry)) continue
+            copyBackupTree(path.join(source.directory, entry), path.join(target.directory, entry))
+          }
+          const file = path.join(target.directory, 'config.yaml')
+          let config = relocateBackupConfig(fs.readFileSync(file, 'utf8'), source.directory, target.directory)
+          config = editChildConfig(config, { port: target.port })
+          fs.writeFileSync(file, config, { mode: 0o600 })
+          fs.writeFileSync(path.join(target.directory, '.multi-cpa-backup.json'), JSON.stringify({ source_id: source.id, source_name: source.name, reason, automatic, created_at: this.clock().toISOString() }), { mode: 0o600 })
+        } finally {
+          if (stopAttempted) {
+            try { await this.runtime.start(source); await this.confirmStarted(source) }
+            catch (error) { this.runtimeLog('error', source, 'source restart after backup failed'); throw ErrStartNotConfirmed(`source restart after backup failed: ${error.message}`) }
+          }
+        }
+      }, { locked: automatic, backup: true })
+      this.store.inheritKeyBindings(source.id, backup.id)
+      this.runtimeLog('info', backup, 'instance backup created', { source_instance_id: source.id, port: backup.port })
+      return backup
+    })
+  }
+  // Upgrade callers hold the global operation lock and freeze their targets
+  // before adding backups. Every backup finishes before any upgrade begins.
+  async automaticBackups(ids, reason, onSaved = () => {}, onStarting = () => {}) {
+    const sources = ids.map(id => this.store.getInstance(id)).filter(item => !item.locked)
+    this.assertCapacity(true, sources.length)
+    const reserved = new Set(this.store.listInstances().map(item => item.port)); const plans = []
+    for (const source of sources) {
+      let port = 18317
+      while (port <= 65535 && (reserved.has(port) || !(await portAvailable(port)))) port++
+      if (port > 65535) throw ErrPortUnavailable
+      reserved.add(port)
+      plans.push({ source, port, name: `${source.name.slice(0, 30)}-backup-${this.clock().toISOString().replace(/\D/g, '').slice(0, 14)}-${crypto.randomUUID().slice(0, 4)}` })
+    }
+    const backups = []
+    for (const plan of plans) {
+      await onStarting(plan.source.id)
+      const backup = await this.backupUnlocked(plan.source.id, { name: plan.name, port: plan.port }, { automatic: true, reason })
+      backups.push(backup); await onSaved(plan.source.id, backup)
+      this.store.appendAuditLog?.({ actor: 'system', action: 'instance.backup', resource_type: 'instance', resource_id: backup.id, outcome: 'success', detail: `source=${plan.source.id}; reason=${reason}`, created_at: this.clock().toISOString() })
+    }
+    return backups
+  }
+  // Internal cleanup used after a successful upgrade/deployment. Automatic
+  // backups are locked and inherit key bindings, so the normal administrator
+  // deletion flow cannot be used for them.
+  async removeAutomaticBackup(instanceId) {
+    return this.withInstanceLock(instanceId, async () => {
+      const instance = this.store.getInstance(instanceId)
+      const metadata = backupMetadata(instance)
+      if (!instance.is_backup || !metadata?.automatic) throw new ConflictError('instance is not an automatic backup')
+      const expected = path.resolve(this.root, 'instances', instance.id)
+      if (path.resolve(instance.directory) !== expected) throw ErrDeleteNotSafe
+      if (!this.runtime) throw ErrDeleteNotSafe
+      const status = await this.runtime.status(instance)
+      if (!isStopped(status.state)) {
+        await this.runtime.stop(instance)
+        if (!isStopped((await this.runtime.status(instance)).state)) throw ErrDeleteNotSafe
+      }
+      await this.units?.unregister(instance)
+      validateDeletePath(this.root, instance.directory)
+      await fsp.rm(instance.directory, { recursive: true, force: true })
+      this.store.deleteInstance(instance.id, { removeKeyBindings: true })
+      this.runtimeLog('info', instance, 'automatic upgrade backup removed', { source_instance_id: metadata.source_id, reason: metadata.reason })
+      return instance
     })
   }
   writeInitialConfig(instance, secret) {
@@ -229,7 +346,7 @@ export class InstanceService {
       return status
     })
   }
-  async list() { const instances = this.store.listInstances(); return Promise.all(instances.map(async instance => ({ ...instance, status: await this.status(instance.id) }))) }
+  async list() { const instances = this.store.listInstances(); return Promise.all(instances.map(async instance => ({ ...instance, backup: backupMetadata(instance), status: await this.status(instance.id) }))) }
   async update(instanceId, input) {
     return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
       this.assertUpgradeIdle()
@@ -327,7 +444,9 @@ export class DeleteService {
     await this.units?.unregister(instance)
     validateDeletePath(this.instances.root, instance.directory)
     await fsp.rm(instance.directory, { recursive: true, force: true })
-    this.store.deleteInstance(instance.id)
+    // The process and its configuration are gone; no CPA call is needed to
+    // revoke keys on this instance. Keep bindings until removal succeeds.
+    this.store.deleteInstance(instance.id, { removeKeyBindings: true })
   }
 }
 
@@ -339,6 +458,8 @@ function validateDeletePath(root, target) {
 }
 
 export const DEFAULT_QUOTA_SETTINGS = Object.freeze({ refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false })
+export const QUOTA_NOTIFICATION_TIMEZONE = 'UTC+8'
+export const QUOTA_NOTIFICATION_WORK_WINDOWS = Object.freeze([{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }])
 
 function validateQuotaSettings(input, current = DEFAULT_QUOTA_SETTINGS) {
   const next = { ...current }
@@ -414,12 +535,39 @@ function quotaPercent(value) {
   return Math.max(0, Math.min(100, remaining / total * 100))
 }
 
+export const QUOTA_NOTIFICATION_COOLDOWN_MS = 5 * 60 * 60 * 1000
+
+function quotaNotificationKey(instanceId, snapshot, value) {
+  return JSON.stringify([instanceId, snapshot.account_id || '', snapshot.provider || '', value?.name || '默认窗口'])
+}
+
+function formatQuotaResetNotice(resetAt) {
+  const millis = Date.parse(resetAt || '')
+  if (!Number.isFinite(millis)) return '，额度刷新时间未提供'
+  const utc8 = new Date(millis + 8 * 60 * 60 * 1000)
+  const pad = value => String(value).padStart(2, '0')
+  return `，额度刷新时间 ${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())} ${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}（UTC+8）`
+}
+
+function formatQuotaNotification(items, test = false) {
+  const lines = items.map(({ instance, snapshot, value, percent, message }) => `${instance.name} / ${snapshot.provider || 'OAuth'} ${snapshot.account_id} / ${value?.name || (test ? '周限额' : '默认窗口')}：${message || (percent === null ? '额度未提供' : `剩余 ${percent.toFixed(1)}%`)}${formatQuotaResetNotice(value?.reset_at)}`)
+  return `${test ? '【测试消息】' : ''}CLIProxyAPI 配额告警\n${lines.join('\n')}`
+}
+
+export function isQuotaNotificationWorkTime(value = new Date()) {
+  const millis = value instanceof Date ? value.getTime() : new Date(value).getTime()
+  if (!Number.isFinite(millis)) return false
+  const utc8 = new Date(millis + 8 * 60 * 60 * 1000)
+  const minutes = utc8.getUTCHours() * 60 + utc8.getUTCMinutes()
+  return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 13 * 60 + 30 && minutes < 18 * 60)
+}
+
 export class QuotaService {
-  constructor({ store, instances, clients, secrets = null, clock = () => new Date(), refreshIntervalMs = 6 * 60 * 60 * 1000, maxConcurrent = 3, notifier = null } = {}) { this.store = store; this.instances = instances; this.clients = clients; this.secrets = secrets; this.clock = clock; this.refreshIntervalMs = refreshIntervalMs; this.maxConcurrent = maxConcurrent; this.notifier = notifier || new DingTalkNotifier(); this.running = new Set(); this.migrateLegacyWebhookUrl() }
+  constructor({ store, instances, clients, secrets = null, clock = () => new Date(), refreshIntervalMs = 6 * 60 * 60 * 1000, maxConcurrent = 3, notifier = null } = {}) { this.store = store; this.instances = instances; this.clients = clients; this.secrets = secrets; this.clock = clock; this.refreshIntervalMs = refreshIntervalMs; this.maxConcurrent = maxConcurrent; this.notifier = notifier || new DingTalkNotifier(); this.running = new Set(); this.notificationSentAt = new Map(); this.migrateLegacyWebhookUrl() }
   getSettings() {
     const settings = typeof this.store.getQuotaSettings === 'function' ? this.store.getQuotaSettings() : { refresh_interval_minutes: Math.max(1, Math.round(this.refreshIntervalMs / 60000)) }
-    const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url
-    return { ...DEFAULT_QUOTA_SETTINGS, ...safe, webhook_url: '', webhook_url_configured: Boolean(settings.webhook_url_configured || settings.webhook_url), webhook_secret_configured: Boolean(settings.webhook_secret_configured) }
+    const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url; delete safe.targets_configured
+    return { ...DEFAULT_QUOTA_SETTINGS, ...safe, instance_ids: Array.isArray(settings.instance_ids) ? settings.instance_ids : [], webhook_url: '', webhook_url_configured: Boolean(settings.webhook_url_configured || settings.webhook_url), webhook_secret_configured: Boolean(settings.webhook_secret_configured) }
   }
   storedSettings() {
     if (typeof this.store.getQuotaSettings !== 'function') return { ...this.getSettings(), webhook_signing_secret_ciphertext: '', webhook_url_ciphertext: '', webhook_url_legacy: '' }
@@ -447,8 +595,99 @@ export class QuotaService {
     const safe = { ...stored }; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy
     return { ...DEFAULT_QUOTA_SETTINGS, ...safe, webhook_url: webhookUrl, webhook_url_configured: Boolean(webhookUrl), webhook_secret: secret, webhook_secret_configured: Boolean(secret) }
   }
+  instanceSettingsWithSecret(instanceId) {
+    const instance = this.store.getInstance(instanceId); const global = this.settingsWithSecret(); const stored = this.store.getQuotaInstanceSettings?.(instanceId, { includeSecrets: true })
+    if (!stored) return { ...global, instance_id: instance.id, instance_name: instance.name, instance_port: instance.port, configured: false }
+    let secret = ''; let webhookUrl = ''
+    if (stored.webhook_signing_secret_ciphertext) {
+      if (!this.secrets?.decrypt) throw new Error('webhook secret store is unavailable')
+      secret = this.secrets.decrypt(stored.webhook_signing_secret_ciphertext)
+    }
+    if (stored.webhook_url_ciphertext) {
+      if (!this.secrets?.decrypt) throw new Error('webhook secret store is unavailable')
+      webhookUrl = this.secrets.decrypt(stored.webhook_url_ciphertext)
+    }
+    return { ...DEFAULT_QUOTA_SETTINGS, ...stored, instance_id: instance.id, instance_name: instance.name, instance_port: instance.port, configured: true, webhook_url: webhookUrl, webhook_url_configured: Boolean(webhookUrl), webhook_secret: secret, webhook_secret_configured: Boolean(secret) }
+  }
+  publicInstanceNotificationSettings(instance) {
+    const settings = this.instanceSettingsWithSecret(instance.id); const safe = { ...settings }
+    delete safe.webhook_url; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.instance_ids; delete safe.targets_configured
+    return { ...safe, timezone: QUOTA_NOTIFICATION_TIMEZONE, work_windows: QUOTA_NOTIFICATION_WORK_WINDOWS }
+  }
+  listNotificationSettings() { return this.store.listInstances().map(instance => this.publicInstanceNotificationSettings(instance)) }
+  updateNotificationSettings(instanceId, input = {}) {
+    const current = this.instanceSettingsWithSecret(instanceId); const stored = this.store.getQuotaInstanceSettings?.(instanceId, { includeSecrets: true }); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url')
+    let ciphertext = stored?.webhook_signing_secret_ciphertext || ''; let urlCiphertext = stored?.webhook_url_ciphertext || ''
+    if (!stored && current.webhook_secret && !ciphertext && this.secrets?.encrypt) ciphertext = this.secrets.encrypt(current.webhook_secret)
+    if (!stored && current.webhook_url && !urlCiphertext && this.secrets?.encrypt) urlCiphertext = this.secrets.encrypt(current.webhook_url)
+    if (hasSecret) {
+      if (next.webhook_secret) {
+        if (!this.secrets?.encrypt) throw new Error('webhook secret store is unavailable')
+        ciphertext = this.secrets.encrypt(next.webhook_secret)
+      } else ciphertext = ''
+    }
+    if (hasUrl || (!urlCiphertext && next.webhook_url)) {
+      if (next.webhook_url) {
+        if (!this.secrets?.encrypt) throw new Error('webhook secret store is unavailable')
+        urlCiphertext = this.secrets.encrypt(next.webhook_url)
+      } else urlCiphertext = ''
+    }
+    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_id; delete next.instance_name; delete next.instance_port; delete next.configured
+    this.store.saveQuotaInstanceSettings({ ...next, instance_id: instanceId, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext })
+    recordRuntimeEvent(this.store, 'quota', '实例额度通知配置已更新', { event: 'quota.settings.updated', instanceId, enabled: next.webhook_enabled })
+    if (typeof this.store.listQuotaGlobalInstanceIds === 'function' && typeof this.store.saveQuotaGlobalInstanceIds === 'function') this.store.saveQuotaGlobalInstanceIds(this.store.listQuotaGlobalInstanceIds().filter(id => id !== instanceId))
+    this.wakeScheduler?.()
+    return this.publicInstanceNotificationSettings(this.store.getInstance(instanceId))
+  }
+  deleteNotificationSettings(instanceId) {
+    const instance = this.store.getInstance(instanceId)
+    this.store.deleteQuotaInstanceSettings?.(instanceId)
+    recordRuntimeEvent(this.store, 'quota', '实例额度通知配置已移除，恢复全局配置', { event: 'quota.settings.deleted', instanceId })
+    this.wakeScheduler?.()
+    return this.publicInstanceNotificationSettings(instance)
+  }
+  async sendTestNotification(instanceId = '') {
+    recordRuntimeEvent(this.store, 'quota', '额度测试通知开始：读取当前周额度和重置时间', { event: 'quota.test.started', instanceId, mode: 'test' })
+    try {
+      const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.settingsWithSecret()
+      if (!settings.webhook_enabled) throw Object.assign(new Error(instanceId ? '该实例的钉钉机器人通知未启用' : '全局钉钉机器人通知未启用'), { status: 400 })
+      if (!settings.webhook_url) throw Object.assign(new Error('尚未配置钉钉机器人 Webhook 地址'), { status: 400 })
+      const globalIds = new Set(settings.instance_ids || [])
+      const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+      const targets = instanceId ? [this.store.getInstance(instanceId)] : this.store.listInstances().filter(instance => globalIds.has(instance.id) && !customIds.has(instance.id))
+      if (!targets.length) throw Object.assign(new Error('请先选择下发到 CPA 实例并保存配置'), { status: 400 })
+      const items = []
+      for (const instance of targets) {
+        const snapshots = await this.refreshInstance(instance.id, undefined, { notify: false })
+        if (!snapshots.length) items.push({ instance, snapshot: { account_id: 'OAuth 账户' }, percent: null, message: '未配置 OAuth 账户' })
+        for (const snapshot of snapshots) {
+          if (snapshot.status !== 'ok') {
+            items.push({ instance, snapshot, percent: null, message: snapshot.status === 'unsupported' ? '不支持读取额度' : '额度读取失败' })
+            continue
+          }
+          const weekly = (snapshot.values || []).filter(value => /周|week|seven_day|7d/i.test(value.name || ''))
+          if (!weekly.length) items.push({ instance, snapshot, percent: null, message: '未提供周额度' })
+          for (const value of weekly) items.push({ instance, snapshot, value, percent: quotaPercent(value) })
+        }
+      }
+      const sent = await this.notifier.notify(settings, formatQuotaNotification(items, true))
+      if (!sent) throw Object.assign(new Error('测试消息未发送，请检查 Webhook 配置'), { status: 502 })
+      recordRuntimeEvent(this.store, 'quota', '额度测试通知发送成功', { event: 'quota.test.sent', instanceId, mode: 'test', instances: targets.length, windows: items.length })
+      return { status: 'sent', instance_id: instanceId || '' }
+    } catch (error) {
+      recordRuntimeEvent(this.store, 'quota', '额度测试通知失败，请检查通知配置、实例状态及网络', { event: 'quota.test.failed', instanceId, mode: 'test', level: 'error' })
+      throw error
+    }
+  }
   updateSettings(input = {}) {
-    const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url')
+    const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url'); const hasInstanceIds = Object.prototype.hasOwnProperty.call(input, 'instance_ids')
+    let instanceIds = current.instance_ids || []
+    if (hasInstanceIds) {
+      if (!Array.isArray(input.instance_ids) || input.instance_ids.some(id => typeof id !== 'string')) throw ErrInvalidQuotaSettings('instance_ids must be an array of CPA instance IDs')
+      const available = new Set(this.store.listInstances().map(instance => instance.id)); const configured = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+      instanceIds = [...new Set(input.instance_ids)].filter(id => available.has(id) && !configured.has(id))
+      if (instanceIds.length !== new Set(input.instance_ids).size) throw ErrInvalidQuotaSettings('instance_ids contains an unknown or separately configured CPA instance')
+    }
     let ciphertext = stored.webhook_signing_secret_ciphertext || ''
     let urlCiphertext = stored.webhook_url_ciphertext || ''
     if (hasSecret) {
@@ -463,13 +702,32 @@ export class QuotaService {
         urlCiphertext = this.secrets.encrypt(next.webhook_url)
       } else urlCiphertext = ''
     }
-    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy
-    const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
+    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_ids; delete next.targets_configured
+    const targetInput = hasInstanceIds ? { instance_ids: instanceIds } : {}
+    const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, ...targetInput, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, ...targetInput, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
+    recordRuntimeEvent(this.store, 'quota', '全局额度通知配置已更新', { event: 'quota.settings.updated', enabled: next.webhook_enabled, instances: instanceIds.length })
     if (next.refresh_interval_minutes !== current.refresh_interval_minutes) this.wakeScheduler?.()
-    return saved
+    return typeof this.store.getQuotaSettings === 'function' ? this.getSettings() : saved
   }
-  intervalMs() { const settings = this.getSettings(); return Math.max(60000, Number(settings.refresh_interval_minutes) * 60000) }
-  async refreshInstance(instanceId, signal) {
+  intervalMs(instanceId = null) { const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.getSettings(); return Math.max(60000, Number(settings.refresh_interval_minutes) * 60000) }
+  scheduledInstances() {
+    const globalIds = new Set(this.getSettings().instance_ids || []); const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+    return this.store.listInstances().filter(instance => globalIds.has(instance.id) || customIds.has(instance.id))
+  }
+  schedulerIntervalMs() {
+    const instances = this.scheduledInstances()
+    return instances.length ? Math.min(...instances.map(instance => this.intervalMs(instance.id))) : this.intervalMs()
+  }
+  notificationCoolingDown(key, now) {
+    const sentAt = typeof this.store.getQuotaNotification === 'function' ? this.store.getQuotaNotification(key) : this.notificationSentAt.get(key) || ''
+    const timestamp = Date.parse(sentAt)
+    return Number.isFinite(timestamp) && now - timestamp < QUOTA_NOTIFICATION_COOLDOWN_MS
+  }
+  rememberNotification(key, sentAt) {
+    if (typeof this.store.saveQuotaNotification === 'function') this.store.saveQuotaNotification(key, sentAt)
+    else this.notificationSentAt.set(key, sentAt)
+  }
+  async refreshInstance(instanceId, signal, { notify = true } = {}) {
     if (this.running.has(instanceId)) throw new Error('quota refresh already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
@@ -483,24 +741,34 @@ export class QuotaService {
         try { if (!this.clients) throw new Error('CPA client factory unavailable'); client = await this.clients(instance); const accounts = await client.listAccounts(signal); const previous = this.store.listQuotas(instanceId); const previousBy = new Map(previous.map(item => [item.account_id, item])); if (!accounts.length) { this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'empty', message: 'no OAuth accounts configured', attempted_at: attempt, collected_at: attempt }) }
           const results = []; let index = 0; const worker = async () => { while (index < accounts.length) { const account = accounts[index++]; let snapshot; try { snapshot = await client.fetchQuota(account, signal); snapshot = { ...snapshot, instance_id: instanceId, account_id: account.id, provider: account.provider || '', attempted_at: attempt, status: 'ok', collected_at: attempt } } catch (error) { const old = previousBy.get(account.id); snapshot = { instance_id: instanceId, account_id: account.id, provider: account.provider || '', values: old?.values || [], collected_at: old?.collected_at || '', attempted_at: attempt, status: error.code === 'ERR_UNSUPPORTED' ? 'unsupported' : 'failed', message: error.code === 'ERR_UNSUPPORTED' ? 'quota endpoint is not supported for this account' : error.message } } results.push(snapshot) } }
           await Promise.all(Array.from({ length: Math.max(1, Math.min(this.maxConcurrent, accounts.length || 1)) }, worker)); for (const snapshot of results) this.store.saveQuota(snapshot)
-          const settings = this.settingsWithSecret()
+          const failedAccounts = results.filter(item => item.status !== 'ok').length
+          recordRuntimeEvent(this.store, 'quota', failedAccounts ? '额度刷新完成，部分账户读取失败或不支持' : '额度刷新完成', { event: 'quota.refresh.completed', instanceId, accounts: results.length, failed: failedAccounts, level: failedAccounts ? 'warn' : 'info' })
+          const settings = this.instanceSettingsWithSecret(instanceId); const alertAt = Date.parse(attempt)
           const low = results.filter(snapshot => snapshot.status === 'ok').flatMap(snapshot => (snapshot.values || []).map(value => ({ snapshot, value, percent: quotaPercent(value) })).filter(item => item.percent !== null && item.percent < settings.alert_threshold_percent))
-          if (low.length && this.notifier && settings.webhook_enabled && settings.webhook_url) {
-            const lines = low.map(item => `${instance.name} / ${item.snapshot.provider || 'OAuth'} / ${item.value.name || '默认窗口'}：剩余 ${item.percent.toFixed(1)}%`)
-            try { await this.notifier.notify(settings, `CLIProxyAPI 配额告警\n${lines.join('\n')}`) } catch {
+          const pendingNotifications = low.map(item => ({ ...item, key: quotaNotificationKey(instanceId, item.snapshot, item.value) })).filter(item => !this.notificationCoolingDown(item.key, alertAt))
+          if (notify && pendingNotifications.length && isQuotaNotificationWorkTime(new Date(attempt)) && this.notifier && settings.webhook_enabled && settings.webhook_url) {
+            recordRuntimeEvent(this.store, 'quota', '额度通知开始发送', { event: 'quota.notification.started', instanceId, mode: 'scheduled', windows: pendingNotifications.length })
+            try {
+              const delivered = await this.notifier.notify(settings, formatQuotaNotification(pendingNotifications.map(item => ({ ...item, instance }))))
+              if (delivered !== false) for (const item of pendingNotifications) this.rememberNotification(item.key, attempt)
+              recordRuntimeEvent(this.store, 'quota', delivered === false ? '额度通知未发送，请检查通知配置' : '额度通知发送成功', { event: delivered === false ? 'quota.notification.failed' : 'quota.notification.sent', instanceId, mode: 'scheduled', windows: pendingNotifications.length, level: delivered === false ? 'warn' : 'info' })
+            } catch {
               // Transport errors may contain the full signed webhook URL.
-              this.store.appendRuntimeLog?.({ level: 'error', source: 'quota', instance_id: instanceId, message: 'DingTalk quota notification failed; check webhook settings and network access', context: {} })
+              recordRuntimeEvent(this.store, 'quota', '额度通知发送失败，请检查 Webhook 配置及网络', { event: 'quota.notification.failed', instanceId, mode: 'scheduled', level: 'error' })
             }
+          } else if (notify && low.length) {
+            const reason = !settings.webhook_enabled || !settings.webhook_url ? '通知未启用或未配置' : !pendingNotifications.length ? '处于五小时通知冷却期' : '当前不在通知工作时段'
+            recordRuntimeEvent(this.store, 'quota', `额度通知已跳过：${reason}`, { event: 'quota.notification.skipped', instanceId, reason, windows: low.length })
           }
           const seen = new Set(accounts.map(account => account.id)); for (const old of previous) if ((old.account_id === DiscoveryAccountId && accounts.length) || (old.account_id !== DiscoveryAccountId && !seen.has(old.account_id))) this.store.deleteQuota(instanceId, old.account_id)
           return results
-        } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); throw new Error(`list OAuth accounts: ${error.message}`) }
+        } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); recordRuntimeEvent(this.store, 'quota', '额度刷新失败，请检查 OAuth 账户及 CPA 连接', { event: 'quota.refresh.failed', instanceId, level: 'error' }); throw new Error(`list OAuth accounts: ${error.message}`) }
       }))
     } finally { this.running.delete(instanceId) }
   }
   markDiscoveryFailure(instanceId, attempt, error) { const previous = this.store.listQuotas(instanceId); if (!previous.length) this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'failed', message: error.message, attempted_at: attempt, collected_at: '' }); else for (const item of previous) this.store.saveQuota({ ...item, attempted_at: attempt, status: 'failed', message: error.message }) }
-  async list(instanceId) { this.store.getInstance(instanceId); const now = this.clock().getTime(); const interval = this.intervalMs(); return this.store.listQuotas(instanceId).map(item => item.status === 'ok' && (!item.attempted_at || now - Date.parse(item.attempted_at) >= interval) ? { ...item, status: 'stale', message: 'quota snapshot is older than the refresh interval' } : item) }
-  async refreshDue(signal) { const now = this.clock().getTime(); const interval = this.intervalMs(); for (const instance of this.store.listInstances()) { const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
+  async list(instanceId) { this.store.getInstance(instanceId); const now = this.clock().getTime(); const interval = this.intervalMs(instanceId); return this.store.listQuotas(instanceId).map(item => item.status === 'ok' && (!item.attempted_at || now - Date.parse(item.attempted_at) >= interval) ? { ...item, status: 'stale', message: 'quota snapshot is older than the refresh interval' } : item) }
+  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.scheduledInstances()) { const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
   async run(signal) {
     if (signal?.aborted) return
     await this.refreshDue(signal)
@@ -512,7 +780,7 @@ export class QuotaService {
           if (this.wakeScheduler === finish) this.wakeScheduler = null
           resolve()
         }
-        const timer = setTimeout(finish, this.intervalMs())
+        const timer = setTimeout(finish, this.schedulerIntervalMs())
         this.wakeScheduler = finish
         signal?.addEventListener('abort', finish, { once: true })
         if (signal?.aborted) finish()

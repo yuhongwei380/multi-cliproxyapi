@@ -1,0 +1,152 @@
+[
+  {
+    "name": "first installation preserves config and stopped state",
+    "passed": true,
+    "detail": {
+      "id": "20d6f29c-adca-4bd7-a0a6-b74f685f8785",
+      "plugin": "cpa-key-billing",
+      "version": "1.3.19",
+      "enable": false,
+      "state": "completed",
+      "results": [
+        {
+          "id": "cpa-812f1d284bb14a0ba06d",
+          "state": "installed-pending-verification",
+          "was_running": false
+        }
+      ],
+      "created_at": "2026-10-12T03:28:30.426Z",
+      "message": "",
+      "updated_at": "2026-10-12T03:28:30.547Z"
+    }
+  },
+  {
+    "name": "locked instance skipped",
+    "passed": true,
+    "detail": {
+      "id": "4ad1e0aa-9ce2-47b6-afdb-38db78ee396d",
+      "plugin": "cpa-key-billing",
+      "version": "1.3.20",
+      "enable": false,
+      "state": "completed",
+      "results": [
+        {
+          "id": "cpa-812f1d284bb14a0ba06d",
+          "state": "skipped-locked"
+        }
+      ],
+      "created_at": "2026-10-12T03:28:30.951Z",
+      "message": "",
+      "updated_at": "2026-10-12T03:28:30.991Z"
+    }
+  },
+  {
+    "name": "stopped installation loads real 1.3.19 on start",
+    "passed": true,
+    "detail": [
+      {
+        "id": "cpa-key-billing",
+        "installed": true,
+        "version": "1.3.19",
+        "registered": true,
+        "enabled": true,
+        "verification": "live"
+      },
+      "running"
+    ]
+  },
+  {
+    "name": "running upgrade preserves config and verifies 1.3.20",
+    "passed": true,
+    "detail": {
+      "id": "7e3d5965-f566-4d3d-a526-32efae5db502",
+      "plugin": "cpa-key-billing",
+      "version": "1.3.20",
+      "enable": false,
+      "state": "completed",
+      "results": [
+        {
+          "id": "cpa-812f1d284bb14a0ba06d",
+          "state": "verified",
+          "previous_enabled": true,
+          "was_running": true
+        }
+      ],
+      "created_at": "2026-10-12T03:28:32.611Z",
+      "message": "",
+      "updated_at": "2026-10-12T03:28:33.212Z"
+    }
+  },
+  {
+    "name": "explicit enable verified",
+    "passed": true,
+    "detail": {
+      "id": "75b82345-8b04-4d97-9076-23312255b4b2",
+      "plugin": "cpa-key-billing",
+      "version": "1.3.20",
+      "enable": true,
+      "state": "completed",
+      "results": [
+        {
+          "id": "cpa-812f1d284bb14a0ba06d",
+          "state": "verified",
+          "previous_enabled": true,
+          "was_running": true
+        }
+      ],
+      "created_at": "2026-10-12T03:28:33.405Z",
+      "message": "",
+      "updated_at": "2026-10-12T03:28:34.050Z"
+    }
+  },
+  {
+    "name": "version verification failure rolls back real child",
+    "passed": true,
+    "detail": {
+      "id": "3714dcbd-8e42-47a5-b6bf-c917435b4b0c",
+      "plugin": "cpa-key-billing",
+      "version": "1.3.18",
+      "enable": false,
+      "state": "failed",
+      "results": [
+        {
+          "id": "cpa-812f1d284bb14a0ba06d",
+          "state": "rolled-back",
+          "previous_enabled": true,
+          "was_running": true,
+          "message": "plugin registration/version/enable verification failed"
+        }
+      ],
+      "created_at": "2026-10-12T03:28:34.245Z",
+      "message": "plugin registration/version/enable verification failed",
+      "updated_at": "2026-10-12T03:28:40.367Z"
+    }
+  },
+  {
+    "name": "controller SIGKILL restart recovers unfinished plugin switch",
+    "passed": true,
+    "detail": {
+      "id": "88acd4a7-0881-4767-a6f6-b2b3bdb8b12d",
+      "plugin": "cpa-key-billing",
+      "version": "1.3.18",
+      "enable": false,
+      "state": "failed",
+      "results": [
+        {
+          "id": "cpa-812f1d284bb14a0ba06d",
+          "state": "rolled-back",
+          "previous_enabled": true,
+          "was_running": true
+        }
+      ],
+      "created_at": "2026-10-12T03:28:40.543Z",
+      "message": "interrupted deployment recovered; submit a new deployment to continue",
+      "updated_at": "2026-10-12T03:28:46.684Z"
+    }
+  },
+  {
+    "name": "final child stopped",
+    "passed": true,
+    "detail": "stopped"
+  }
+]

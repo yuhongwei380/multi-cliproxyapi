@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import { DirectGitHubSource, extractArchive } from './release.js'
 import { editChildConfig } from './child-config.js'
 import { ConflictError } from './store.js'
+import { recordRuntimeEvent } from './logging.js'
 
 // Reviewed descriptors, not remote scripts. Additional plugins use the same engine.
 export const PLUGIN_CATALOG = [{ id: 'cpa-key-billing', name: 'Key Billing', owner: 'haowang02', repo: 'cpa-plugin-key-billing', entry: 'cpa-key-billing.so', asset: version => `cpa-key-billing_${version}_linux_amd64.tar.gz` }]
@@ -52,10 +53,23 @@ export class PluginArtifacts {
 }
 
 export class PluginService {
-  constructor({ store, instances, runtime, clients, artifacts }) { Object.assign(this, { store, instances, runtime, clients, artifacts }); this.pending = null }
+  constructor({ store, instances, runtime, clients, verifyInstance = null, artifacts }) { Object.assign(this, { store, instances, runtime, clients, verifyInstance, artifacts }); this.pending = null }
   assertIdle() { if (this.store.listPluginJobs().some(active)) throw new ConflictError('plugin deployment requires completion or recovery first') }
   jobs() { return this.store.listPluginJobs() }
-  save(job) { job.updated_at = new Date().toISOString(); this.store.savePluginJob(job) }
+  deleteRecord(id) { this.store.deletePluginJob(id) }
+  save(job) {
+    const previous = this.store.listPluginJobs().find(item => item.id === job.id)
+    job.updated_at = new Date().toISOString(); this.store.savePluginJob(job)
+    const context = { job_id: job.id, plugin: job.plugin, version: job.version }
+    const states = { queued: '已排队', running: '开始', completed: '完成', failed: '失败', blocked: '失败，等待恢复' }
+    if (previous?.state !== job.state) recordRuntimeEvent(this.store, 'plugin', `插件安装 / 升级${states[job.state] || job.state}`, { ...context, event: 'plugin.job', status: job.state, level: ['failed', 'blocked'].includes(job.state) ? 'error' : 'info' })
+    const resultStates = { 'skipped-locked': '已跳过锁定实例', 'backing-up': '正在备份', 'backup-ready': '备份完成', prepared: '部署准备完成', installing: '正在安装', verifying: '正在验证', verified: '安装及验证成功', 'installed-disabled': '安装成功（未启用）', 'installed-pending-verification': '安装完成（待启动验证）', restoring: '正在回滚', 'rolled-back': '安装失败，已回滚', blocked: '回滚失败，等待恢复', failed: '安装失败', cancelled: '已取消' }
+    for (const result of job.results || []) {
+      const before = previous?.results?.find(item => item.id === result.id)
+      if (before?.state !== result.state && resultStates[result.state]) recordRuntimeEvent(this.store, 'plugin', `插件${resultStates[result.state]}`, { ...context, event: 'plugin.instance', instanceId: result.id, status: result.state, level: ['failed', 'blocked', 'rolled-back'].includes(result.state) ? 'error' : 'info' })
+      if (result.backup_cleanup_error && !before?.backup_cleanup_error) recordRuntimeEvent(this.store, 'plugin', '插件安装完成，但自动备份清理失败', { ...context, event: 'plugin.backup.cleanup.failed', instanceId: result.id, level: 'warn' })
+    }
+  }
   async inventory() {
     const items = []
     for (const instance of this.store.listInstances()) {
@@ -84,6 +98,11 @@ export class PluginService {
     job.state = 'running'; this.save(job)
     try {
       const artifact = await this.artifacts.prepare(job.plugin, job.version); job.version = artifact.version; this.save(job)
+      await this.instances.automaticBackups(job.results.filter(result => result.state === 'pending').map(result => result.id), `plugin ${job.plugin} ${job.version}`, (sourceId, backup) => {
+        const result = job.results.find(item => item.id === sourceId)
+        result.backup_id = backup.id; result.backup_name = backup.name; result.backup_port = backup.port; result.state = 'backup-ready'; this.save(job)
+      }, sourceId => { const result = job.results.find(item => item.id === sourceId); result.state = 'backing-up'; this.save(job) })
+      for (const result of job.results) if (result.state === 'backup-ready') result.state = 'pending'
       for (const result of job.results) {
         if (result.state !== 'pending') continue
         await this.instances.withInstanceLock(result.id, async () => {
@@ -92,11 +111,24 @@ export class PluginService {
           await this.deploy(job, result, instance, artifact)
         })
       }
+      for (const result of (this.verifyInstance ? job.results : []).filter(item => item.backup_id && ['verified', 'installed-disabled', 'installed-pending-verification'].includes(item.state))) {
+        try { await this.instances.removeAutomaticBackup(result.backup_id); result.backup_removed = true }
+        catch (error) { result.backup_cleanup_error = error.message; job.message = [job.message, `备份 ${result.backup_id} 清理失败：${error.message}`].filter(Boolean).join('；') }
+        this.save(job)
+      }
       job.state = 'completed'
-    } catch (error) { job.state = job.results.some(item => item.state === 'blocked') ? 'blocked' : 'failed'; job.message = error.message }
+    } catch (error) {
+      job.state = job.results.some(item => item.state === 'blocked') ? 'blocked' : 'failed'; job.message = error.message
+      for (const result of job.results) {
+        if (['pending', 'backup-ready'].includes(result.state)) result.state = 'cancelled'
+        else if (result.state === 'backing-up') { result.state = 'failed'; result.message = error.message }
+      }
+    }
     this.save(job)
   }
   paths(job, instance) {
+    if (!/^[a-f0-9-]{36}$/.test(job.id) || path.resolve(instance.directory) !== path.resolve(this.instances.root, 'instances', instance.id)) throw new Error('unsafe plugin deployment path')
+    const stat = fs.lstatSync(instance.directory); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('instance directory must be a real directory')
     const descriptor = this.artifacts.descriptor(job.plugin)
     const plugins = path.join(instance.directory, 'plugins'); const backups = path.join(instance.directory, '.plugin-backups'); directory(plugins); directory(backups)
     const backup = path.join(backups, job.id); const file = path.join(plugins, descriptor.entry)
@@ -105,10 +137,12 @@ export class PluginService {
   async deploy(job, result, instance, artifact) {
     const files = this.paths(job, instance); const status = await this.runtime.status(instance)
     if (!['running', 'stopped', 'failed'].includes(status.state)) throw new Error(`instance state ${status.state} is not safe for deployment`)
-    if (status.state === 'running' && fs.existsSync(files.file)) {
+    if (status.state === 'running') {
       const payload = JSON.parse((await (await this.clients(instance)).request('GET', '/v0/management/plugins')).body)
       const previous = payload.plugins?.find(item => item.id === job.plugin)
-      if (typeof previous?.effective_enabled === 'boolean') result.previous_enabled = previous.effective_enabled
+      if (typeof payload.plugins_enabled !== 'boolean' || (previous && typeof previous.enabled !== 'boolean')) throw new Error('plugin configured enable state unavailable')
+      result.previous_global_enabled = payload.plugins_enabled
+      result.previous_enabled = previous?.enabled ?? false
     }
     result.was_running = status.state === 'running'; result.state = 'backing-up'; this.save(job)
     directory(files.backup)
@@ -124,9 +158,9 @@ export class PluginService {
       atomic(files.file, fs.readFileSync(artifact.file), 0o755); atomic(files.manifest, JSON.stringify({ id: job.plugin, version: artifact.version, sha256: artifact.sha256 }))
       if (job.enable) atomic(files.config, editChildConfig(fs.readFileSync(files.config, 'utf8'), { plugin: { id: job.plugin } }))
       if (result.was_running) {
-        result.state = 'verifying'; this.save(job); await this.runtime.start(instance); await this.instances.confirmStarted(instance); await this.verify(instance, job, result)
+        result.state = 'verifying'; this.save(job); await this.runtime.start(instance); await this.instances.confirmStarted(instance); result.loaded = await this.verify(instance, job, result); if (this.verifyInstance) { result.service_verifying = true; this.save(job); await this.verifyInstance(instance); result.service_verified = true }
       }
-      result.state = result.was_running ? 'verified' : 'installed-pending-verification'; this.save(job)
+      result.state = result.was_running ? (result.loaded ? 'verified' : 'installed-disabled') : 'installed-pending-verification'; this.save(job)
     } catch (error) {
       result.message = error.message
       try { await this.restore(job, result, instance); result.state = 'rolled-back' } catch (restoreError) { result.state = 'blocked'; result.message += `; rollback: ${restoreError.message}` }
@@ -139,9 +173,17 @@ export class PluginService {
       try {
         const payload = JSON.parse((await (await this.clients(instance)).request('GET', '/v0/management/plugins')).body)
         const plugin = payload.plugins?.find(item => item.id === job.plugin)
-        if (!plugin?.registered || plugin.metadata?.version !== job.version || (job.enable && !plugin.effective_enabled)) throw new Error('plugin registration/version/enable verification failed')
-        if (!job.enable && typeof result.previous_enabled === 'boolean' && plugin.effective_enabled !== result.previous_enabled) throw new Error('plugin enable state changed during upgrade')
-        return
+        const expectedGlobal = job.enable ? true : result.previous_global_enabled
+        const expectedEnabled = job.enable ? true : result.previous_enabled
+        if (payload.plugins_enabled !== expectedGlobal || plugin?.enabled !== expectedEnabled) throw new Error('plugin configured enable state changed during deployment')
+        const file = path.join(instance.directory, 'plugins', this.artifacts.descriptor(job.plugin).entry)
+        regular(file); regular(`${file}.json`)
+        const manifest = JSON.parse(fs.readFileSync(`${file}.json`))
+        if (!plugin?.path || path.resolve(instance.directory, plugin.path) !== path.resolve(file) || manifest.id !== job.plugin || manifest.version !== job.version || digest(fs.readFileSync(file)) !== manifest.sha256) throw new Error('plugin discovery/file verification failed')
+        const expectedLoaded = expectedGlobal && expectedEnabled
+        if (expectedLoaded && (!plugin.registered || plugin.metadata?.version !== job.version || !plugin.effective_enabled)) throw new Error('plugin registration/version/enable verification failed')
+        if (!expectedLoaded && plugin.effective_enabled !== false) throw new Error('disabled plugin unexpectedly enabled')
+        return expectedLoaded
       } catch (error) { last = error; if (attempt < 9) await new Promise(resolve => setTimeout(resolve, 500)) }
     }
     throw last
@@ -165,6 +207,7 @@ export class PluginService {
           if (['prepared', 'installing', 'verifying', 'restoring', 'blocked'].includes(result.state)) {
             try { await this.instances.withInstanceLock(result.id, () => this.restore(job, result, this.store.getInstance(result.id))); result.state = 'rolled-back' } catch (error) { blocked = true; result.state = 'blocked'; result.message = error.message }
           } else if (result.state === 'backing-up') result.state = 'cancelled'
+          else if (['pending', 'backup-ready'].includes(result.state)) result.state = 'cancelled'
         }
         job.state = blocked ? 'blocked' : 'failed'; job.message = blocked ? 'rollback requires attention; retry recovery' : 'interrupted deployment recovered; submit a new deployment to continue'; this.save(job)
       }

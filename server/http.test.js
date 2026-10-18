@@ -12,10 +12,65 @@ import { Installer, UpgradeService, VersionService } from './release.js'
 import { Controller, createHttpServer } from './http.js'
 import { instanceView } from './domain.js'
 import { BrandingService } from './branding.js'
+import { PluginService } from './plugins.js'
+
+test('deployment record deletion requires a session, rejects active records and records audit', async () => {
+  const store = new Store(':memory:'); const auth = new AuthService(store); auth.initializeAdmin('test-record-admin')
+  const plugins = new PluginService({ store }); const controller = new Controller({ auth, plugins, store, logger: { error() {} } }); const server = createHttpServer(controller)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const base = `http://127.0.0.1:${server.address().port}/api`
+  try {
+    store.savePluginJob({ id: 'finished', state: 'completed' }); store.savePluginJob({ id: 'recovering', state: 'blocked' })
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE' })).status, 401)
+    const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'test-record-admin' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0] }
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers: { ...headers, origin: 'https://evil.example' } })).status, 403)
+    assert.equal((await fetch(`${base}/plugins/jobs/recovering`, { method: 'DELETE', headers })).status, 409)
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers })).status, 200)
+    assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers })).status, 404)
+    assert.ok(store.listAuditLogs().some(item => item.action === 'plugin.record.delete' && item.resource_id === 'finished' && item.outcome === 'success'))
+    assert.deepEqual(store.listPluginJobs().map(item => item.id), ['recovering'])
+  } finally { server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); store.close() }
+})
+
+test('instance backup API requires login and returns a new stopped instance without credentials', async () => {
+  const f = await fixture()
+  try {
+    const source = await f.instances.create({ name: 'backup-api', port: await freePort(), management_password: 'backup-synthetic-secret' })
+    const route = `${f.url}/api/instances/${source.id}/backup`
+    assert.equal((await fetch(route, { method: 'POST' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    const port = await freePort()
+    const response = await fetch(route, { method: 'POST', headers, body: JSON.stringify({ name: 'backup-api-copy', port }) })
+    assert.equal(response.status, 201); const copy = await response.json()
+    assert.notEqual(copy.id, source.id); assert.equal(copy.port, port); assert.equal(copy.status.state, 'stopped'); assert.equal(copy.management_secret_ciphertext, undefined); assert.equal(copy.directory, undefined)
+    assert.equal(f.instances.decryptManagementSecret(f.store.getInstance(copy.id)), 'backup-synthetic-secret')
+    assert.ok(f.store.listAuditLogs().some(item => item.action === 'instance.backup' && item.resource_id === source.id && item.outcome === 'success'))
+    await f.instances.setLocked(source.id, true)
+    assert.equal((await fetch(route, { method: 'POST', headers, body: JSON.stringify({ name: 'locked-copy', port: await freePort() }) })).status, 409)
+  } finally { await closeFixture(f) }
+})
 
 async function freePort() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
+
+test('instance limit settings require authentication, validate changes and audit saves', async () => {
+  const f = await fixture()
+  try {
+    const route = `${f.url}/api/instance-limits`
+    assert.equal((await fetch(route)).status, 401)
+    assert.equal((await fetch(route, { method: 'PATCH' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    assert.deepEqual(await (await fetch(route, { headers })).json(), { max_instances: 5, max_backups: 10, instances_used: 0, backups_used: 0 })
+    assert.equal((await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ max_instances: 0, max_backups: 10 }) })).status, 400)
+    assert.equal((await fetch(route, { method: 'PATCH', headers: { ...headers, origin: 'https://evil.example' }, body: JSON.stringify({ max_instances: 8, max_backups: 20 }) })).status, 403)
+    const saved = await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ max_instances: 8, max_backups: 20 }) })
+    assert.equal(saved.status, 200); assert.equal((await saved.json()).max_backups, 20)
+    assert.ok(f.store.listAuditLogs().some(item => item.action === 'instance-limits.update' && item.outcome === 'success'))
+  } finally { await closeFixture(f) }
+})
 async function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const branding = new BrandingService({ store }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, branding, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, branding, server, url: `http://127.0.0.1:${server.address().port}` }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-http-')); const store = new Store(path.join(root, 'control.db')); const auth = new AuthService(store); auth.initializeAdmin('controller admin password'); const runtime = new FakeRuntime(); const secrets = openSecretStore(path.join(root, 'secrets.key')); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); const deleteService = new DeleteService({ store, runtime, units: new NoopUnitManager(), instances, auth }); const quota = new QuotaService({ store, instances, secrets, clients: async () => ({ listAccounts: async () => [], fetchQuota: async () => ({}) }) }); const upgrade = new UpgradeService({ store, instances, runtime }); const installer = new Installer({ source: {}, root: path.join(root, 'versions') }); const versionService = new VersionService({ store, instances, installer }); const branding = new BrandingService({ store }); const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, branding, store, staticRoot: path.resolve('web/dist'), logger: { error() {} } }); const server = createHttpServer(controller); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); return { root, store, instances, branding, quota, controller, server, url: `http://127.0.0.1:${server.address().port}` }
 }
 async function closeFixture(f) { f.server.closeAllConnections?.(); f.server.close(); f.store.close() }
 
@@ -101,6 +156,35 @@ test('quota settings are protected and can be updated through the API', async ()
   } finally { await closeFixture(f) }
 })
 
+test('per-instance quota notification settings are protected and independently configurable', async () => {
+  const f = await fixture(); try {
+    const instance = await f.instances.create({ name: 'notification-http', port: await freePort() }); const route = `${f.url}/api/quota/notifications/${instance.id}`
+    assert.equal((await fetch(`${f.url}/api/quota/notifications`)).status, 401); assert.equal((await fetch(route, { method: 'PATCH' })).status, 401)
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    const defaults = await fetch(`${f.url}/api/quota/notifications`, { headers }); assert.equal(defaults.status, 200); const defaultItem = (await defaults.json()).items.find(item => item.instance_id === instance.id); assert.equal(defaultItem.configured, false); assert.equal(defaultItem.timezone, 'UTC+8'); assert.deepEqual(defaultItem.work_windows, [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }])
+    const saved = await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ refresh_interval_minutes: 45, webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=instance', alert_threshold_percent: 12 }) }); assert.equal(saved.status, 200); const savedBody = await saved.json(); assert.equal(savedBody.configured, true); assert.equal(savedBody.refresh_interval_minutes, 45); assert.equal(savedBody.webhook_url, undefined); assert.ok(f.store.listAuditLogs().some(item => item.action === 'quota.notification.update' && item.resource_id === instance.id && item.outcome === 'success'))
+  } finally { await closeFixture(f) }
+})
+
+test('quota test notification endpoints are authenticated and audited', async () => {
+  const f = await fixture(); try {
+    const instance = await f.instances.create({ name: 'test-message-http', port: await freePort() })
+    await f.instances.start(instance.id)
+    f.quota.clients = async () => ({ listAccounts: async () => [{ id: 'oauth-http', provider: 'codex' }], fetchQuota: async () => ({ values: [{ name: '周限额', remaining: 75, total: 100, reset_at: '2026-10-21T08:00:00Z' }] }) })
+    const sent = []; f.quota.notifier = { notify: async (settings, message) => { sent.push({ settings, message }); return true } }
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) }); const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    assert.equal((await fetch(`${f.url}/api/quota/settings/test`, { method: 'POST' })).status, 401)
+    assert.equal((await fetch(`${f.url}/api/quota/notifications/${instance.id}/test`, { method: 'POST' })).status, 401)
+    const disabled = await fetch(`${f.url}/api/quota/settings/test`, { method: 'POST', headers }); assert.equal(disabled.status, 400); assert.match((await disabled.json()).error, /未启用/)
+    const configured = await fetch(`${f.url}/api/quota/settings`, { method: 'PATCH', headers, body: JSON.stringify({ instance_ids: [instance.id], webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=global-token' }) }); assert.equal(configured.status, 200)
+    const globalTest = await fetch(`${f.url}/api/quota/settings/test`, { method: 'POST', headers }); assert.equal(globalTest.status, 200); assert.deepEqual(await globalTest.json(), { status: 'sent', instance_id: '' })
+    const instanceTest = await fetch(`${f.url}/api/quota/notifications/${instance.id}/test`, { method: 'POST', headers }); assert.equal(instanceTest.status, 200); assert.deepEqual(await instanceTest.json(), { status: 'sent', instance_id: instance.id })
+    assert.equal(sent.length, 2); assert.equal(sent[0].message, sent[1].message); assert.match(sent[0].message, /^【测试消息】CLIProxyAPI 配额告警\ntest-message-http \/ codex oauth-http \/ 周限额：剩余 75\.0%，额度刷新时间 2026-10-21 16:00（UTC\+8）$/)
+    assert.ok(f.store.listAuditLogs().some(item => item.action === 'quota.settings.test' && item.outcome === 'success'))
+    assert.ok(f.store.listAuditLogs().some(item => item.action === 'quota.notification.test' && item.resource_id === instance.id && item.outcome === 'success'))
+  } finally { await closeFixture(f) }
+})
+
 test('administrator password endpoint requires the current password and keeps the session active', async () => {
   const f = await fixture(); try {
     const denied = await fetch(`${f.url}/api/auth/password`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ current_password: 'controller admin password', new_password: 'new-password' }) }); assert.equal(denied.status, 401)
@@ -120,7 +204,29 @@ test('log APIs are protected and mutations create audit and runtime entries', as
     const created = await fetch(`${f.url}/api/instances`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ name: 'logged-instance', port: await freePort() }) }); assert.equal(created.status, 201); const instance = await created.json()
     const started = await fetch(`${f.url}/api/instances/${instance.id}/start`, { method: 'POST', headers: { cookie } }); assert.equal(started.status, 202)
     const runtime = await (await fetch(`${f.url}/api/logs/runtime?limit=20`, { headers: { cookie } })).json(); assert.ok(runtime.items.some(item => item.instance_id === instance.id && item.message === 'instance start succeeded'))
+    f.store.appendRuntimeLog({ source: 'upgrade', level: 'error', message: 'upgrade failed' })
+    f.store.appendRuntimeLog({ source: 'plugin', level: 'info', message: 'plugin completed' })
+    const filtered = await (await fetch(`${f.url}/api/logs/runtime?source=upgrade&level=error&limit=1`, { headers: { cookie } })).json()
+    assert.deepEqual(filtered.items.map(item => item.message), ['upgrade failed'])
+    for (const query of ['source=invalid', 'level=invalid', 'limit=501']) assert.equal((await fetch(`${f.url}/api/logs/runtime?${query}`, { headers: { cookie } })).status, 400)
+    assert.equal((await fetch(`${f.url}/api/logs/runtime?source=key`)).status, 401)
     const audit = await (await fetch(`${f.url}/api/logs/audit?limit=20`, { headers: { cookie } })).json(); assert.ok(audit.items.some(item => item.action === 'auth.login' && item.outcome === 'failed')); assert.ok(audit.items.some(item => item.action === 'instance.create' && item.outcome === 'success')); assert.ok(audit.items.some(item => item.action === 'instance.start' && item.resource_id === instance.id))
+  } finally { await closeFixture(f) }
+})
+
+test('failed quota test requests never copy signed webhook URLs into runtime or audit logs', async () => {
+  const f = await fixture()
+  try {
+    const instance = await f.instances.create({ name: 'safe-notification-log', port: await freePort() }); await f.instances.start(instance.id)
+    f.quota.updateNotificationSettings(instance.id, { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=private-http-log-token' })
+    f.quota.notifier = { notify: async () => { throw new Error('https://oapi.dingtalk.com/robot/send?access_token=private-http-log-token&sign=private-sign') } }
+    const login = await fetch(`${f.url}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'controller admin password' }) })
+    const cookie = login.headers.get('set-cookie').split(';')[0]
+    const result = await fetch(`${f.url}/api/quota/notifications/${instance.id}/test`, { method: 'POST', headers: { cookie } })
+    assert.equal(result.status, 500)
+    assert.ok(f.store.listRuntimeLogs(500, { source: 'quota' }).some(item => item.context.event === 'quota.test.failed'))
+    assert.equal(JSON.stringify(f.store.listRuntimeLogs(500)).includes('private-'), false)
+    assert.equal(JSON.stringify(f.store.listAuditLogs(500)).includes('private-'), false)
   } finally { await closeFixture(f) }
 })
 

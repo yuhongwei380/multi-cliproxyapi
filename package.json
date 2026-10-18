@@ -1,6 +1,6 @@
 {
   "name": "multi-cliproxyapi",
-  "version": "26.10.2",
+  "version": "26.10.10",
   "private": true,
   "type": "module",
   "os": ["linux"],

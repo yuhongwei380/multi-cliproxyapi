@@ -14,6 +14,7 @@ export type Instance = {
   name: string
   port: number
   locked?: boolean
+  backup?: { source_id: string; source_name: string; automatic: boolean; reason: string; created_at: string }
   desired_state: string
   version: string
 	revision: number
@@ -34,6 +35,7 @@ export type QuotaSnapshot = {
 }
 
 export type QuotaSettings = {
+  instance_ids: string[]
   refresh_interval_minutes: number
   webhook_enabled: boolean
   webhook_url: string
@@ -42,6 +44,15 @@ export type QuotaSettings = {
   webhook_signing_enabled: boolean
   webhook_secret_configured: boolean
   webhook_secret?: string
+}
+
+export type QuotaNotificationSettings = Omit<QuotaSettings, 'instance_ids'> & {
+  instance_id: string
+  instance_name: string
+  instance_port: number
+  configured: boolean
+  timezone: 'UTC+8'
+  work_windows: Array<{ start: string; end: string }>
 }
 
 export type VersionInstall = {
@@ -79,6 +90,7 @@ export type API = {
   get: (path: string) => Promise<any>
   post: (path: string, body?: unknown) => Promise<any>
   patch: (path: string, body: unknown) => Promise<any>
+  delete: (path: string) => Promise<any>
 }
 
 async function request(path: string, options: RequestInit = {}) {
@@ -101,5 +113,6 @@ async function request(path: string, options: RequestInit = {}) {
 export const api: API = {
   get: path => request(path),
   post: (path, body) => request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
-  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) })
+  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  delete: path => request(path, { method: 'DELETE' })
 }

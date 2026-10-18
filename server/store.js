@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { backupMetadata } from './instance-backup.js'
 
 export class NotFoundError extends Error {
   constructor(message = 'not found') { super(message); this.code = 'ERR_NOT_FOUND'; this.status = 404 }
@@ -32,6 +33,17 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
     this.db.exec('CREATE TABLE IF NOT EXISTS plugin_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS managed_keys (
+        id TEXT PRIMARY KEY, note TEXT NOT NULL, ciphertext TEXT NOT NULL,
+        fingerprint TEXT NOT NULL UNIQUE, locked INTEGER NOT NULL DEFAULT 0,
+        deleting INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS key_bindings (
+        key_id TEXT NOT NULL REFERENCES managed_keys(id) ON DELETE CASCADE,
+        instance_id TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL,
+        PRIMARY KEY(key_id,instance_id)
+      );
+      CREATE INDEX IF NOT EXISTS key_bindings_instance_idx ON key_bindings(instance_id);
       CREATE TABLE IF NOT EXISTS admins (
         username TEXT PRIMARY KEY,
         password_hash TEXT NOT NULL
@@ -64,6 +76,23 @@ export class Store {
         attempted_at TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (instance_id, account_id)
       );
+      CREATE TABLE IF NOT EXISTS quota_notifications (
+        notification_key TEXT PRIMARY KEY,
+        sent_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS quota_notifications_sent_idx ON quota_notifications(sent_at);
+      CREATE TABLE IF NOT EXISTS quota_instance_settings (
+        instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
+        refresh_interval_minutes INTEGER NOT NULL DEFAULT 360,
+        webhook_enabled INTEGER NOT NULL DEFAULT 0,
+        alert_threshold_percent REAL NOT NULL DEFAULT 20,
+        webhook_signing_enabled INTEGER NOT NULL DEFAULT 0,
+        webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
+        webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
+      );
+      CREATE TABLE IF NOT EXISTS quota_global_instances (
+        instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS quota_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         refresh_interval_minutes INTEGER NOT NULL DEFAULT 360,
@@ -72,7 +101,8 @@ export class Store {
         alert_threshold_percent REAL NOT NULL DEFAULT 20,
         webhook_signing_enabled INTEGER NOT NULL DEFAULT 0,
         webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT '',
-        webhook_url_ciphertext TEXT NOT NULL DEFAULT ''
+        webhook_url_ciphertext TEXT NOT NULL DEFAULT '',
+        targets_configured INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS branding_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -131,6 +161,7 @@ export class Store {
         original_running_json TEXT NOT NULL DEFAULT '[]',
         original_desired_json TEXT NOT NULL DEFAULT '{}',
         instance_stages_json TEXT NOT NULL DEFAULT '{}',
+        backup_instances_json TEXT NOT NULL DEFAULT '[]',
         message TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL
       );
@@ -150,10 +181,20 @@ export class Store {
     // Add the columns explicitly so an upgrade keeps the current settings row.
     const instanceColumns = new Set(this.db.prepare('PRAGMA table_info(instances)').all().map(row => row.name))
     if (!instanceColumns.has('locked')) this.db.exec('ALTER TABLE instances ADD COLUMN locked INTEGER NOT NULL DEFAULT 0')
+    if (!instanceColumns.has('is_backup')) {
+      this.db.exec('ALTER TABLE instances ADD COLUMN is_backup INTEGER NOT NULL DEFAULT 0')
+      for (const instance of this.db.prepare('SELECT id,directory FROM instances').all()) {
+        if (backupMetadata(instance)) this.db.prepare('UPDATE instances SET is_backup=1 WHERE id=?').run(instance.id)
+      }
+    }
+    this.db.exec('CREATE TABLE IF NOT EXISTS instance_limits (id INTEGER PRIMARY KEY CHECK(id=1), max_instances INTEGER NOT NULL, max_backups INTEGER NOT NULL)')
     const quotaColumns = new Set(this.db.prepare('PRAGMA table_info(quota_settings)').all().map(row => row.name))
     if (!quotaColumns.has('webhook_signing_enabled')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN webhook_signing_enabled INTEGER NOT NULL DEFAULT 0')
     if (!quotaColumns.has('webhook_signing_secret_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_signing_secret_ciphertext TEXT NOT NULL DEFAULT ''")
     if (!quotaColumns.has('webhook_url_ciphertext')) this.db.exec("ALTER TABLE quota_settings ADD COLUMN webhook_url_ciphertext TEXT NOT NULL DEFAULT ''")
+    if (!quotaColumns.has('targets_configured')) this.db.exec('ALTER TABLE quota_settings ADD COLUMN targets_configured INTEGER NOT NULL DEFAULT 0')
+    const upgradeColumns = new Set(this.db.prepare('PRAGMA table_info(upgrade_state)').all().map(row => row.name))
+    if (!upgradeColumns.has('backup_instances_json')) this.db.exec("ALTER TABLE upgrade_state ADD COLUMN backup_instances_json TEXT NOT NULL DEFAULT '[]'")
     const brandingColumns = new Set(this.db.prepare('PRAGMA table_info(branding_settings)').all().map(row => row.name))
     if (!brandingColumns.has('logo')) this.db.exec("ALTER TABLE branding_settings ADD COLUMN logo TEXT NOT NULL DEFAULT ''")
     this.db.prepare('INSERT OR IGNORE INTO quota_settings(id, refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext) VALUES(1, 360, 0, \'\', 20, 0, \'\', \'\')').run()
@@ -165,7 +206,26 @@ export class Store {
   }
 
   close() { this.db?.close(); this.db = null }
+  getInstanceLimits() { return this.db.prepare('SELECT max_instances,max_backups FROM instance_limits WHERE id=1').get() || null }
+  saveInstanceLimits(value) {
+    this.db.prepare('INSERT INTO instance_limits VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET max_instances=excluded.max_instances,max_backups=excluded.max_backups').run(value.max_instances, value.max_backups)
+  }
   init() {}
+  listManagedKeys() { return this.db.prepare('SELECT * FROM managed_keys ORDER BY created_at DESC, id').all().map(row => ({ ...row, locked: Boolean(row.locked), deleting: Boolean(row.deleting) })) }
+  getManagedKey(id) { const key = this.db.prepare('SELECT * FROM managed_keys WHERE id=?').get(id); if (!key) throw new NotFoundError('Key 不存在'); return { ...key, locked: Boolean(key.locked), deleting: Boolean(key.deleting) } }
+  createManagedKey(key) {
+    try { this.db.prepare('INSERT INTO managed_keys(id,note,ciphertext,fingerprint,locked,deleting,created_at) VALUES(?,?,?,?,?,?,?)').run(key.id,key.note,key.ciphertext,key.fingerprint,0,0,key.created_at) }
+    catch (error) { if (this.db.prepare('SELECT id FROM managed_keys WHERE fingerprint=?').get(key.fingerprint)) throw new ConflictError('Key 已存在'); throw error }
+  }
+  saveManagedKey(key) { this.db.prepare('UPDATE managed_keys SET note=?,locked=?,deleting=? WHERE id=?').run(key.note,key.locked ? 1 : 0,key.deleting ? 1 : 0,key.id) }
+  deleteManagedKey(id) { if (this.keyBindings(id).length) throw new ConflictError('Key 仍有未撤销绑定'); this.db.prepare('DELETE FROM managed_keys WHERE id=?').run(id) }
+  keyBindings(id) { return this.db.prepare('SELECT b.*,i.name AS instance_name,i.port AS instance_port FROM key_bindings b LEFT JOIN instances i ON i.id=b.instance_id WHERE key_id=? ORDER BY instance_id').all(id) }
+  bindKey(id, instanceId) { this.db.prepare("INSERT OR IGNORE INTO key_bindings(key_id,instance_id,status,message) VALUES(?,?,'pending','')").run(id,instanceId) }
+  saveKeyBinding(id, instanceId, status, message) { this.db.prepare('UPDATE key_bindings SET status=?,message=? WHERE key_id=? AND instance_id=?').run(status,message,id,instanceId) }
+  unbindKey(id, instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE key_id=? AND instance_id=?').run(id,instanceId) }
+  deleteKeyBindingsForInstance(instanceId) { this.db.prepare('DELETE FROM key_bindings WHERE instance_id=?').run(instanceId) }
+  assertNoKeyBindings(instanceId) { if (this.db.prepare('SELECT 1 FROM key_bindings WHERE instance_id=? LIMIT 1').get(instanceId)) throw new ConflictError('实例仍绑定总控 Key，请先解绑并撤销') }
+  inheritKeyBindings(sourceId, targetId) { this.db.prepare("INSERT INTO key_bindings(key_id,instance_id,status,message) SELECT key_id,?,'copied','备份继承的 Key，启动后可验证或撤销' FROM key_bindings WHERE instance_id=?").run(targetId,sourceId) }
 
   getAdminHash(username) {
     const row = this.db.prepare('SELECT password_hash FROM admins WHERE username = ?').get(username)
@@ -190,14 +250,14 @@ export class Store {
     return {
       id: row.id, name: row.name, port: Number(row.port), directory: row.directory,
       management_secret_ciphertext: row.management_secret_ciphertext,
-      locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
+      is_backup: Boolean(row.is_backup), locked: Boolean(row.locked), desired_state: row.desired_state, version: row.version || '', revision: Number(row.revision),
       created_at: row.created_at, updated_at: row.updated_at
     }
   }
   createInstance(instance) {
     try {
-      this.db.prepare(`INSERT INTO instances(id,name,port,directory,management_secret_ciphertext,desired_state,version,revision,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(instance.id, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at)
+      this.db.prepare(`INSERT INTO instances(id,name,port,directory,management_secret_ciphertext,desired_state,version,revision,created_at,updated_at,locked,is_backup)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(instance.id, instance.name, instance.port, instance.directory, instance.management_secret_ciphertext, instance.desired_state, instance.version || '', instance.revision, instance.created_at, instance.updated_at, instance.locked ? 1 : 0, instance.is_backup ? 1 : 0)
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) throw new ConflictError()
       throw error
@@ -218,9 +278,15 @@ export class Store {
       throw new ConflictError('instance revision conflict')
     }
   }
-  deleteInstance(id) {
-    const result = this.db.prepare('DELETE FROM instances WHERE id = ?').run(id)
-    if (Number(result.changes) !== 1) throw new NotFoundError('instance not found')
+  deleteInstance(id, { removeKeyBindings = false } = {}) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (removeKeyBindings) this.deleteKeyBindingsForInstance(id)
+      else this.assertNoKeyBindings(id)
+      const result = this.db.prepare('DELETE FROM instances WHERE id = ?').run(id)
+      if (Number(result.changes) !== 1) throw new NotFoundError('instance not found')
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
   saveQuota(snapshot) {
@@ -235,16 +301,55 @@ export class Store {
     }))
   }
   deleteQuota(instanceId, accountId) { this.db.prepare('DELETE FROM quotas WHERE instance_id=? AND account_id=?').run(instanceId, accountId) }
+  getQuotaNotification(key) { return this.db.prepare('SELECT sent_at FROM quota_notifications WHERE notification_key=?').get(key)?.sent_at || '' }
+  saveQuotaNotification(key, sentAt) { this.db.prepare('INSERT INTO quota_notifications(notification_key,sent_at) VALUES(?,?) ON CONFLICT(notification_key) DO UPDATE SET sent_at=excluded.sent_at').run(key, sentAt) }
+  getQuotaInstanceSettings(instanceId, { includeSecrets = false } = {}) {
+    const row = this.db.prepare('SELECT instance_id,refresh_interval_minutes,webhook_enabled,alert_threshold_percent,webhook_signing_enabled,webhook_signing_secret_ciphertext,webhook_url_ciphertext FROM quota_instance_settings WHERE instance_id=?').get(instanceId)
+    if (!row) return null
+    const settings = { instance_id: row.instance_id, refresh_interval_minutes: Number(row.refresh_interval_minutes) || 360, webhook_enabled: Boolean(row.webhook_enabled), webhook_url: '', webhook_url_configured: Boolean(row.webhook_url_ciphertext), alert_threshold_percent: Number(row.alert_threshold_percent), webhook_signing_enabled: Boolean(row.webhook_signing_enabled), webhook_secret_configured: Boolean(row.webhook_signing_secret_ciphertext) }
+    if (includeSecrets) { settings.webhook_signing_secret_ciphertext = row.webhook_signing_secret_ciphertext || ''; settings.webhook_url_ciphertext = row.webhook_url_ciphertext || '' }
+    return settings
+  }
+  saveQuotaInstanceSettings(settings) {
+    this.db.prepare(`INSERT INTO quota_instance_settings(instance_id,refresh_interval_minutes,webhook_enabled,alert_threshold_percent,webhook_signing_enabled,webhook_signing_secret_ciphertext,webhook_url_ciphertext)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET refresh_interval_minutes=excluded.refresh_interval_minutes, webhook_enabled=excluded.webhook_enabled, alert_threshold_percent=excluded.alert_threshold_percent, webhook_signing_enabled=excluded.webhook_signing_enabled, webhook_signing_secret_ciphertext=excluded.webhook_signing_secret_ciphertext, webhook_url_ciphertext=excluded.webhook_url_ciphertext`).run(
+      settings.instance_id, settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, settings.webhook_signing_secret_ciphertext || '', settings.webhook_url_ciphertext || '')
+    return this.getQuotaInstanceSettings(settings.instance_id)
+  }
+  listQuotaInstanceSettingIds() { return this.db.prepare('SELECT instance_id FROM quota_instance_settings ORDER BY instance_id').all().map(row => row.instance_id) }
+  deleteQuotaInstanceSettings(instanceId) { this.db.prepare('DELETE FROM quota_instance_settings WHERE instance_id=?').run(instanceId) }
+  listQuotaGlobalInstanceIds() {
+    const configured = Boolean(this.db.prepare('SELECT targets_configured FROM quota_settings WHERE id=1').get()?.targets_configured)
+    if (!configured) return this.db.prepare('SELECT id FROM instances ORDER BY created_at,id').all().map(row => row.id)
+    return this.db.prepare('SELECT instance_id FROM quota_global_instances ORDER BY instance_id').all().map(row => row.instance_id)
+  }
+  saveQuotaGlobalInstanceIds(instanceIds) {
+    const ids = [...new Set(instanceIds)]
+    const existing = new Set(this.db.prepare('SELECT id FROM instances').all().map(row => row.id))
+    if (ids.some(id => !existing.has(id))) throw new NotFoundError('CPA instance not found')
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare('DELETE FROM quota_global_instances').run()
+      const insert = this.db.prepare('INSERT INTO quota_global_instances(instance_id) VALUES(?)')
+      for (const id of ids) insert.run(id)
+      this.db.prepare('UPDATE quota_settings SET targets_configured=1 WHERE id=1').run()
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return ids
+  }
 
   getQuotaSettings({ includeSecretCiphertext = false } = {}) {
-    const row = this.db.prepare('SELECT refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext FROM quota_settings WHERE id=1').get()
+    const row = this.db.prepare('SELECT refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext, targets_configured FROM quota_settings WHERE id=1').get()
     if (!row) {
-      const fallback = { refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }
+      const fallback = { refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, instance_ids: [], targets_configured: false }
       if (includeSecretCiphertext) { fallback.webhook_signing_secret_ciphertext = ''; fallback.webhook_url_ciphertext = ''; fallback.webhook_url_legacy = '' }
       return fallback
     }
     const ciphertext = row.webhook_signing_secret_ciphertext || ''; const urlCiphertext = row.webhook_url_ciphertext || ''; const legacyUrl = row.webhook_url || ''
-    const settings = { refresh_interval_minutes: Number(row.refresh_interval_minutes) || 360, webhook_enabled: Boolean(row.webhook_enabled), webhook_url: '', webhook_url_configured: Boolean(urlCiphertext || legacyUrl), alert_threshold_percent: Number(row.alert_threshold_percent), webhook_signing_enabled: Boolean(row.webhook_signing_enabled), webhook_secret_configured: Boolean(ciphertext) }
+    const settings = { refresh_interval_minutes: Number(row.refresh_interval_minutes) || 360, webhook_enabled: Boolean(row.webhook_enabled), webhook_url: '', webhook_url_configured: Boolean(urlCiphertext || legacyUrl), alert_threshold_percent: Number(row.alert_threshold_percent), webhook_signing_enabled: Boolean(row.webhook_signing_enabled), webhook_secret_configured: Boolean(ciphertext), instance_ids: this.listQuotaGlobalInstanceIds(), targets_configured: Boolean(row.targets_configured) }
     if (includeSecretCiphertext) { settings.webhook_signing_secret_ciphertext = ciphertext; settings.webhook_url_ciphertext = urlCiphertext; settings.webhook_url_legacy = legacyUrl }
     return settings
   }
@@ -255,6 +360,7 @@ export class Store {
     this.db.prepare(`INSERT INTO quota_settings(id, refresh_interval_minutes, webhook_enabled, webhook_url, alert_threshold_percent, webhook_signing_enabled, webhook_signing_secret_ciphertext, webhook_url_ciphertext)
       VALUES(1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET refresh_interval_minutes=excluded.refresh_interval_minutes, webhook_enabled=excluded.webhook_enabled, webhook_url=excluded.webhook_url, alert_threshold_percent=excluded.alert_threshold_percent, webhook_signing_enabled=excluded.webhook_signing_enabled, webhook_signing_secret_ciphertext=excluded.webhook_signing_secret_ciphertext, webhook_url_ciphertext=excluded.webhook_url_ciphertext`).run(
       settings.refresh_interval_minutes, settings.webhook_enabled ? 1 : 0, settings.webhook_url || '', settings.alert_threshold_percent, settings.webhook_signing_enabled ? 1 : 0, ciphertext, urlCiphertext)
+    if (Object.prototype.hasOwnProperty.call(settings, 'instance_ids')) this.saveQuotaGlobalInstanceIds(settings.instance_ids)
     return this.getQuotaSettings()
   }
 
@@ -284,8 +390,11 @@ export class Store {
     this.db.prepare('DELETE FROM runtime_logs WHERE id <= (SELECT COALESCE(MAX(id),0) - 10000 FROM runtime_logs)').run()
     return { id: Number(result.lastInsertRowid), level: entry.level || 'info', source: entry.source || 'controller', instance_id: entry.instance_id || '', message: entry.message || '', context: entry.context || {}, created_at: createdAt }
   }
-  listRuntimeLogs(limit = 200) {
-    return this.db.prepare('SELECT * FROM runtime_logs ORDER BY created_at DESC, id DESC LIMIT ?').all(Math.max(1, Math.min(500, Number(limit) || 200))).map(row => ({ id: Number(row.id), level: row.level, source: row.source, instance_id: row.instance_id || '', message: row.message, context: parse(row.context_json, {}), created_at: row.created_at }))
+  listRuntimeLogs(limit = 200, { source = '', level = '' } = {}) {
+    const conditions = []; const parameters = []
+    if (source) { conditions.push('source = ?'); parameters.push(source) }
+    if (level) { conditions.push('level = ?'); parameters.push(level) }
+    return this.db.prepare(`SELECT * FROM runtime_logs${conditions.length ? ` WHERE ${conditions.join(' AND ')}` : ''} ORDER BY created_at DESC, id DESC LIMIT ?`).all(...parameters, Math.max(1, Math.min(500, Number(limit) || 200))).map(row => ({ id: Number(row.id), level: row.level, source: row.source, instance_id: row.instance_id || '', message: row.message, context: parse(row.context_json, {}), created_at: row.created_at }))
   }
   appendAuditLog(entry) {
     const createdAt = entry.created_at || new Date().toISOString()
@@ -310,18 +419,24 @@ export class Store {
   }
 
   saveUpgradeState(state) {
-    this.db.prepare(`INSERT INTO upgrade_state(id,state,old_version,new_version,original_running_json,original_desired_json,instance_stages_json,message,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,old_version=excluded.old_version,new_version=excluded.new_version,original_running_json=excluded.original_running_json,original_desired_json=excluded.original_desired_json,instance_stages_json=excluded.instance_stages_json,message=excluded.message,updated_at=excluded.updated_at`).run(
-      state.id || 'singleton', state.state, state.old_version || '', state.new_version || '', json(state.original_running || []), json(state.original_desired || {}), json(state.instance_stages || {}), state.message || '', state.updated_at)
+    this.db.prepare(`INSERT INTO upgrade_state(id,state,old_version,new_version,original_running_json,original_desired_json,instance_stages_json,backup_instances_json,message,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,old_version=excluded.old_version,new_version=excluded.new_version,original_running_json=excluded.original_running_json,original_desired_json=excluded.original_desired_json,instance_stages_json=excluded.instance_stages_json,backup_instances_json=excluded.backup_instances_json,message=excluded.message,updated_at=excluded.updated_at`).run(
+      state.id || 'singleton', state.state, state.old_version || '', state.new_version || '', json(state.original_running || []), json(state.original_desired || {}), json(state.instance_stages || {}), json(state.backup_instances || []), state.message || '', state.updated_at)
   }
   getUpgradeState() {
     const row = this.db.prepare('SELECT * FROM upgrade_state WHERE id=?').get('singleton')
     if (!row) throw new NotFoundError('upgrade state not found')
-    return { id: row.id, state: row.state, old_version: row.old_version || '', new_version: row.new_version || '', original_running: parse(row.original_running_json, []), original_desired: parse(row.original_desired_json, {}), instance_stages: parse(row.instance_stages_json, {}), message: row.message || '', updated_at: row.updated_at }
+    return { id: row.id, state: row.state, old_version: row.old_version || '', new_version: row.new_version || '', original_running: parse(row.original_running_json, []), original_desired: parse(row.original_desired_json, {}), instance_stages: parse(row.instance_stages_json, {}), backup_instances: parse(row.backup_instances_json, []), message: row.message || '', updated_at: row.updated_at }
   }
   clearUpgradeState() { this.db.prepare('DELETE FROM upgrade_state WHERE id=?').run('singleton') }
   savePluginJob(job) { this.db.prepare('INSERT INTO plugin_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(job.id, json(job)) }
   listPluginJobs() { return this.db.prepare('SELECT payload FROM plugin_jobs ORDER BY rowid DESC LIMIT 100').all().map(row => parse(row.payload, {})) }
+  deletePluginJob(id) {
+    const result = this.db.prepare("DELETE FROM plugin_jobs WHERE id=? AND json_extract(payload, '$.state') IN ('completed','failed')").run(id)
+    if (Number(result.changes) === 1) return
+    if (!this.db.prepare('SELECT id FROM plugin_jobs WHERE id=?').get(id)) throw new NotFoundError('plugin deployment record not found')
+    throw new ConflictError('only completed or failed plugin deployment records can be deleted')
+  }
 
   createDeleteChallenge(challenge) {
     this.db.prepare('INSERT INTO delete_challenges(id,instance_id,revision,expires_at,used) VALUES(?,?,?,?,0)').run(challenge.id, challenge.instance_id, challenge.revision, challenge.expires_at)

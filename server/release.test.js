@@ -9,8 +9,10 @@ import { GitHubSource, Installer, UpgradeService, UpgradeState, VersionService }
 import { Store } from './store.js'
 import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
-import { InstanceService } from './services.js'
+import { AuthService, DeleteService, InstanceService } from './services.js'
 import { instanceBinaryPath } from './instance-binary.js'
+import { HTTPClient, verifyServiceWithTestKey } from './cpa.js'
+import { KeyService } from './keys.js'
 
 const trustedAsset = 'https://github.com/router-for-me/CLIProxyAPI/releases/download/v1.0.0/CLIProxyAPI_1.0.0_linux_amd64.tar.gz'
 
@@ -27,6 +29,7 @@ test('upgrade resource preparation failure leaves running processes and versions
     let stops = 0
     f.runtime.stop = async () => { stops++; throw new Error('must not stop') }
     await assert.rejects(f.upgrade.upgrade('v2'), /management resource unavailable/)
+    assert.ok(f.store.listRuntimeLogs(500, { source: 'upgrade' }).some(item => item.context.event === 'upgrade.failed'))
     assert.deepEqual(prepared, ['v1', 'v2'])
     assert.equal(stops, 0)
     assert.deepEqual(await f.runtime.status(f.first), before)
@@ -41,6 +44,16 @@ test('creation after a unified upgrade uses the active instance version', async 
     await f.upgrade.upgrade('v2')
     const created = await f.instances.create({ name: 'after-upgrade', port: await freePort() })
     assert.equal(created.version, 'v2')
+  } finally { f.close() }
+})
+
+test('insufficient backup capacity prevents CPA version switching before stopping processes', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id); f.store.saveInstanceLimits({ max_instances: 5, max_backups: 1 })
+    let stops = 0; f.runtime.stop = async () => { stops++; throw new Error('must not stop') }
+    await assert.rejects(f.upgrade.upgrade('v2'), /实例名额/)
+    assert.equal(stops, 0); assert.equal(f.store.listInstances().length, 2); assert.equal(f.store.getInstance(f.first.id).version, 'v1'); assert.equal(fs.readFileSync(instanceBinaryPath(f.first), 'utf8'), 'binary-v1'); assert.throws(() => f.store.getUpgradeState(), /not found/)
   } finally { f.close() }
 })
 
@@ -102,7 +115,8 @@ test('blocked upgrades prevent ordinary start, restart and desired-state recover
   const f = await upgradeFixture()
   try {
     await f.instances.start(f.first.id)
-    f.runtime.failStop = true
+    const backups = f.instances.automaticBackups.bind(f.instances)
+    f.instances.automaticBackups = async (...args) => { const result = await backups(...args); f.runtime.failStop = true; return result }
     await assert.rejects(f.upgrade.upgrade('v2'))
     assert.equal(f.store.getUpgradeState().state, 'blocked')
     f.runtime.failStop = false
@@ -184,6 +198,67 @@ async function upgradeFixture() {
   }
 }
 
+for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'rolls back persistent rejection' : 'waits for authentication reload'} and cleans its service key`, async () => {
+  const f = await upgradeFixture()
+  let keys = ['existing']; let probes = 0
+  const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'management', maxRetries: 0, fetchImpl: async (url, options) => {
+    if (url.endsWith('/v1/models')) return Response.json({ data: [{ id: 'model' }] }, { status: ++probes < 3 || permanent ? 401 : 200 })
+    if (options.method === 'PUT') { keys = JSON.parse(options.body); return Response.json({ status: 'ok' }) }
+    return Response.json(keys)
+  } })
+  f.upgrade.verifyInstance = () => verifyServiceWithTestKey(client, { maxAttempts: 3, retryDelayMs: 0 })
+  try {
+    await f.instances.start(f.first.id)
+    if (permanent) await assert.rejects(f.upgrade.upgrade('v2'), /after waiting/)
+    else await f.upgrade.upgrade('v2')
+    const logs = f.store.listRuntimeLogs(500, { source: 'upgrade' })
+    assert.ok(logs.some(item => item.context.event === 'upgrade.started'))
+    assert.ok(logs.some(item => item.context.event === (permanent ? 'upgrade.failed' : 'upgrade.completed')))
+    assert.equal(logs.some(item => item.context.event === 'upgrade.completed'), !permanent)
+    assert.equal(logs.some(item => item.context.event === 'upgrade.rollback.completed'), permanent)
+    assert.ok(logs.some(item => item.instance_id === f.first.id && item.context.event === 'upgrade.instance.verifying'))
+    assert.equal(probes, 3)
+    assert.deepEqual(keys, ['existing'])
+    for (const item of [f.first, f.second]) assert.equal(f.store.getInstance(item.id).version, permanent ? 'v1' : 'v2')
+    const running = await f.runtime.status(f.store.getInstance(f.first.id))
+    assert.equal(running.state, 'running')
+    assert.equal(running.version, permanent ? 'v1' : 'v2')
+    assert.equal((await f.runtime.status(f.second)).state, 'stopped')
+  } finally { f.close() }
+})
+
+test('a rolled-back upgrade backup can be deleted without starting it or revoking its inherited keys', async () => {
+  const f = await upgradeFixture()
+  try {
+    const keys = new KeyService({ store: f.store, instances: f.instances, secrets: f.instances.secrets })
+    const key = await keys.create({ key: 'sk-backup-cleanup-test' })
+    await keys.mutate(key.id, 'bind', { instances: [f.first.id] })
+    await keys.mutate(key.id, 'lock')
+    await f.instances.start(f.first.id)
+    f.upgrade.verifyInstance = async () => { throw new Error('service verification failed') }
+    await assert.rejects(f.upgrade.upgrade('v2'), /service verification failed/)
+    const backup = f.store.listInstances().find(item => item.is_backup && f.store.keyBindings(key.id).some(binding => binding.instance_id === item.id))
+    assert.ok(backup)
+    assert.equal(backup.locked, true)
+    assert.equal((await f.runtime.status(backup)).state, 'stopped')
+    const auth = new AuthService(f.store); auth.initializeAdmin('cleanup-password')
+    const deletion = new DeleteService({ store: f.store, runtime: f.runtime, instances: f.instances, units: new NoopUnitManager(), auth })
+    assert.throws(() => deletion.preview(backup.id), /锁定|locked/)
+    await f.instances.setLocked(backup.id, false)
+    f.runtime.start = async () => assert.fail('Cleanup must not start a CPA instance')
+    const challenge = deletion.preview(backup.id)
+    await assert.rejects(deletion.confirm(backup.id, challenge.id, 'wrong-password'))
+    assert.equal(f.store.keyBindings(key.id).length, 2)
+    await deletion.confirm(backup.id, challenge.id, 'cleanup-password')
+    assert.throws(() => f.store.getInstance(backup.id), /not found/)
+    assert.equal(fs.existsSync(backup.directory), false)
+    assert.deepEqual(f.store.keyBindings(key.id).map(item => item.instance_id), [f.first.id])
+    assert.equal(f.store.getManagedKey(key.id).locked, true)
+    assert.equal((await f.runtime.status(f.first)).state, 'running')
+    assert.equal(f.store.getInstance(f.first.id).version, 'v1')
+  } finally { f.close() }
+})
+
 test('GitHub release source only downloads bounded assets from the configured repository', async () => {
   let calls = 0
   const source = new GitHubSource({ maxAssetBytes: 4, fetchImpl: async () => { calls += 1; return new Response('test', { status: 200, headers: { 'content-length': '4' } }) } })
@@ -248,7 +323,7 @@ test('unified upgrade skips locked children and refuses when all children are lo
     const stop = f.runtime.stop.bind(f.runtime)
     f.runtime.stop = async item => { stops++; return stop(item) }
     await f.upgrade.upgrade('v2')
-    assert.equal(stops, 1)
+    assert.equal(stops, 2) // One consistent backup, then the version switch.
     assert.equal(f.store.getInstance(f.first.id).version, 'v2')
     assert.equal(f.store.getInstance(f.second.id).version, 'v1')
     assert.equal(f.store.getInstance(f.second.id).locked, true)
@@ -302,8 +377,11 @@ test('unified upgrade stops old instances, preserves stopped intent, and starts 
   try {
     await f.instances.start(f.first.id)
     await f.upgrade.upgrade('v2')
-    const items = f.store.listInstances()
+    const items = [f.store.getInstance(f.first.id), f.store.getInstance(f.second.id)]
     assert.deepEqual(items.map(item => item.version), ['v2', 'v2'])
+    const backups = f.store.listInstances().filter(item => !items.some(source => source.id === item.id))
+    assert.equal(backups.length, 2)
+    for (const backup of backups) { assert.equal(backup.version, 'v1'); assert.equal(backup.locked, true); assert.equal(backup.desired_state, 'stopped'); assert.equal(fs.readFileSync(instanceBinaryPath(backup), 'utf8'), 'binary-v1') }
     assert.equal(items[0].desired_state, 'running')
     assert.equal(items[1].desired_state, 'stopped')
     assert.equal((await f.instances.status(f.first.id)).state, 'running')
@@ -318,7 +396,8 @@ test('unified upgrade blocks before switching when an old instance will not stop
   const f = await upgradeFixture()
   try {
     await f.instances.start(f.first.id)
-    f.runtime.failStop = true
+    const backups = f.instances.automaticBackups.bind(f.instances)
+    f.instances.automaticBackups = async (...args) => { const result = await backups(...args); f.runtime.failStop = true; return result }
     await assert.rejects(() => f.upgrade.upgrade('v2'), /old instance refused to stop/)
     assert.equal(f.store.getUpgradeState().state, UpgradeState.BLOCKED)
     assert.ok(f.store.listInstances().every(item => item.version === 'v1'))
@@ -344,7 +423,8 @@ test('unified upgrade enters blocked state when restoring the old process fails'
   try {
     await f.instances.start(f.first.id)
     f.runtime.failNewStart = true
-    f.runtime.failOldStart = true
+    const backups = f.instances.automaticBackups.bind(f.instances)
+    f.instances.automaticBackups = async (...args) => { const result = await backups(...args); f.runtime.failOldStart = true; return result }
     await assert.rejects(() => f.upgrade.upgrade('v2'), /new version failed to start/)
     assert.equal(f.store.getUpgradeState().state, UpgradeState.BLOCKED)
     assert.ok(f.store.listInstances().every(item => item.version === 'v1'))

@@ -7,6 +7,7 @@ import { instanceView } from './domain.js'
 import { normalizeBearer } from './security.js'
 import { statusForError } from './errors.js'
 import { NotFoundError } from './store.js'
+import { RUNTIME_LOG_SOURCES } from './logging.js'
 
 const cookieName = 'multi_cpa_session'
 const securityHeaders = {
@@ -44,16 +45,26 @@ function safeClientAddress(request) { return String(request.socket?.remoteAddres
 function logLimit(url) { const limit = Number(url.searchParams.get('limit') || 200); if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Object.assign(new Error('invalid limit'), { status: 400 }); return limit }
 function auditTarget(request, pathname) {
   if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method)) return null
+  const keyTarget = pathname.match(/^\/api\/keys(?:\/([^/]+))?(?:\/([^/]+))?$/)
+  if (keyTarget) return { action: `key.${keyTarget[2] || 'create'}`, resource_type: 'key', resource_id: keyTarget[1] || '' }
   if (pathname === '/api/auth/password') return { action: 'auth.password.change', resource_type: 'administrator', resource_id: 'admin' }
   if (pathname === '/api/branding') return { action: 'branding.update', resource_type: 'branding', resource_id: 'singleton' }
   if (pathname === '/api/instances') return { action: 'instance.create', resource_type: 'instance', resource_id: '' }
+  if (pathname === '/api/instance-limits') return { action: 'instance-limits.update', resource_type: 'instance-limits', resource_id: 'singleton' }
   if (pathname === '/api/quota/settings') return { action: 'quota.settings.update', resource_type: 'quota-settings', resource_id: 'singleton' }
+  if (pathname === '/api/quota/settings/test') return { action: 'quota.settings.test', resource_type: 'quota-settings', resource_id: 'singleton' }
+  const quotaNotificationTest = pathname.match(/^\/api\/quota\/notifications\/([^/]+)\/test$/)
+  if (quotaNotificationTest) return { action: 'quota.notification.test', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotificationTest[1]) }
+  const quotaNotification = pathname.match(/^\/api\/quota\/notifications\/([^/]+)$/)
+  if (quotaNotification) return { action: request.method === 'DELETE' ? 'quota.notification.delete' : 'quota.notification.update', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotification[1]) }
   if (pathname === '/api/versions/install') return { action: 'version.install', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/upgrade') return { action: 'version.upgrade', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/uninstall') return { action: 'version.uninstall', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/upgrade/recover') return { action: 'version.recover', resource_type: 'upgrade', resource_id: 'singleton' }
   if (pathname === '/api/plugins/deploy') return { action: 'plugin.deploy', resource_type: 'plugin-job', resource_id: '' }
   if (pathname === '/api/plugins/recover') return { action: 'plugin.recover', resource_type: 'plugin-job', resource_id: '' }
+  const pluginRecord = pathname.match(/^\/api\/plugins\/jobs\/([^/]+)$/)
+  if (pluginRecord && request.method === 'DELETE') return { action: 'plugin.record.delete', resource_type: 'plugin-job', resource_id: decodeURIComponent(pluginRecord[1]) }
   const match = pathname.match(/^\/api\/instances\/([^/]+)(?:\/([^/]+))?$/)
   if (!match) return null
   const suffix = match[2] || 'update'
@@ -62,11 +73,11 @@ function auditTarget(request, pathname) {
 }
 
 export class Controller {
-  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, store, staticRoot, secureCookies, logger }) }
+  constructor({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, keys, store, staticRoot, secureCookies = false, logger = console } = {}) { Object.assign(this, { auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, keys, store, staticRoot, secureCookies, logger }) }
   token(request) { const cookies = parseCookies(request.headers.cookie || ''); return cookies[cookieName] || normalizeBearer(request.headers.authorization || '') }
   authenticated(request) { return this.auth.authenticate(this.token(request)) }
   audit(entry) { try { this.store.appendAuditLog?.(entry) } catch (error) { this.logger?.error?.(error) } }
-  runtimeError(request, error) { try { this.store.appendRuntimeLog?.({ level: 'error', source: 'http', message: error?.message || 'request failed', context: { method: request.method, path: new URL(request.url, 'http://localhost').pathname, status: statusForError(error) } }) } catch {} }
+  runtimeError(request, error) { try { this.store.appendRuntimeLog?.({ level: 'error', source: 'http', message: 'HTTP 请求失败，请查看对应操作日志及任务状态', context: { method: request.method, path: new URL(request.url, 'http://localhost').pathname, status: statusForError(error) } }) } catch {} }
   async handle(request, response) {
     try {
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`); const pathname = url.pathname
@@ -84,7 +95,7 @@ export class Controller {
         if (target) this.audit({ actor: username, ...target, outcome: 'success', client_address: safeClientAddress(request) })
         return result
       } catch (error) {
-        if (target) this.audit({ actor: username, ...target, outcome: 'failed', client_address: safeClientAddress(request), detail: error?.message || 'request failed' })
+        if (target) this.audit({ actor: username, ...target, outcome: 'failed', client_address: safeClientAddress(request), detail: statusForError(error) >= 500 ? '操作失败，请查看运行日志及任务状态' : (error?.message || 'request failed') })
         throw error
       }
     } catch (error) { this.logger?.error?.(error); if (statusForError(error) >= 500) this.runtimeError(request, error); return writeError(response, error) }
@@ -99,10 +110,30 @@ export class Controller {
   }
   logout(request, response) { let actor = 'unknown'; try { actor = this.authenticated(request) } catch {}; try { this.auth.logout(this.token(request)) } catch {}; this.audit({ actor, action: 'auth.logout', resource_type: 'session', outcome: 'success', client_address: safeClientAddress(request) }); const cookie = `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${this.secureCookies ? '; Secure' : ''}`; return writeJson(response, 200, { status: 'ok' }, { 'Set-Cookie': cookie }) }
   authStatus(request, response) { const branding = this.branding?.get?.(); try { return writeJson(response, 200, { authenticated: true, username: this.authenticated(request), ...(branding ? { branding } : {}) }) } catch { return writeJson(response, 200, { authenticated: false, ...(branding ? { branding } : {}) }) } }
-  async routeApi(request, response, url) {
+  async routeApi(request, response, url, username) {
     const route = url.pathname.replace(/^\/api/, '')
+    if (route === '/keys' && request.method === 'GET') return writeJson(response, 200, { items: this.keys.list() })
+    if (route === '/keys' && request.method === 'POST') return writeJson(response, 201, await this.keys.create(await readJson(request)))
+    const keyRoute = route.match(/^\/keys\/([^/]+)\/(note|bind|lock|unlock|reveal|deploy|revoke|delete|dismiss-failure)$/)
+    if (keyRoute && request.method === 'POST') {
+      const [, id, action] = keyRoute; const body = await readJson(request)
+      if (action === 'reveal') return writeJson(response, 200, await this.keys.reveal(id))
+      if (action === 'dismiss-failure') {
+        if (typeof body.instance_id !== 'string') throw Object.assign(new Error('请选择实例'), { status: 400 })
+        return writeJson(response, 200, await this.keys.dismissDeployFailure(id, body.instance_id, username))
+      }
+      if (['deploy','revoke','delete'].includes(action)) {
+        if (action === 'revoke' && typeof body.instance_id !== 'string') throw Object.assign(new Error('请选择解绑实例'), { status: 400 })
+        return writeJson(response, 200, await this.keys.distribute(id, { revoke: action !== 'deploy', remove: action === 'delete', instanceId: action === 'revoke' ? body.instance_id : null, actor: username }))
+      }
+      return writeJson(response, 200, await this.keys.mutate(id, action, body))
+    }
+    if (route === '/instance-limits' && request.method === 'GET') return writeJson(response, 200, this.instances.getLimits())
+    if (route === '/instance-limits' && request.method === 'PATCH') return writeJson(response, 200, await this.instances.updateLimits(await readJson(request)))
     if (route === '/plugins' && request.method === 'GET') return writeJson(response, 200, await this.plugins.inventory())
     if (route === '/plugins/jobs' && request.method === 'GET') return writeJson(response, 200, { items: this.plugins.jobs() })
+    const pluginRecord = route.match(/^\/plugins\/jobs\/([^/]+)$/)
+    if (pluginRecord && request.method === 'DELETE') { this.plugins.deleteRecord(decodeURIComponent(pluginRecord[1])); return writeJson(response, 200, { status: 'deleted' }) }
     if (route === '/plugins/deploy' && request.method === 'POST') return writeJson(response, 202, this.plugins.submit(await readJson(request)))
     if (route === '/plugins/recover' && request.method === 'POST') { await this.plugins.recover(); return writeJson(response, 200, { status: 'recovered' }) }
     if (route === '/auth/password' && request.method === 'PATCH') { const body = await readJson(request); this.auth.changeAdminPassword(body.current_password, body.new_password); return writeJson(response, 200, { status: 'updated' }) }
@@ -111,13 +142,24 @@ export class Controller {
     if (route === '/versions' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listVersions().map(item => { const { path: _path, ...publicVersion } = item; return publicVersion }) })
     if (route === '/upgrade/state' && request.method === 'GET') { try { return writeJson(response, 200, this.store.getUpgradeState()) } catch (error) { if (error.code === 'ERR_NOT_FOUND') return writeJson(response, 200, { state: 'idle' }); throw error } }
     if (route === '/operations' && request.method === 'GET') { const limit = Number(url.searchParams.get('limit') || 50); if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Object.assign(new Error('invalid limit'), { status: 400 }); return writeJson(response, 200, { items: this.store.listOperations(limit) }) }
-    if (route === '/logs/runtime' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url)) })
+    if (route === '/logs/runtime' && request.method === 'GET') {
+      const source = url.searchParams.get('source') || ''; const level = url.searchParams.get('level') || ''
+      if ((source && !RUNTIME_LOG_SOURCES.includes(source)) || (level && !['debug', 'info', 'warn', 'error'].includes(level))) throw Object.assign(new Error('invalid runtime log filter'), { status: 400 })
+      return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url), { source, level }) })
+    }
     if (route === '/logs/audit' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listAuditLogs(logLimit(url)) })
     if (route === '/branding' && request.method === 'PATCH') { if (!this.branding) throw new Error('branding service unavailable'); const body = await readJson(request, 512 * 1024); return writeJson(response, 200, this.branding.update(body)) }
     if (route === '/quota/settings' && request.method === 'GET') return writeJson(response, 200, this.quota.getSettings())
     if (route === '/quota/settings' && request.method === 'PATCH') { const body = await readJson(request); return writeJson(response, 200, this.quota.updateSettings(body)) }
+    if (route === '/quota/notifications' && request.method === 'GET') return writeJson(response, 200, { items: this.quota.listNotificationSettings() })
+    if (route === '/quota/settings/test' && request.method === 'POST') return writeJson(response, 200, await this.quota.sendTestNotification())
+    const quotaNotificationTest = route.match(/^\/quota\/notifications\/([^/]+)\/test$/)
+    if (quotaNotificationTest && request.method === 'POST') return writeJson(response, 200, await this.quota.sendTestNotification(decodeURIComponent(quotaNotificationTest[1])))
+    const quotaNotification = route.match(/^\/quota\/notifications\/([^/]+)$/)
+    if (quotaNotification && request.method === 'PATCH') return writeJson(response, 200, this.quota.updateNotificationSettings(decodeURIComponent(quotaNotification[1]), await readJson(request)))
+    if (quotaNotification && request.method === 'DELETE') return writeJson(response, 200, this.quota.deleteNotificationSettings(decodeURIComponent(quotaNotification[1])))
     if (route === '/versions/install' && request.method === 'POST') { if (!this.installer) throw new Error('version installer unavailable'); const body = await readJson(request); const installed = await this.installer.install(body.version || ''); this.store.saveVersion(installed); const instances = this.store.listInstances(); if (!instances.length && this.activator) await this.activator.activateVersion(installed.tag); this.instances.setDefaultVersionAfterInstall(installed.tag); const { path: _path, ...publicVersion } = installed; return writeJson(response, 201, publicVersion) }
-    if (route === '/versions/upgrade' && request.method === 'POST') { const body = await readJson(request); await this.upgrade.upgrade(body.version); return writeJson(response, 200, { status: 'upgraded', version: body.version }) }
+    if (route === '/versions/upgrade' && request.method === 'POST') { const body = await readJson(request); const result = await this.upgrade.upgrade(body.version); return writeJson(response, 200, { status: 'upgraded', version: body.version, ...(result || {}) }) }
     if (route === '/versions/uninstall' && request.method === 'POST') { if (!this.versionService) throw new Error('version uninstaller unavailable'); const body = await readJson(request); await this.versionService.uninstall(body.version); return writeJson(response, 200, { status: 'uninstalled', version: body.version }) }
     if (route === '/upgrade/recover' && request.method === 'POST') { await this.upgrade.recover(); return writeJson(response, 200, { status: 'recovered' }) }
     if (route.startsWith('/instances/')) return await this.instanceRoute(request, response, url, route.slice('/instances/'.length))
@@ -129,6 +171,7 @@ export class Controller {
     if (parts.length === 1 && request.method === 'PATCH') { const body = await readJson(request); const instance = await this.instances.update(instanceId, { name: body.name, port: body.port === undefined ? undefined : Number(body.port), management_password: body.management_password, expected_revision: Number(body.expected_revision) || 0 }); const status = await this.instances.status(instanceId); return writeJson(response, 200, publicInstance(instance, status, request)) }
     if (parts.length !== 2) return writeJson(response, 404, { error: 'not found' })
     const action = parts[1]
+    if (action === 'backup' && request.method === 'POST') { const body = await readJson(request); const instance = await this.instances.backup(instanceId, { name: body.name, port: Number(body.port) }); return writeJson(response, 201, publicInstance(instance, { instance_id: instance.id, state: 'stopped', ready: false, version: instance.version }, request)) }
     if (['lock', 'unlock'].includes(action) && request.method === 'POST') { if (action === 'unlock') { const body = await readJson(request); this.auth.verifyAdminPassword(body.admin_password) } const instance = await this.instances.setLocked(instanceId, action === 'lock'); return writeJson(response, 200, publicInstance(instance, await this.instances.status(instanceId), request)) }
     if (['start', 'stop', 'restart'].includes(action) && request.method === 'POST') { await this.instances[action](instanceId); return writeJson(response, 202, { status: action === 'start' ? 'starting' : action === 'stop' ? 'stopping' : 'restarting' }) }
     if (action === 'quotas') { if (request.method === 'GET') return writeJson(response, 200, { items: await this.quota.list(instanceId) }); if (request.method === 'POST') { await this.quota.refreshInstance(instanceId); return writeJson(response, 202, { status: 'refreshed', items: await this.quota.list(instanceId) }) } }

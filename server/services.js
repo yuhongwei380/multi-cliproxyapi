@@ -11,6 +11,7 @@ import { unsupported } from './cpa.js'
 import { prepareInstanceBinary } from './instance-binary.js'
 import { editChildConfig } from './child-config.js'
 import { backupMetadata, copyBackupTree, relocateBackupConfig } from './instance-backup.js'
+import { recordRuntimeEvent } from './logging.js'
 
 export const ErrInvalidCredentials = Object.assign(new Error('invalid credentials'), { code: 'ERR_INVALID_CREDENTIALS', status: 401 })
 export const ErrRateLimited = Object.assign(new Error('too many authentication attempts'), { code: 'ERR_RATE_LIMITED', status: 429 })
@@ -269,8 +270,7 @@ export class InstanceService {
       await this.units?.unregister(instance)
       validateDeletePath(this.root, instance.directory)
       await fsp.rm(instance.directory, { recursive: true, force: true })
-      this.store.deleteKeyBindingsForInstance?.(instance.id)
-      this.store.deleteInstance(instance.id)
+      this.store.deleteInstance(instance.id, { removeKeyBindings: true })
       this.runtimeLog('info', instance, 'automatic upgrade backup removed', { source_instance_id: metadata.source_id, reason: metadata.reason })
       return instance
     })
@@ -425,13 +425,12 @@ export class InstanceService {
 
 export class DeleteService {
   constructor({ store, runtime, units, instances, auth, clock = () => new Date(), challengeTtlMs = 10 * 60 * 1000 } = {}) { this.store = store; this.runtime = runtime; this.units = units; this.instances = instances; this.auth = auth; this.clock = clock; this.challengeTtlMs = challengeTtlMs; this.running = new Set() }
-  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.store.assertNoKeyBindings(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
+  preview(instanceId) { const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); const challenge = { id: id('del'), instance_id: instance.id, revision: instance.revision, expires_at: new Date(this.clock().getTime() + this.challengeTtlMs).toISOString() }; this.store.createDeleteChallenge(challenge); return challenge }
   async confirm(instanceId, challengeId, password) {
     if (!this.auth) throw new Error('authentication service unavailable'); this.auth.verifyAdminPassword(password); if (this.running.has(instanceId)) throw new Error('delete already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
         this.instances.pluginService?.assertIdle()
-        this.store.assertNoKeyBindings(instanceId)
         const instance = this.store.getInstance(instanceId); this.instances.assertUnlocked(instance); this.store.consumeDeleteChallenge(challengeId, instanceId, instance.revision, this.clock().toISOString()); const operation = { id: id('op'), kind: 'delete', instance_id: instanceId, state: 'running', message: '', created_at: this.clock().toISOString(), updated_at: this.clock().toISOString() }; this.store.saveOperation(operation)
         try { await this.remove(instance); operation.state = 'succeeded'; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation) }
         catch (error) { operation.state = 'failed'; operation.message = error.message; operation.updated_at = this.clock().toISOString(); this.store.updateOperation(operation); throw error }
@@ -445,7 +444,9 @@ export class DeleteService {
     await this.units?.unregister(instance)
     validateDeletePath(this.instances.root, instance.directory)
     await fsp.rm(instance.directory, { recursive: true, force: true })
-    this.store.deleteInstance(instance.id)
+    // The process and its configuration are gone; no CPA call is needed to
+    // revoke keys on this instance. Keep bindings until removal succeeds.
+    this.store.deleteInstance(instance.id, { removeKeyBindings: true })
   }
 }
 
@@ -540,6 +541,19 @@ function quotaNotificationKey(instanceId, snapshot, value) {
   return JSON.stringify([instanceId, snapshot.account_id || '', snapshot.provider || '', value?.name || '默认窗口'])
 }
 
+function formatQuotaResetNotice(resetAt) {
+  const millis = Date.parse(resetAt || '')
+  if (!Number.isFinite(millis)) return '，额度刷新时间未提供'
+  const utc8 = new Date(millis + 8 * 60 * 60 * 1000)
+  const pad = value => String(value).padStart(2, '0')
+  return `，额度刷新时间 ${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())} ${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}（UTC+8）`
+}
+
+function formatQuotaNotification(items, test = false) {
+  const lines = items.map(({ instance, snapshot, value, percent, message }) => `${instance.name} / ${snapshot.provider || 'OAuth'} ${snapshot.account_id} / ${value?.name || (test ? '周限额' : '默认窗口')}：${message || (percent === null ? '额度未提供' : `剩余 ${percent.toFixed(1)}%`)}${formatQuotaResetNotice(value?.reset_at)}`)
+  return `${test ? '【测试消息】' : ''}CLIProxyAPI 配额告警\n${lines.join('\n')}`
+}
+
 export function isQuotaNotificationWorkTime(value = new Date()) {
   const millis = value instanceof Date ? value.getTime() : new Date(value).getTime()
   if (!Number.isFinite(millis)) return false
@@ -552,8 +566,8 @@ export class QuotaService {
   constructor({ store, instances, clients, secrets = null, clock = () => new Date(), refreshIntervalMs = 6 * 60 * 60 * 1000, maxConcurrent = 3, notifier = null } = {}) { this.store = store; this.instances = instances; this.clients = clients; this.secrets = secrets; this.clock = clock; this.refreshIntervalMs = refreshIntervalMs; this.maxConcurrent = maxConcurrent; this.notifier = notifier || new DingTalkNotifier(); this.running = new Set(); this.notificationSentAt = new Map(); this.migrateLegacyWebhookUrl() }
   getSettings() {
     const settings = typeof this.store.getQuotaSettings === 'function' ? this.store.getQuotaSettings() : { refresh_interval_minutes: Math.max(1, Math.round(this.refreshIntervalMs / 60000)) }
-    const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url
-    return { ...DEFAULT_QUOTA_SETTINGS, ...safe, webhook_url: '', webhook_url_configured: Boolean(settings.webhook_url_configured || settings.webhook_url), webhook_secret_configured: Boolean(settings.webhook_secret_configured) }
+    const safe = { ...settings }; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.webhook_url_legacy; delete safe.webhook_url; delete safe.targets_configured
+    return { ...DEFAULT_QUOTA_SETTINGS, ...safe, instance_ids: Array.isArray(settings.instance_ids) ? settings.instance_ids : [], webhook_url: '', webhook_url_configured: Boolean(settings.webhook_url_configured || settings.webhook_url), webhook_secret_configured: Boolean(settings.webhook_secret_configured) }
   }
   storedSettings() {
     if (typeof this.store.getQuotaSettings !== 'function') return { ...this.getSettings(), webhook_signing_secret_ciphertext: '', webhook_url_ciphertext: '', webhook_url_legacy: '' }
@@ -597,7 +611,7 @@ export class QuotaService {
   }
   publicInstanceNotificationSettings(instance) {
     const settings = this.instanceSettingsWithSecret(instance.id); const safe = { ...settings }
-    delete safe.webhook_url; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext
+    delete safe.webhook_url; delete safe.webhook_secret; delete safe.webhook_signing_secret_ciphertext; delete safe.webhook_url_ciphertext; delete safe.instance_ids; delete safe.targets_configured
     return { ...safe, timezone: QUOTA_NOTIFICATION_TIMEZONE, work_windows: QUOTA_NOTIFICATION_WORK_WINDOWS }
   }
   listNotificationSettings() { return this.store.listInstances().map(instance => this.publicInstanceNotificationSettings(instance)) }
@@ -620,11 +634,60 @@ export class QuotaService {
     }
     delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_id; delete next.instance_name; delete next.instance_port; delete next.configured
     this.store.saveQuotaInstanceSettings({ ...next, instance_id: instanceId, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext })
+    recordRuntimeEvent(this.store, 'quota', '实例额度通知配置已更新', { event: 'quota.settings.updated', instanceId, enabled: next.webhook_enabled })
+    if (typeof this.store.listQuotaGlobalInstanceIds === 'function' && typeof this.store.saveQuotaGlobalInstanceIds === 'function') this.store.saveQuotaGlobalInstanceIds(this.store.listQuotaGlobalInstanceIds().filter(id => id !== instanceId))
     this.wakeScheduler?.()
     return this.publicInstanceNotificationSettings(this.store.getInstance(instanceId))
   }
+  deleteNotificationSettings(instanceId) {
+    const instance = this.store.getInstance(instanceId)
+    this.store.deleteQuotaInstanceSettings?.(instanceId)
+    recordRuntimeEvent(this.store, 'quota', '实例额度通知配置已移除，恢复全局配置', { event: 'quota.settings.deleted', instanceId })
+    this.wakeScheduler?.()
+    return this.publicInstanceNotificationSettings(instance)
+  }
+  async sendTestNotification(instanceId = '') {
+    recordRuntimeEvent(this.store, 'quota', '额度测试通知开始：读取当前周额度和重置时间', { event: 'quota.test.started', instanceId, mode: 'test' })
+    try {
+      const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.settingsWithSecret()
+      if (!settings.webhook_enabled) throw Object.assign(new Error(instanceId ? '该实例的钉钉机器人通知未启用' : '全局钉钉机器人通知未启用'), { status: 400 })
+      if (!settings.webhook_url) throw Object.assign(new Error('尚未配置钉钉机器人 Webhook 地址'), { status: 400 })
+      const globalIds = new Set(settings.instance_ids || [])
+      const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+      const targets = instanceId ? [this.store.getInstance(instanceId)] : this.store.listInstances().filter(instance => globalIds.has(instance.id) && !customIds.has(instance.id))
+      if (!targets.length) throw Object.assign(new Error('请先选择下发到 CPA 实例并保存配置'), { status: 400 })
+      const items = []
+      for (const instance of targets) {
+        const snapshots = await this.refreshInstance(instance.id, undefined, { notify: false })
+        if (!snapshots.length) items.push({ instance, snapshot: { account_id: 'OAuth 账户' }, percent: null, message: '未配置 OAuth 账户' })
+        for (const snapshot of snapshots) {
+          if (snapshot.status !== 'ok') {
+            items.push({ instance, snapshot, percent: null, message: snapshot.status === 'unsupported' ? '不支持读取额度' : '额度读取失败' })
+            continue
+          }
+          const weekly = (snapshot.values || []).filter(value => /周|week|seven_day|7d/i.test(value.name || ''))
+          if (!weekly.length) items.push({ instance, snapshot, percent: null, message: '未提供周额度' })
+          for (const value of weekly) items.push({ instance, snapshot, value, percent: quotaPercent(value) })
+        }
+      }
+      const sent = await this.notifier.notify(settings, formatQuotaNotification(items, true))
+      if (!sent) throw Object.assign(new Error('测试消息未发送，请检查 Webhook 配置'), { status: 502 })
+      recordRuntimeEvent(this.store, 'quota', '额度测试通知发送成功', { event: 'quota.test.sent', instanceId, mode: 'test', instances: targets.length, windows: items.length })
+      return { status: 'sent', instance_id: instanceId || '' }
+    } catch (error) {
+      recordRuntimeEvent(this.store, 'quota', '额度测试通知失败，请检查通知配置、实例状态及网络', { event: 'quota.test.failed', instanceId, mode: 'test', level: 'error' })
+      throw error
+    }
+  }
   updateSettings(input = {}) {
-    const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url')
+    const current = this.settingsWithSecret(); const stored = this.storedSettings(); const next = validateQuotaSettings(input, current); const hasSecret = Object.prototype.hasOwnProperty.call(input, 'webhook_secret'); const hasUrl = Object.prototype.hasOwnProperty.call(input, 'webhook_url'); const hasInstanceIds = Object.prototype.hasOwnProperty.call(input, 'instance_ids')
+    let instanceIds = current.instance_ids || []
+    if (hasInstanceIds) {
+      if (!Array.isArray(input.instance_ids) || input.instance_ids.some(id => typeof id !== 'string')) throw ErrInvalidQuotaSettings('instance_ids must be an array of CPA instance IDs')
+      const available = new Set(this.store.listInstances().map(instance => instance.id)); const configured = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+      instanceIds = [...new Set(input.instance_ids)].filter(id => available.has(id) && !configured.has(id))
+      if (instanceIds.length !== new Set(input.instance_ids).size) throw ErrInvalidQuotaSettings('instance_ids contains an unknown or separately configured CPA instance')
+    }
     let ciphertext = stored.webhook_signing_secret_ciphertext || ''
     let urlCiphertext = stored.webhook_url_ciphertext || ''
     if (hasSecret) {
@@ -639,14 +702,20 @@ export class QuotaService {
         urlCiphertext = this.secrets.encrypt(next.webhook_url)
       } else urlCiphertext = ''
     }
-    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy
-    const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
+    delete next.webhook_secret; delete next.webhook_signing_secret_ciphertext; delete next.webhook_url_ciphertext; delete next.webhook_url_legacy; delete next.instance_ids; delete next.targets_configured
+    const targetInput = hasInstanceIds ? { instance_ids: instanceIds } : {}
+    const saved = typeof this.store.saveQuotaSettings === 'function' ? this.store.saveQuotaSettings({ ...next, ...targetInput, webhook_url: '', webhook_url_ciphertext: urlCiphertext, webhook_signing_secret_ciphertext: ciphertext }) : { ...DEFAULT_QUOTA_SETTINGS, ...next, ...targetInput, webhook_url: '', webhook_url_configured: Boolean(urlCiphertext), webhook_secret_configured: Boolean(ciphertext) }
+    recordRuntimeEvent(this.store, 'quota', '全局额度通知配置已更新', { event: 'quota.settings.updated', enabled: next.webhook_enabled, instances: instanceIds.length })
     if (next.refresh_interval_minutes !== current.refresh_interval_minutes) this.wakeScheduler?.()
-    return saved
+    return typeof this.store.getQuotaSettings === 'function' ? this.getSettings() : saved
   }
   intervalMs(instanceId = null) { const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.getSettings(); return Math.max(60000, Number(settings.refresh_interval_minutes) * 60000) }
+  scheduledInstances() {
+    const globalIds = new Set(this.getSettings().instance_ids || []); const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
+    return this.store.listInstances().filter(instance => globalIds.has(instance.id) || customIds.has(instance.id))
+  }
   schedulerIntervalMs() {
-    const instances = this.store.listInstances()
+    const instances = this.scheduledInstances()
     return instances.length ? Math.min(...instances.map(instance => this.intervalMs(instance.id))) : this.intervalMs()
   }
   notificationCoolingDown(key, now) {
@@ -658,7 +727,7 @@ export class QuotaService {
     if (typeof this.store.saveQuotaNotification === 'function') this.store.saveQuotaNotification(key, sentAt)
     else this.notificationSentAt.set(key, sentAt)
   }
-  async refreshInstance(instanceId, signal) {
+  async refreshInstance(instanceId, signal, { notify = true } = {}) {
     if (this.running.has(instanceId)) throw new Error('quota refresh already in progress'); this.running.add(instanceId)
     try {
       return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
@@ -672,28 +741,34 @@ export class QuotaService {
         try { if (!this.clients) throw new Error('CPA client factory unavailable'); client = await this.clients(instance); const accounts = await client.listAccounts(signal); const previous = this.store.listQuotas(instanceId); const previousBy = new Map(previous.map(item => [item.account_id, item])); if (!accounts.length) { this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'empty', message: 'no OAuth accounts configured', attempted_at: attempt, collected_at: attempt }) }
           const results = []; let index = 0; const worker = async () => { while (index < accounts.length) { const account = accounts[index++]; let snapshot; try { snapshot = await client.fetchQuota(account, signal); snapshot = { ...snapshot, instance_id: instanceId, account_id: account.id, provider: account.provider || '', attempted_at: attempt, status: 'ok', collected_at: attempt } } catch (error) { const old = previousBy.get(account.id); snapshot = { instance_id: instanceId, account_id: account.id, provider: account.provider || '', values: old?.values || [], collected_at: old?.collected_at || '', attempted_at: attempt, status: error.code === 'ERR_UNSUPPORTED' ? 'unsupported' : 'failed', message: error.code === 'ERR_UNSUPPORTED' ? 'quota endpoint is not supported for this account' : error.message } } results.push(snapshot) } }
           await Promise.all(Array.from({ length: Math.max(1, Math.min(this.maxConcurrent, accounts.length || 1)) }, worker)); for (const snapshot of results) this.store.saveQuota(snapshot)
+          const failedAccounts = results.filter(item => item.status !== 'ok').length
+          recordRuntimeEvent(this.store, 'quota', failedAccounts ? '额度刷新完成，部分账户读取失败或不支持' : '额度刷新完成', { event: 'quota.refresh.completed', instanceId, accounts: results.length, failed: failedAccounts, level: failedAccounts ? 'warn' : 'info' })
           const settings = this.instanceSettingsWithSecret(instanceId); const alertAt = Date.parse(attempt)
           const low = results.filter(snapshot => snapshot.status === 'ok').flatMap(snapshot => (snapshot.values || []).map(value => ({ snapshot, value, percent: quotaPercent(value) })).filter(item => item.percent !== null && item.percent < settings.alert_threshold_percent))
           const pendingNotifications = low.map(item => ({ ...item, key: quotaNotificationKey(instanceId, item.snapshot, item.value) })).filter(item => !this.notificationCoolingDown(item.key, alertAt))
-          if (pendingNotifications.length && isQuotaNotificationWorkTime(new Date(attempt)) && this.notifier && settings.webhook_enabled && settings.webhook_url) {
-            const lines = pendingNotifications.map(item => `${instance.name} / ${item.snapshot.provider || 'OAuth'} / ${item.value.name || '默认窗口'}：剩余 ${item.percent.toFixed(1)}%`)
+          if (notify && pendingNotifications.length && isQuotaNotificationWorkTime(new Date(attempt)) && this.notifier && settings.webhook_enabled && settings.webhook_url) {
+            recordRuntimeEvent(this.store, 'quota', '额度通知开始发送', { event: 'quota.notification.started', instanceId, mode: 'scheduled', windows: pendingNotifications.length })
             try {
-              const delivered = await this.notifier.notify(settings, `CLIProxyAPI 配额告警\n${lines.join('\n')}`)
+              const delivered = await this.notifier.notify(settings, formatQuotaNotification(pendingNotifications.map(item => ({ ...item, instance }))))
               if (delivered !== false) for (const item of pendingNotifications) this.rememberNotification(item.key, attempt)
+              recordRuntimeEvent(this.store, 'quota', delivered === false ? '额度通知未发送，请检查通知配置' : '额度通知发送成功', { event: delivered === false ? 'quota.notification.failed' : 'quota.notification.sent', instanceId, mode: 'scheduled', windows: pendingNotifications.length, level: delivered === false ? 'warn' : 'info' })
             } catch {
               // Transport errors may contain the full signed webhook URL.
-              this.store.appendRuntimeLog?.({ level: 'error', source: 'quota', instance_id: instanceId, message: 'DingTalk quota notification failed; check webhook settings and network access', context: {} })
+              recordRuntimeEvent(this.store, 'quota', '额度通知发送失败，请检查 Webhook 配置及网络', { event: 'quota.notification.failed', instanceId, mode: 'scheduled', level: 'error' })
             }
+          } else if (notify && low.length) {
+            const reason = !settings.webhook_enabled || !settings.webhook_url ? '通知未启用或未配置' : !pendingNotifications.length ? '处于五小时通知冷却期' : '当前不在通知工作时段'
+            recordRuntimeEvent(this.store, 'quota', `额度通知已跳过：${reason}`, { event: 'quota.notification.skipped', instanceId, reason, windows: low.length })
           }
           const seen = new Set(accounts.map(account => account.id)); for (const old of previous) if ((old.account_id === DiscoveryAccountId && accounts.length) || (old.account_id !== DiscoveryAccountId && !seen.has(old.account_id))) this.store.deleteQuota(instanceId, old.account_id)
           return results
-        } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); throw new Error(`list OAuth accounts: ${error.message}`) }
+        } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); recordRuntimeEvent(this.store, 'quota', '额度刷新失败，请检查 OAuth 账户及 CPA 连接', { event: 'quota.refresh.failed', instanceId, level: 'error' }); throw new Error(`list OAuth accounts: ${error.message}`) }
       }))
     } finally { this.running.delete(instanceId) }
   }
   markDiscoveryFailure(instanceId, attempt, error) { const previous = this.store.listQuotas(instanceId); if (!previous.length) this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'failed', message: error.message, attempted_at: attempt, collected_at: '' }); else for (const item of previous) this.store.saveQuota({ ...item, attempted_at: attempt, status: 'failed', message: error.message }) }
   async list(instanceId) { this.store.getInstance(instanceId); const now = this.clock().getTime(); const interval = this.intervalMs(instanceId); return this.store.listQuotas(instanceId).map(item => item.status === 'ok' && (!item.attempted_at || now - Date.parse(item.attempted_at) >= interval) ? { ...item, status: 'stale', message: 'quota snapshot is older than the refresh interval' } : item) }
-  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.store.listInstances()) { const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
+  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.scheduledInstances()) { const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
   async run(signal) {
     if (signal?.aborted) return
     await this.refreshDue(signal)

@@ -5,7 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import net from 'node:net'
 import { Store } from './store.js'
-import { InstanceService } from './services.js'
+import { AuthService, DeleteService, InstanceService } from './services.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
 import { openSecretStore } from './security.js'
 import { relocateBackupConfig, backupMetadata } from './instance-backup.js'
@@ -28,6 +28,37 @@ test('manual and automatic backups inherit managed Key bindings for later revoca
       assert.match(fs.readFileSync(path.join(copy.directory, 'config.yaml'), 'utf8'), /sk-backup-test12345/)
       assert.throws(() => f.store.assertNoKeyBindings(copy.id), /仍绑定/)
     }
+  } finally { f.close() }
+})
+
+for (const failure of ['stop', 'unregister', 'directory']) test(`failed instance deletion retains key bindings and allows retry (${failure})`, async () => {
+  const f = fixture()
+  try {
+    const instance = await f.instances.create({ name: 'delete-failure', port: await port() })
+    const keys = new KeyService({ store: f.store, instances: f.instances, secrets: f.instances.secrets })
+    const key = await keys.create({ key: 'sk-delete-failure-test' })
+    await keys.mutate(key.id, 'bind', { instances: [instance.id] })
+    const auth = new AuthService(f.store); auth.initializeAdmin('test-password')
+    const units = new NoopUnitManager()
+    const deletion = new DeleteService({ store: f.store, instances: f.instances, runtime: f.runtime, units, auth })
+    const stop = f.runtime.stop.bind(f.runtime)
+    if (failure === 'stop') {
+      await f.instances.start(instance.id)
+      f.runtime.stop = async () => { throw new Error('stop failed') }
+    } else if (failure === 'unregister') units.unregister = async () => { throw new Error('unregister failed') }
+    else {
+      // A regular file in place of the directory must fail path validation.
+      fs.renameSync(instance.directory, `${instance.directory}.saved`)
+      fs.writeFileSync(instance.directory, 'not a directory')
+    }
+    await assert.rejects(deletion.confirm(instance.id, deletion.preview(instance.id).id, 'test-password'))
+    assert.equal(f.store.getInstance(instance.id).id, instance.id)
+    assert.deepEqual(f.store.keyBindings(key.id).map(item => item.instance_id), [instance.id])
+    if (failure === 'directory') { fs.unlinkSync(instance.directory); fs.renameSync(`${instance.directory}.saved`, instance.directory) }
+    f.runtime.stop = stop; units.unregister = async () => {}
+    await deletion.confirm(instance.id, deletion.preview(instance.id).id, 'test-password')
+    assert.deepEqual(f.store.keyBindings(key.id), [])
+    assert.equal(f.store.getManagedKey(key.id).id, key.id)
   } finally { f.close() }
 })
 

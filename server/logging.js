@@ -7,6 +7,14 @@ export const DEFAULT_LOG_RETENTION_DAYS = 7
 const LEVELS = ['debug', 'info', 'warn', 'error']
 const LEVEL_RANK = new Map(LEVELS.map((level, index) => [level, index]))
 
+export const RUNTIME_LOG_SOURCES = ['controller', 'instance', 'upgrade', 'plugin', 'key', 'quota', 'http']
+
+// Only pass operation identifiers/counts here, never credentials, request
+// bodies, webhook URLs or raw upstream errors. Logging cannot fail the task.
+export function recordRuntimeEvent(store, source, message, { level = 'info', instanceId = '', ...context } = {}) {
+  try { store?.appendRuntimeLog?.({ level, source, instance_id: instanceId, message, context }) } catch {}
+}
+
 export function normalizeLogLevel(value = DEFAULT_LOG_LEVEL) {
   const level = String(value || DEFAULT_LOG_LEVEL).trim().toLowerCase()
   if (!LEVEL_RANK.has(level)) throw new Error(`log level must be one of ${LEVELS.join(', ')}`)

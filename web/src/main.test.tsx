@@ -122,6 +122,7 @@ test('delete confirmation requires a challenge and administrator password', asyn
   await screen.findByText('one')
   await user.click(screen.getByRole('button', { name: '删除' }))
   expect(await screen.findByText('删除 one？')).toBeInTheDocument()
+  expect(screen.getByText(/同时自动清理该实例的 API Key 绑定，无需先启动或手动解绑/)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '确认删除' })).toBeDisabled()
   await user.type(screen.getByLabelText('输入总控管理员密码确认删除'), 'administrator-password')
   await waitFor(() => expect(screen.getByRole('button', { name: '确认删除' })).toBeEnabled())
@@ -158,13 +159,56 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   expect(screen.getByRole('progressbar', { name: 'oauth-1 5 小时额度剩余' })).toHaveAttribute('aria-valuenow', '12')
   expect(screen.getByRole('progressbar', { name: 'oauth-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()
+  const cardReset = document.querySelector('.quota-summary-reset time')
+  expect(cardReset).toHaveAttribute('datetime', '2030-09-19T08:09:00Z')
+  expect(cardReset).toHaveTextContent(/09\/19\d{2}:\d{2}/)
   await userEvent.setup().click(screen.getByRole('button', { name: '额度详情' }))
   expect(await screen.findByText('周限额')).toBeInTheDocument()
-  expect(within(screen.getByRole('dialog', { name: 'OAuth 额度详情' })).getByText('31%')).toBeInTheDocument()
-  expect(screen.getByText('GPT-5.3-Codex-Spark 5 小时限额')).toBeInTheDocument()
+  const quotaDialog = screen.getByRole('dialog', { name: 'OAuth 额度详情' })
+  expect(within(quotaDialog).getByText('31%')).toBeInTheDocument()
+  expect(within(quotaDialog).getByText('GPT-5.3-Codex-Spark 5 小时限额')).toBeInTheDocument()
   expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.getByRole('progressbar', { name: 'GPT-5.3-Codex-Spark 5 小时限额 剩余配额' })).toHaveAttribute('aria-valuenow', '100')
-  expect(screen.getByText(/09\/19/)).toBeInTheDocument()
+  expect(within(quotaDialog).getByText(/09\/19/)).toBeInTheDocument()
+  const links = screen.getAllByRole('link')
+  const instancesIndex = links.findIndex(link => link.getAttribute('href') === '#instances')
+  expect(links[instancesIndex + 1]).toHaveTextContent('额度观察')
+  expect(screen.queryByRole('link', { name: '配额观察' })).not.toBeInTheDocument()
+})
+
+test('keeps reset times attached to their accounts and windows in cards, dialogs and quota observation', async () => {
+  const snapshots = [
+    { account_id: 'account-a', provider: 'codex', status: 'ok', values: [
+      { name: '5 小时限额', remaining: 10, total: 100, unit: '%', reset_at: '2030-09-19T08:00:00Z' },
+      { name: '周限额', remaining: 30, total: 100, unit: '%', reset_at: '2030-09-23T08:00:00Z' },
+    ] },
+    { account_id: 'account-b', provider: 'kimi', status: 'stale', values: [
+      { name: '周限额', remaining: 40, total: 100, unit: '%', reset_at: '2030-09-25T08:00:00Z' },
+      { name: '月限额', remaining: 50, total: 100, unit: '%', reset_at: 'invalid' },
+    ] },
+  ]
+  vi.spyOn(globalThis, 'fetch').mockImplementation(url => {
+    const route = String(url)
+    if (route.endsWith('/auth/status')) return response({ authenticated: true, username: 'admin' }) as any
+    if (route.endsWith('/instances')) return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any
+    if (route.endsWith('/quotas')) return response({ items: snapshots }) as any
+    return response(route.endsWith('/state') ? { state: 'idle' } : { items: [] }) as any
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('account-a')
+  const accountRow = (name: string) => screen.getByText(name).closest('.quota-summary-row')!
+  expect([...accountRow('account-a').querySelectorAll('time')].map(time => time.dateTime)).toEqual(['2030-09-19T08:00:00Z', '2030-09-23T08:00:00Z'])
+  expect(accountRow('account-b').querySelector('time')).toHaveAttribute('datetime', '2030-09-25T08:00:00Z')
+  expect(accountRow('account-b')).toHaveTextContent('未提供重置时间')
+  await user.click(screen.getByRole('button', { name: '额度详情' }))
+  const dialog = screen.getByRole('dialog', { name: 'OAuth 额度详情' })
+  expect([...dialog.querySelectorAll('time')].map(time => time.dateTime)).toEqual(['2030-09-19T08:00:00Z', '2030-09-23T08:00:00Z', '2030-09-25T08:00:00Z'])
+  expect(dialog).not.toHaveTextContent('Invalid Date')
+  await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+  await user.click(screen.getByRole('link', { name: '额度观察' }))
+  expect([...document.querySelectorAll('.quota-window time')].map(time => time.getAttribute('datetime'))).toEqual(['2030-09-19T08:00:00Z', '2030-09-23T08:00:00Z', '2030-09-25T08:00:00Z'])
+  expect(screen.getByText('未提供重置时间')).toBeInTheDocument()
 })
 
 test('keeps each summary limit independent when a window is missing or cached', async () => {
@@ -268,7 +312,7 @@ test('reports partial quota refresh failures while keeping successful instances 
   const user = userEvent.setup()
   render(<App />)
   await screen.findByText('one')
-  await user.click(screen.getByRole('link', { name: '配额观察' }))
+  await user.click(screen.getByRole('link', { name: '额度观察' }))
   await user.click(screen.getByRole('button', { name: '手动查看配额' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('配额刷新完成：1 个实例成功，1 个实例失败')
   expect(screen.getByText('primary')).toBeInTheDocument()
@@ -470,6 +514,43 @@ test('shows separate runtime and audit timelines with status filtering', async (
   expect(fetchMock.mock.calls[5][0]).toBe('/api/logs/audit?limit=500')
 })
 
+test('runtime logs combine server category and level filters, show details and retain filters on refresh', async () => {
+  const logs = [
+    { id: 1, source: 'upgrade', level: 'info', message: '升级完成', context: { version: 'v2' }, created_at: '2030-01-01T00:00:00Z' },
+    { id: 2, source: 'upgrade', level: 'error', message: '升级失败并回滚', context: { version: 'v3' }, created_at: '2030-01-01T00:01:00Z' },
+    { id: 3, source: 'key', level: 'info', message: 'Key 推送成功', context: {}, created_at: '2030-01-01T00:02:00Z' }
+  ]
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ items: [] }) as any)
+    .mockImplementationOnce(() => response({ state: 'idle' }) as any)
+    .mockImplementation(url => {
+      const params = new URL(String(url), 'http://localhost').searchParams
+      return response({ items: logs.filter(item => (!params.get('source') || item.source === params.get('source')) && (!params.get('level') || item.level === params.get('level'))) }) as any
+    })
+  const user = userEvent.setup(); render(<App />)
+  await screen.findByText('静候流量。')
+  await user.click(screen.getByRole('link', { name: '运行日志' }))
+  expect(await screen.findByText('Key 推送成功')).toBeInTheDocument()
+  await user.click(screen.getByRole('combobox', { name: '日志分类: 全部分类' }))
+  await user.click(screen.getByRole('option', { name: 'CPA 升级' }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/logs/runtime?limit=500&source=upgrade', expect.anything()))
+  expect(screen.queryByText('Key 推送成功')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('combobox', { name: '状态: 全部' }))
+  await user.click(screen.getByRole('option', { name: '错误' }))
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/logs/runtime?limit=500&source=upgrade&level=error', expect.anything()))
+  expect(await screen.findByText('升级失败并回滚')).toBeInTheDocument()
+  expect(screen.queryByText('升级完成')).not.toBeInTheDocument()
+  await user.click(screen.getByText('查看详情'))
+  expect(screen.getByText(/"version": "v3"/)).toBeVisible()
+  await waitFor(() => expect(screen.getByRole('button', { name: '刷新日志' })).toBeEnabled())
+  await user.click(screen.getByRole('button', { name: '刷新日志' }))
+  expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/logs/runtime?limit=500&source=upgrade&level=error')
+  await user.type(screen.getByRole('searchbox'), 'CPA 升级')
+  expect(screen.getByText('升级失败并回滚')).toBeInTheDocument()
+})
+
 test('opens administrator settings from the avatar and submits a password change', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
@@ -591,51 +672,120 @@ test('separates the instance module and keeps a second create action discoverabl
   expect(document.querySelector('.instance-list')).toHaveStyle({ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' })
 })
 
-test('loads quota settings on demand and saves the refresh and DingTalk rules', async () => {
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+const QUOTA_INSTANCE = { id: 'cpa_1', name: 'one', port: 8317, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }
+
+const QUOTA_OVERRIDE = { instance_id: 'cpa_1', instance_name: 'one', instance_port: 8317, configured: true, refresh_interval_minutes: 45, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, timezone: 'UTC+8', work_windows: [] }
+
+function quotaFetchMock(state: { notifications?: unknown[] } = {}) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
     const path = String(input)
     if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
-    if (path === '/api/instances') return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'stopped', version: 'v1', revision: 1, status: { state: 'stopped', ready: false } }] }) as any
+    if (path === '/api/instances') return response({ items: [QUOTA_INSTANCE] }) as any
     if (path === '/api/instances/cpa_1/quotas') return response({ items: [] }) as any
     if (path === '/api/versions') return response({ items: [] }) as any
     if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
-    if (path === '/api/quota/settings') return response({ refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }) as any
-    if (path === '/api/quota/notifications') return response({ items: [{ instance_id: 'cpa_1', instance_name: 'one', instance_port: 8317, configured: false, refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, timezone: 'UTC+8', work_windows: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }] }] }) as any
+    if (path === '/api/quota/settings') return response({ instance_ids: [], refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }) as any
+    if (path === '/api/quota/notifications') return response({ items: state.notifications ?? [] }) as any
     return response({}) as any
   })
+}
+
+test('loads quota settings on demand and saves the global rules to the selected instances', async () => {
+  const fetchMock = quotaFetchMock()
   const user = userEvent.setup()
   render(<App />)
   await screen.findByText('one')
   await user.click(screen.getByRole('link', { name: '定时额度通知' }))
   expect(await screen.findByRole('heading', { name: '定时额度通知' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: '全局默认配额周期与通知' })).toBeInTheDocument()
-  expect(screen.getByRole('heading', { name: 'CPA 实例通知配置' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '全局额度观察配置' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '下发到 CPA 实例' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '单独配置' })).toBeInTheDocument()
   expect(screen.getByText('通知工作时间（UTC+8）')).toBeInTheDocument()
+  const globalPanel = screen.getByRole('region', { name: '全局额度观察配置设置' })
+  expect(within(globalPanel).queryByRole('checkbox', { name: /one/ })).not.toBeInTheDocument()
+  await user.click(within(globalPanel).getByRole('combobox', { name: /选择下发到 CPA 实例/ }))
+  await user.click(within(globalPanel).getByRole('option', { name: /one/ }))
+  expect(within(globalPanel).getByText(/1 \/ 1 已选择/)).toBeInTheDocument()
+  expect(within(globalPanel).getByRole('button', { name: '取消下发 one' })).toBeInTheDocument()
   const interval = screen.getByLabelText(/自动获取周期/)
   await user.clear(interval)
   await user.type(interval, '120')
   const webhook = screen.getByLabelText('钉钉机器人 Webhook URL')
   await user.type(webhook, 'https://oapi.dingtalk.com/robot/send?access_token=test')
   await user.click(screen.getByRole('checkbox', { name: '启用钉钉机器人通知' }))
-  await user.click(within(screen.getByRole('region', { name: '全局默认配额周期与通知设置' })).getByRole('checkbox', { name: '启用 Webhook 加签' }))
+  await user.click(within(globalPanel).getByRole('checkbox', { name: '启用 Webhook 加签' }))
   await user.type(screen.getByLabelText('钉钉机器人加签密钥'), 'ding-secret')
   const threshold = screen.getByLabelText('告警阈值（%）')
   await user.clear(threshold)
   await user.type(threshold, '15')
-  fetchMock.mockImplementationOnce(() => response({ refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret_configured: true }) as any)
-  await user.click(screen.getByRole('button', { name: '保存配额设置' }))
+  fetchMock.mockImplementationOnce(() => response({ instance_ids: ['cpa_1'], refresh_interval_minutes: 120, webhook_enabled: true, webhook_url: '', webhook_url_configured: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret_configured: true }) as any)
+  await user.click(screen.getByRole('button', { name: '保存并下发全局配置' }))
   await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/settings' && init?.method === 'PATCH')).toBe(true))
   const patchCall = fetchMock.mock.calls.find(([input, init]) => input === '/api/quota/settings' && init?.method === 'PATCH')!
-  expect(patchCall[0]).toBe('/api/quota/settings')
-  expect((patchCall[1] as RequestInit).method).toBe('PATCH')
-  expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ refresh_interval_minutes: 120, webhook_enabled: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret: 'ding-secret' })
-  const instanceInterval = screen.getByLabelText('one 通知周期（分钟）')
+  expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toMatchObject({ instance_ids: ['cpa_1'], refresh_interval_minutes: 120, webhook_enabled: true, alert_threshold_percent: 15, webhook_signing_enabled: true, webhook_secret: 'ding-secret' })
+})
+
+test('sends a DingTalk test message from the global panel and from each instance override', async () => {
+  const fetchMock = quotaFetchMock({ notifications: [QUOTA_OVERRIDE] })
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('one')
+  await user.click(screen.getByRole('link', { name: '定时额度通知' }))
+  await screen.findByRole('heading', { name: '全局额度观察配置' })
+  fetchMock.mockImplementationOnce(() => response({ status: 'sent', instance_id: '' }) as any)
+  await user.click(within(screen.getByRole('region', { name: '全局额度观察配置设置' })).getByRole('button', { name: '发送测试消息' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/settings/test' && init?.method === 'POST')).toBe(true))
+  expect(await screen.findByText('测试消息已发送，请到钉钉群确认是否收到。')).toBeInTheDocument()
+  fetchMock.mockImplementationOnce(() => response({ status: 'sent', instance_id: 'cpa_1' }) as any)
+  await user.click(within(screen.getByRole('article')).getByRole('button', { name: '发送测试消息' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/notifications/cpa_1/test' && init?.method === 'POST')).toBe(true))
+})
+
+test('reports a failed test message without leaving the page', async () => {
+  const fetchMock = quotaFetchMock()
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('one')
+  await user.click(screen.getByRole('link', { name: '定时额度通知' }))
+  await screen.findByRole('heading', { name: '全局额度观察配置' })
+  fetchMock.mockImplementationOnce(() => response({ error: '全局钉钉机器人通知未启用' }, 400) as any)
+  await user.click(within(screen.getByRole('region', { name: '全局额度观察配置设置' })).getByRole('button', { name: '发送测试消息' }))
+  expect(await screen.findByText('全局钉钉机器人通知未启用')).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '全局额度观察配置' })).toBeInTheDocument()
+})
+
+test('creates and removes a per-instance quota override from the dialog', async () => {
+  const state: { notifications?: unknown[] } = {}
+  const fetchMock = quotaFetchMock(state)
+  const user = userEvent.setup()
+  render(<App />)
+  await screen.findByText('one')
+  await user.click(screen.getByRole('link', { name: '定时额度通知' }))
+  await screen.findByRole('heading', { name: '全局额度观察配置' })
+  expect(screen.getByText(/当前没有单独配置/)).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '+ 新增实例配置' }))
+  const dialog = await screen.findByRole('dialog')
+  expect(within(dialog).getByRole('heading', { name: '新增实例配置' })).toBeInTheDocument()
+  expect(within(dialog).getByRole('combobox', { name: /选择 CPA 实例/ })).toBeInTheDocument()
+  const instanceInterval = within(dialog).getByLabelText('one 自动采集周期（分钟）')
   await user.clear(instanceInterval); await user.type(instanceInterval, '45')
-  fetchMock.mockImplementationOnce(() => response({ instance_id: 'cpa_1', instance_name: 'one', instance_port: 8317, configured: true, refresh_interval_minutes: 45, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false, timezone: 'UTC+8', work_windows: [{ start: '09:00', end: '12:00' }, { start: '13:30', end: '18:00' }] }) as any)
-  await user.click(screen.getByRole('button', { name: '保存实例通知' }))
+  state.notifications = [QUOTA_OVERRIDE]
+  fetchMock.mockImplementationOnce(() => response(QUOTA_OVERRIDE) as any)
+  await user.click(within(dialog).getByRole('button', { name: '保存实例配置' }))
   await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/notifications/cpa_1' && init?.method === 'PATCH')).toBe(true))
   const instancePatch = fetchMock.mock.calls.find(([input, init]) => input === '/api/quota/notifications/cpa_1' && init?.method === 'PATCH')!
   expect(JSON.parse(String((instancePatch[1] as RequestInit).body))).toMatchObject({ refresh_interval_minutes: 45, alert_threshold_percent: 20 })
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  expect(screen.getByText('45 分钟')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '编辑配置' }))
+  const editDialog = await screen.findByRole('dialog')
+  expect(within(editDialog).getByRole('heading', { name: '编辑 one' })).toBeInTheDocument()
+  expect(within(editDialog).queryByRole('combobox')).not.toBeInTheDocument()
+  state.notifications = []
+  fetchMock.mockImplementationOnce(() => response(QUOTA_OVERRIDE) as any)
+  await user.click(within(editDialog).getByRole('button', { name: '移除单独配置' }))
+  await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => input === '/api/quota/notifications/cpa_1' && init?.method === 'DELETE')).toBe(true))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 })
 
 test('instance lock disables disruptive actions and unlock restores them', async () => {

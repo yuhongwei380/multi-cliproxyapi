@@ -9,8 +9,10 @@ import { GitHubSource, Installer, UpgradeService, UpgradeState, VersionService }
 import { Store } from './store.js'
 import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
-import { InstanceService } from './services.js'
+import { AuthService, DeleteService, InstanceService } from './services.js'
 import { instanceBinaryPath } from './instance-binary.js'
+import { HTTPClient, verifyServiceWithTestKey } from './cpa.js'
+import { KeyService } from './keys.js'
 
 const trustedAsset = 'https://github.com/router-for-me/CLIProxyAPI/releases/download/v1.0.0/CLIProxyAPI_1.0.0_linux_amd64.tar.gz'
 
@@ -27,6 +29,7 @@ test('upgrade resource preparation failure leaves running processes and versions
     let stops = 0
     f.runtime.stop = async () => { stops++; throw new Error('must not stop') }
     await assert.rejects(f.upgrade.upgrade('v2'), /management resource unavailable/)
+    assert.ok(f.store.listRuntimeLogs(500, { source: 'upgrade' }).some(item => item.context.event === 'upgrade.failed'))
     assert.deepEqual(prepared, ['v1', 'v2'])
     assert.equal(stops, 0)
     assert.deepEqual(await f.runtime.status(f.first), before)
@@ -194,6 +197,67 @@ async function upgradeFixture() {
     close() { store.close(); fs.rmSync(root, { recursive: true, force: true }) }
   }
 }
+
+for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'rolls back persistent rejection' : 'waits for authentication reload'} and cleans its service key`, async () => {
+  const f = await upgradeFixture()
+  let keys = ['existing']; let probes = 0
+  const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'management', maxRetries: 0, fetchImpl: async (url, options) => {
+    if (url.endsWith('/v1/models')) return Response.json({ data: [{ id: 'model' }] }, { status: ++probes < 3 || permanent ? 401 : 200 })
+    if (options.method === 'PUT') { keys = JSON.parse(options.body); return Response.json({ status: 'ok' }) }
+    return Response.json(keys)
+  } })
+  f.upgrade.verifyInstance = () => verifyServiceWithTestKey(client, { maxAttempts: 3, retryDelayMs: 0 })
+  try {
+    await f.instances.start(f.first.id)
+    if (permanent) await assert.rejects(f.upgrade.upgrade('v2'), /after waiting/)
+    else await f.upgrade.upgrade('v2')
+    const logs = f.store.listRuntimeLogs(500, { source: 'upgrade' })
+    assert.ok(logs.some(item => item.context.event === 'upgrade.started'))
+    assert.ok(logs.some(item => item.context.event === (permanent ? 'upgrade.failed' : 'upgrade.completed')))
+    assert.equal(logs.some(item => item.context.event === 'upgrade.completed'), !permanent)
+    assert.equal(logs.some(item => item.context.event === 'upgrade.rollback.completed'), permanent)
+    assert.ok(logs.some(item => item.instance_id === f.first.id && item.context.event === 'upgrade.instance.verifying'))
+    assert.equal(probes, 3)
+    assert.deepEqual(keys, ['existing'])
+    for (const item of [f.first, f.second]) assert.equal(f.store.getInstance(item.id).version, permanent ? 'v1' : 'v2')
+    const running = await f.runtime.status(f.store.getInstance(f.first.id))
+    assert.equal(running.state, 'running')
+    assert.equal(running.version, permanent ? 'v1' : 'v2')
+    assert.equal((await f.runtime.status(f.second)).state, 'stopped')
+  } finally { f.close() }
+})
+
+test('a rolled-back upgrade backup can be deleted without starting it or revoking its inherited keys', async () => {
+  const f = await upgradeFixture()
+  try {
+    const keys = new KeyService({ store: f.store, instances: f.instances, secrets: f.instances.secrets })
+    const key = await keys.create({ key: 'sk-backup-cleanup-test' })
+    await keys.mutate(key.id, 'bind', { instances: [f.first.id] })
+    await keys.mutate(key.id, 'lock')
+    await f.instances.start(f.first.id)
+    f.upgrade.verifyInstance = async () => { throw new Error('service verification failed') }
+    await assert.rejects(f.upgrade.upgrade('v2'), /service verification failed/)
+    const backup = f.store.listInstances().find(item => item.is_backup && f.store.keyBindings(key.id).some(binding => binding.instance_id === item.id))
+    assert.ok(backup)
+    assert.equal(backup.locked, true)
+    assert.equal((await f.runtime.status(backup)).state, 'stopped')
+    const auth = new AuthService(f.store); auth.initializeAdmin('cleanup-password')
+    const deletion = new DeleteService({ store: f.store, runtime: f.runtime, instances: f.instances, units: new NoopUnitManager(), auth })
+    assert.throws(() => deletion.preview(backup.id), /锁定|locked/)
+    await f.instances.setLocked(backup.id, false)
+    f.runtime.start = async () => assert.fail('Cleanup must not start a CPA instance')
+    const challenge = deletion.preview(backup.id)
+    await assert.rejects(deletion.confirm(backup.id, challenge.id, 'wrong-password'))
+    assert.equal(f.store.keyBindings(key.id).length, 2)
+    await deletion.confirm(backup.id, challenge.id, 'cleanup-password')
+    assert.throws(() => f.store.getInstance(backup.id), /not found/)
+    assert.equal(fs.existsSync(backup.directory), false)
+    assert.deepEqual(f.store.keyBindings(key.id).map(item => item.instance_id), [f.first.id])
+    assert.equal(f.store.getManagedKey(key.id).locked, true)
+    assert.equal((await f.runtime.status(f.first)).state, 'running')
+    assert.equal(f.store.getInstance(f.first.id).version, 'v1')
+  } finally { f.close() }
+})
 
 test('GitHub release source only downloads bounded assets from the configured repository', async () => {
   let calls = 0

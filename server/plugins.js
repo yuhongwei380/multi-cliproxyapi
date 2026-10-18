@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import { DirectGitHubSource, extractArchive } from './release.js'
 import { editChildConfig } from './child-config.js'
 import { ConflictError } from './store.js'
+import { recordRuntimeEvent } from './logging.js'
 
 // Reviewed descriptors, not remote scripts. Additional plugins use the same engine.
 export const PLUGIN_CATALOG = [{ id: 'cpa-key-billing', name: 'Key Billing', owner: 'haowang02', repo: 'cpa-plugin-key-billing', entry: 'cpa-key-billing.so', asset: version => `cpa-key-billing_${version}_linux_amd64.tar.gz` }]
@@ -56,7 +57,19 @@ export class PluginService {
   assertIdle() { if (this.store.listPluginJobs().some(active)) throw new ConflictError('plugin deployment requires completion or recovery first') }
   jobs() { return this.store.listPluginJobs() }
   deleteRecord(id) { this.store.deletePluginJob(id) }
-  save(job) { job.updated_at = new Date().toISOString(); this.store.savePluginJob(job) }
+  save(job) {
+    const previous = this.store.listPluginJobs().find(item => item.id === job.id)
+    job.updated_at = new Date().toISOString(); this.store.savePluginJob(job)
+    const context = { job_id: job.id, plugin: job.plugin, version: job.version }
+    const states = { queued: '已排队', running: '开始', completed: '完成', failed: '失败', blocked: '失败，等待恢复' }
+    if (previous?.state !== job.state) recordRuntimeEvent(this.store, 'plugin', `插件安装 / 升级${states[job.state] || job.state}`, { ...context, event: 'plugin.job', status: job.state, level: ['failed', 'blocked'].includes(job.state) ? 'error' : 'info' })
+    const resultStates = { 'skipped-locked': '已跳过锁定实例', 'backing-up': '正在备份', 'backup-ready': '备份完成', prepared: '部署准备完成', installing: '正在安装', verifying: '正在验证', verified: '安装及验证成功', 'installed-disabled': '安装成功（未启用）', 'installed-pending-verification': '安装完成（待启动验证）', restoring: '正在回滚', 'rolled-back': '安装失败，已回滚', blocked: '回滚失败，等待恢复', failed: '安装失败', cancelled: '已取消' }
+    for (const result of job.results || []) {
+      const before = previous?.results?.find(item => item.id === result.id)
+      if (before?.state !== result.state && resultStates[result.state]) recordRuntimeEvent(this.store, 'plugin', `插件${resultStates[result.state]}`, { ...context, event: 'plugin.instance', instanceId: result.id, status: result.state, level: ['failed', 'blocked', 'rolled-back'].includes(result.state) ? 'error' : 'info' })
+      if (result.backup_cleanup_error && !before?.backup_cleanup_error) recordRuntimeEvent(this.store, 'plugin', '插件安装完成，但自动备份清理失败', { ...context, event: 'plugin.backup.cleanup.failed', instanceId: result.id, level: 'warn' })
+    }
+  }
   async inventory() {
     const items = []
     for (const instance of this.store.listInstances()) {

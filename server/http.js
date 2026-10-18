@@ -7,6 +7,7 @@ import { instanceView } from './domain.js'
 import { normalizeBearer } from './security.js'
 import { statusForError } from './errors.js'
 import { NotFoundError } from './store.js'
+import { RUNTIME_LOG_SOURCES } from './logging.js'
 
 const cookieName = 'multi_cpa_session'
 const securityHeaders = {
@@ -51,8 +52,11 @@ function auditTarget(request, pathname) {
   if (pathname === '/api/instances') return { action: 'instance.create', resource_type: 'instance', resource_id: '' }
   if (pathname === '/api/instance-limits') return { action: 'instance-limits.update', resource_type: 'instance-limits', resource_id: 'singleton' }
   if (pathname === '/api/quota/settings') return { action: 'quota.settings.update', resource_type: 'quota-settings', resource_id: 'singleton' }
+  if (pathname === '/api/quota/settings/test') return { action: 'quota.settings.test', resource_type: 'quota-settings', resource_id: 'singleton' }
+  const quotaNotificationTest = pathname.match(/^\/api\/quota\/notifications\/([^/]+)\/test$/)
+  if (quotaNotificationTest) return { action: 'quota.notification.test', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotificationTest[1]) }
   const quotaNotification = pathname.match(/^\/api\/quota\/notifications\/([^/]+)$/)
-  if (quotaNotification) return { action: 'quota.notification.update', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotification[1]) }
+  if (quotaNotification) return { action: request.method === 'DELETE' ? 'quota.notification.delete' : 'quota.notification.update', resource_type: 'quota-notification', resource_id: decodeURIComponent(quotaNotification[1]) }
   if (pathname === '/api/versions/install') return { action: 'version.install', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/upgrade') return { action: 'version.upgrade', resource_type: 'version', resource_id: '' }
   if (pathname === '/api/versions/uninstall') return { action: 'version.uninstall', resource_type: 'version', resource_id: '' }
@@ -73,7 +77,7 @@ export class Controller {
   token(request) { const cookies = parseCookies(request.headers.cookie || ''); return cookies[cookieName] || normalizeBearer(request.headers.authorization || '') }
   authenticated(request) { return this.auth.authenticate(this.token(request)) }
   audit(entry) { try { this.store.appendAuditLog?.(entry) } catch (error) { this.logger?.error?.(error) } }
-  runtimeError(request, error) { try { this.store.appendRuntimeLog?.({ level: 'error', source: 'http', message: error?.message || 'request failed', context: { method: request.method, path: new URL(request.url, 'http://localhost').pathname, status: statusForError(error) } }) } catch {} }
+  runtimeError(request, error) { try { this.store.appendRuntimeLog?.({ level: 'error', source: 'http', message: 'HTTP 请求失败，请查看对应操作日志及任务状态', context: { method: request.method, path: new URL(request.url, 'http://localhost').pathname, status: statusForError(error) } }) } catch {} }
   async handle(request, response) {
     try {
       const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`); const pathname = url.pathname
@@ -91,7 +95,7 @@ export class Controller {
         if (target) this.audit({ actor: username, ...target, outcome: 'success', client_address: safeClientAddress(request) })
         return result
       } catch (error) {
-        if (target) this.audit({ actor: username, ...target, outcome: 'failed', client_address: safeClientAddress(request), detail: error?.message || 'request failed' })
+        if (target) this.audit({ actor: username, ...target, outcome: 'failed', client_address: safeClientAddress(request), detail: statusForError(error) >= 500 ? '操作失败，请查看运行日志及任务状态' : (error?.message || 'request failed') })
         throw error
       }
     } catch (error) { this.logger?.error?.(error); if (statusForError(error) >= 500) this.runtimeError(request, error); return writeError(response, error) }
@@ -138,14 +142,22 @@ export class Controller {
     if (route === '/versions' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listVersions().map(item => { const { path: _path, ...publicVersion } = item; return publicVersion }) })
     if (route === '/upgrade/state' && request.method === 'GET') { try { return writeJson(response, 200, this.store.getUpgradeState()) } catch (error) { if (error.code === 'ERR_NOT_FOUND') return writeJson(response, 200, { state: 'idle' }); throw error } }
     if (route === '/operations' && request.method === 'GET') { const limit = Number(url.searchParams.get('limit') || 50); if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw Object.assign(new Error('invalid limit'), { status: 400 }); return writeJson(response, 200, { items: this.store.listOperations(limit) }) }
-    if (route === '/logs/runtime' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url)) })
+    if (route === '/logs/runtime' && request.method === 'GET') {
+      const source = url.searchParams.get('source') || ''; const level = url.searchParams.get('level') || ''
+      if ((source && !RUNTIME_LOG_SOURCES.includes(source)) || (level && !['debug', 'info', 'warn', 'error'].includes(level))) throw Object.assign(new Error('invalid runtime log filter'), { status: 400 })
+      return writeJson(response, 200, { items: this.store.listRuntimeLogs(logLimit(url), { source, level }) })
+    }
     if (route === '/logs/audit' && request.method === 'GET') return writeJson(response, 200, { items: this.store.listAuditLogs(logLimit(url)) })
     if (route === '/branding' && request.method === 'PATCH') { if (!this.branding) throw new Error('branding service unavailable'); const body = await readJson(request, 512 * 1024); return writeJson(response, 200, this.branding.update(body)) }
     if (route === '/quota/settings' && request.method === 'GET') return writeJson(response, 200, this.quota.getSettings())
     if (route === '/quota/settings' && request.method === 'PATCH') { const body = await readJson(request); return writeJson(response, 200, this.quota.updateSettings(body)) }
     if (route === '/quota/notifications' && request.method === 'GET') return writeJson(response, 200, { items: this.quota.listNotificationSettings() })
+    if (route === '/quota/settings/test' && request.method === 'POST') return writeJson(response, 200, await this.quota.sendTestNotification())
+    const quotaNotificationTest = route.match(/^\/quota\/notifications\/([^/]+)\/test$/)
+    if (quotaNotificationTest && request.method === 'POST') return writeJson(response, 200, await this.quota.sendTestNotification(decodeURIComponent(quotaNotificationTest[1])))
     const quotaNotification = route.match(/^\/quota\/notifications\/([^/]+)$/)
     if (quotaNotification && request.method === 'PATCH') return writeJson(response, 200, this.quota.updateNotificationSettings(decodeURIComponent(quotaNotification[1]), await readJson(request)))
+    if (quotaNotification && request.method === 'DELETE') return writeJson(response, 200, this.quota.deleteNotificationSettings(decodeURIComponent(quotaNotification[1])))
     if (route === '/versions/install' && request.method === 'POST') { if (!this.installer) throw new Error('version installer unavailable'); const body = await readJson(request); const installed = await this.installer.install(body.version || ''); this.store.saveVersion(installed); const instances = this.store.listInstances(); if (!instances.length && this.activator) await this.activator.activateVersion(installed.tag); this.instances.setDefaultVersionAfterInstall(installed.tag); const { path: _path, ...publicVersion } = installed; return writeJson(response, 201, publicVersion) }
     if (route === '/versions/upgrade' && request.method === 'POST') { const body = await readJson(request); const result = await this.upgrade.upgrade(body.version); return writeJson(response, 200, { status: 'upgraded', version: body.version, ...(result || {}) }) }
     if (route === '/versions/uninstall' && request.method === 'POST') { if (!this.versionService) throw new Error('version uninstaller unavailable'); const body = await readJson(request); await this.versionService.uninstall(body.version); return writeJson(response, 200, { status: 'uninstalled', version: body.version }) }

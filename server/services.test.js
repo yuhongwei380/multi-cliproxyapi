@@ -9,6 +9,7 @@ import { openSecretStore } from './security.js'
 import { FakeRuntime, NoopUnitManager } from './runtime.js'
 import { AuthService, InstanceService, DeleteService, QuotaService, DingTalkNotifier, isQuotaNotificationWorkTime } from './services.js'
 import { StaticClient } from './cpa.js'
+import { parseProviderQuota } from './provider-quota.js'
 import { instanceBinaryPath } from './instance-binary.js'
 
 test('persistent instance lock rejects mutations until unlocked', async () => {
@@ -349,6 +350,30 @@ test('global quota tests fetch only selected instances and include each account 
   } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 
+for (const scope of ['global', 'instance']) for (const plan of ['monthly', 'rolling-monthly', 'rolling', 'exhausted-monthly']) test(`${scope} quota tests include actual Kimi ${plan} windows when weekly quota is absent`, async () => {
+  const f = fixture()
+  try {
+    const instance = await f.instances.create({ name: 'KIMI', port: await port() })
+    await f.instances.start(instance.id)
+    const usages = {}
+    if (plan.includes('rolling')) usages.limit_5h = { used_ratio: 0, reset_time: '2026-10-19T01:56:00Z' }
+    if (plan.includes('monthly')) usages.limit_month_total = { used_ratio: plan === 'exhausted-monthly' ? 1 : 0.3062, reset_time: '2026-11-10T00:00:00Z' }
+    const values = parseProviderQuota('kimi', { usages })
+    const accountId = 'kimi-1791601029340.json'
+    const client = new StaticClient({ accounts: [{ id: accountId, provider: 'kimi' }], quotas: { [accountId]: { values } } })
+    const messages = []
+    const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clients: async () => client, notifier: { notify: async (_, message) => { messages.push(message); return true } } })
+    const settings = { webhook_enabled: true, webhook_url: 'https://oapi.dingtalk.com/robot/send?access_token=test' }
+    if (scope === 'global') quota.updateSettings({ ...settings, instance_ids: [instance.id] })
+    else quota.updateNotificationSettings(instance.id, settings)
+    await quota.sendTestNotification(scope === 'global' ? '' : instance.id)
+    const lines = ['【测试消息】CLIProxyAPI 配额告警']
+    if (plan.includes('rolling')) lines.push(`KIMI / kimi ${accountId} / 5 小时限额：剩余 100.0%，额度刷新时间 2026-10-19 09:56（UTC+8）`)
+    if (plan.includes('monthly')) lines.push(`KIMI / kimi ${accountId} / 月限额：剩余 ${plan === 'exhausted-monthly' ? '0.0' : '69.4'}%，额度刷新时间 2026-11-10 08:00（UTC+8）`)
+    assert.deepEqual(messages, [lines.join('\n')])
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('quota test messages report unavailable live data without presenting cached quotas as current', async () => {
   const f = fixture()
   try {
@@ -361,17 +386,20 @@ test('quota test messages report unavailable live data without presenting cached
     await quota.refreshInstance(instance.id)
     client.fetchQuota = async () => { throw new Error('unavailable') }
     await quota.sendTestNotification(instance.id)
-    assert.match(messages[0], /周限额：额度读取失败，额度刷新时间未提供/)
+    assert.match(messages[0], /默认窗口：额度读取失败，额度刷新时间未提供/)
     assert(!messages[0].includes('90.0%'))
     client.fetchQuota = async () => ({ values: [{ name: '月限额', remaining: 90, total: 100 }] })
     await quota.sendTestNotification(instance.id)
-    assert.match(messages[1], /周限额：未提供周额度，额度刷新时间未提供/)
+    assert.match(messages[1], /月限额：剩余 90\.0%，额度刷新时间未提供/)
+    client.fetchQuota = async () => ({ values: [] })
+    await quota.sendTestNotification(instance.id)
+    assert.match(messages[2], /默认窗口：未提供额度，额度刷新时间未提供/)
     client.accounts = []
     await quota.sendTestNotification(instance.id)
-    assert.match(messages[2], /未配置 OAuth 账户/)
+    assert.match(messages[3], /未配置 OAuth 账户/)
     await f.instances.stop(instance.id)
     await assert.rejects(() => quota.sendTestNotification(instance.id), { status: 409 })
-    assert.equal(messages.length, 3)
+    assert.equal(messages.length, 4)
   } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 

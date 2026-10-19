@@ -550,7 +550,7 @@ function formatQuotaResetNotice(resetAt) {
 }
 
 function formatQuotaNotification(items, test = false) {
-  const lines = items.map(({ instance, snapshot, value, percent, message }) => `${instance.name} / ${snapshot.provider || 'OAuth'} ${snapshot.account_id} / ${value?.name || (test ? '周限额' : '默认窗口')}：${message || (percent === null ? '额度未提供' : `剩余 ${percent.toFixed(1)}%`)}${formatQuotaResetNotice(value?.reset_at)}`)
+  const lines = items.map(({ instance, snapshot, value, percent, message }) => `${instance.name} / ${snapshot.provider || 'OAuth'} ${snapshot.account_id} / ${value?.name || '默认窗口'}：${message || (percent === null ? '额度未提供' : `剩余 ${percent.toFixed(1)}%`)}${formatQuotaResetNotice(value?.reset_at)}`)
   return `${test ? '【测试消息】' : ''}CLIProxyAPI 配额告警\n${lines.join('\n')}`
 }
 
@@ -647,7 +647,7 @@ export class QuotaService {
     return this.publicInstanceNotificationSettings(instance)
   }
   async sendTestNotification(instanceId = '') {
-    recordRuntimeEvent(this.store, 'quota', '额度测试通知开始：读取当前周额度和重置时间', { event: 'quota.test.started', instanceId, mode: 'test' })
+    recordRuntimeEvent(this.store, 'quota', '额度测试通知开始：读取当前额度和重置时间', { event: 'quota.test.started', instanceId, mode: 'test' })
     try {
       const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.settingsWithSecret()
       if (!settings.webhook_enabled) throw Object.assign(new Error(instanceId ? '该实例的钉钉机器人通知未启用' : '全局钉钉机器人通知未启用'), { status: 400 })
@@ -665,9 +665,12 @@ export class QuotaService {
             items.push({ instance, snapshot, percent: null, message: snapshot.status === 'unsupported' ? '不支持读取额度' : '额度读取失败' })
             continue
           }
-          const weekly = (snapshot.values || []).filter(value => /周|week|seven_day|7d/i.test(value.name || ''))
-          if (!weekly.length) items.push({ instance, snapshot, percent: null, message: '未提供周额度' })
-          for (const value of weekly) items.push({ instance, snapshot, value, percent: quotaPercent(value) })
+          const values = snapshot.values || []
+          const weekly = values.filter(value => /周|week|seven_day|7d/i.test(value.name || ''))
+          // Some plans only expose rolling and monthly quotas. Keep their real windows and reset times.
+          const windows = weekly.length ? weekly : values
+          if (!windows.length) items.push({ instance, snapshot, percent: null, message: '未提供额度' })
+          for (const value of windows) items.push({ instance, snapshot, value, percent: quotaPercent(value) })
         }
       }
       const sent = await this.notifier.notify(settings, formatQuotaNotification(items, true))

@@ -77,6 +77,26 @@ export class KeyService {
       return { results }
     })
   }
+  async revokeGroup(id, input, actor = 'admin') {
+    return this.run(async () => {
+      const keys = this.groupKeys(id)
+      if (!keys.length) throw invalid('分组中没有 Key')
+      const targets = this.instanceIds(input.instances)
+      targets.forEach(target => this.store.getInstance(target))
+      const boundTargets = new Set(keys.flatMap(key => this.store.keyBindings(key.id).map(binding => binding.instance_id)))
+      if (!targets.some(target => boundTargets.has(target))) throw invalid('所选实例没有绑定此组的 Key')
+      // Validate the entire group before revoking any binding.
+      for (const key of keys) { this.editable(key); this.active(key) }
+      const results = []
+      for (const key of keys) {
+        const revoked = await this.distributeUnlocked(key.id, { revoke: true, instanceIds: targets, actor })
+        results.push(...revoked.results.map(result => ({ key_id: key.id, ...result })))
+      }
+      const failed = results.filter(result => result.status === 'failed').length
+      recordRuntimeEvent(this.store, 'key', `API Key 分组撤销结束：${results.length - failed} 个成功，${failed} 个失败`, { level: failed ? 'error' : 'info', event: 'key.group.revoked', group_id: id, succeeded: results.length - failed, failed })
+      return { results }
+    })
+  }
   instanceIds(values) {
     if (!Array.isArray(values) || !values.length || values.length > 1000 || values.some(value => typeof value !== 'string')) throw invalid('请选择实例')
     return [...new Set(values)]

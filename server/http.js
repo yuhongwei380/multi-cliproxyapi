@@ -118,10 +118,11 @@ export class Controller {
     if (route === '/keys' && request.method === 'POST') return writeJson(response, 201, await this.keys.create(await readJson(request)))
     if (route === '/key-groups' && request.method === 'GET') return writeJson(response, 200, { items: this.keys.listGroups() })
     if (route === '/key-groups' && request.method === 'POST') return writeJson(response, 201, await this.keys.saveGroup(null, await readJson(request)))
-    const groupRoute = route.match(/^\/key-groups\/([^/]+)\/(update|deploy|delete)$/)
+    const groupRoute = route.match(/^\/key-groups\/([^/]+)\/(update|deploy|revoke|delete)$/)
     if (groupRoute && request.method === 'POST') {
       const [, id, action] = groupRoute; const body = await readJson(request)
       if (action === 'deploy') return writeJson(response, 200, await this.keys.deployGroup(id, body, username))
+      if (action === 'revoke') return writeJson(response, 200, await this.keys.revokeGroup(id, body, username))
       if (action === 'delete') return writeJson(response, 200, await this.keys.deleteGroup(id))
       return writeJson(response, 200, await this.keys.saveGroup(id, body))
     }

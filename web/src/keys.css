@@ -29,7 +29,10 @@
 .key-group-content > p { padding: 0 16px; }
 .key-group-content .key-list { margin-top: 0; border: 0; border-radius: 0; }
 .key-group-heading .button { min-height: 30px; padding: 5px 9px; font-size: 12px; }
-.key-dialog select { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--floating-surface); color: var(--ink); font: inherit; }
+.key-group-selector { display: grid; gap: 6px; margin: 14px 0; color: var(--ink); font-size: 12px; font-weight: 650; }
+.key-group-selector .dropdown-picker { height: 42px; }
+.key-group-selector .dropdown-trigger { font-size: 13px; }
+.key-group-selector .dropdown-value { color: var(--ink); }
 .key-choices .checkbox-label small { display: block; margin-top: 3px; overflow-wrap: anywhere; }
 .key-list { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--floating-surface); }
 .key-list:empty { display: none; }

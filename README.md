@@ -101,6 +101,10 @@ npm run package:linux
 
 侧栏“API Key 管理”支持填写备注、手动输入或安全随机生成 `sk-` Key、编辑备注、复制和临时显示完整 Key。备注持久保存在总控 SQLite 数据库，Key 使用现有 AES-256-GCM 密钥库加密；列表默认脱敏，审计日志不记录完整密钥。
 
+页面默认按组展示，展开组后查看 Key。支持新建组、编辑组名和勾选组内 Key，也可通过单个 Key 的“分组”按钮调整归属，创建 Key 时可直接选择组。每个 Key 归属一个组，未设置分组的 Key（包括升级前的历史数据）自动归入“未分组”。删除组只将组内 Key 移回“未分组”；分组调整和删除均保留 Key 及其已有实例绑定。
+
+组的“批量下发”支持选择多个运行中且未锁定的 CPA 实例，将组内全部 Key 添加绑定并逐一执行现有下发校验，保留实例已有 Key；只向本次选择的实例下发。结果按 Key 与实例统计，失败绑定及错误状态保留，重复下发会跳过已存在的 Key。已锁定 Key 禁止调整分组或新增实例绑定，但允许向已绑定实例下发；含待删除 Key 的组须先处理删除，才能批量下发。搜索备注及绑定实例筛选继续适用于组内 Key。
+
 随机生成规则与 CPA 一致：`sk-` 加 48 位大小写字母和数字，总长 51 个字符，使用密码学安全随机字节和拒绝采样避免取模偏差。总控前端按钮与服务端创建入口共用 `shared/api-key.js`；手动输入继续兼容 8–512 个无空白字符。
 
 一个 Key 可绑定多个 CPA 实例，绑定不立即写入实例。点击“下发 Key”后逐实例读取客户端 Key 列表：相同 Key 已存在时不重复写入，否则追加，保留其他 Key，并重新读取确认。优先使用 CPA v8 的 `/v8/management/config/access/api-keys`，该路径返回 404 时兼容旧 `/v0/management/api-keys`。实例须运行且未锁定；操作与实例生命周期、升级和插件部署共用操作锁。CPA 原生面板的并发改动无法通过总控操作锁完全排除，请避免同时修改同一实例的 Key 列表。
@@ -112,6 +116,8 @@ CPA 的空客户端 Key 列表会注销配置 Key 鉴权提供器，没有其他
 Key 锁定状态持久保存。锁定后禁止编辑备注、绑定、解绑和删除，复制、查看及下发仍可使用；解锁需要总控管理员密码。实例备份会继承来源的总控 Key 绑定，防止复制配置后遗漏撤销；备份默认停止，自动备份还会锁定，保留备份且需要撤销 Key 时，仍需启动并解锁备份后执行撤销；不再需要的备份可直接按实例删除流程清理，其绑定会自动移除。未绑定到总控的独立 Key 或历史副本不在撤销范围内。
 
 管理接口均需要管理员会话：`GET /api/keys`、`POST /api/keys`，以及 `POST /api/keys/:id/{note,bind,deploy,revoke,delete,lock,unlock,reveal,dismiss-failure}`。创建体为 `{ "note": "测试", "key": "sk-example123" }`，省略 `key` 由服务器生成；绑定、单实例撤销和关闭下发错误使用 `{ "instance_id": "实例ID" }`（绑定使用 `instances` 数组）；解锁体为 `{ "admin_password": "总控管理员密码" }`。下发、撤销和删除返回逐实例 `results`，删除必须检查 `deleted`，HTTP 200 不代表所有实例均成功。
+
+`GET /api/keys` 同时返回 `groups`，Key 记录包含 `group_id`（未分组为 `null`）。分组接口同样需要管理员会话：`GET /api/key-groups`、`POST /api/key-groups` 和 `POST /api/key-groups/:id/{update,deploy,delete}`。创建或更新组使用 `{ "name": "生产环境", "key_ids": ["Key ID"] }`；更新时省略 `key_ids` 保留原成员，传空数组清空组。下发体为 `{ "instances": ["实例ID"] }`，返回的 `results` 包含 `key_id`、`instance_id` 和 `status`，应逐项检查失败；“未分组”的下发 ID 为 `ungrouped`。创建 Key 可附带 `group_id`，单个 Key 调组使用 `POST /api/keys/:id/group`，请求体为 `{ "group_id": "分组ID" }`，传 `null` 移回“未分组”。
 
 真实 CPA 8.0.23 服务器验收完成创建、下发、查重、单实例撤销、部分删除失败重试、鉴权保护、备份副本撤销及总控重启持久化，15 项检查通过。该版本使用旧管理接口回退，空 Key 列表的 `null` 响应已兼容。详见 [验收报告](test-doc/test-evidence/2026-10-12/key-management-real.md)；复现脚本为 `scripts/verify-key-management.mjs`，只使用显式提供的 CPA 二进制及临时数据。
 

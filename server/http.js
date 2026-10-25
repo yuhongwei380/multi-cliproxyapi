@@ -47,6 +47,8 @@ function auditTarget(request, pathname) {
   if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(request.method)) return null
   const keyTarget = pathname.match(/^\/api\/keys(?:\/([^/]+))?(?:\/([^/]+))?$/)
   if (keyTarget) return { action: `key.${keyTarget[2] || 'create'}`, resource_type: 'key', resource_id: keyTarget[1] || '' }
+  const keyGroupTarget = pathname.match(/^\/api\/key-groups(?:\/([^/]+))?(?:\/([^/]+))?$/)
+  if (keyGroupTarget) return { action: `key.group.${keyGroupTarget[2] || 'create'}`, resource_type: 'key-group', resource_id: keyGroupTarget[1] || '' }
   if (pathname === '/api/auth/password') return { action: 'auth.password.change', resource_type: 'administrator', resource_id: 'admin' }
   if (pathname === '/api/branding') return { action: 'branding.update', resource_type: 'branding', resource_id: 'singleton' }
   if (pathname === '/api/instances') return { action: 'instance.create', resource_type: 'instance', resource_id: '' }
@@ -112,9 +114,18 @@ export class Controller {
   authStatus(request, response) { const branding = this.branding?.get?.(); try { return writeJson(response, 200, { authenticated: true, username: this.authenticated(request), ...(branding ? { branding } : {}) }) } catch { return writeJson(response, 200, { authenticated: false, ...(branding ? { branding } : {}) }) } }
   async routeApi(request, response, url, username) {
     const route = url.pathname.replace(/^\/api/, '')
-    if (route === '/keys' && request.method === 'GET') return writeJson(response, 200, { items: this.keys.list() })
+    if (route === '/keys' && request.method === 'GET') return writeJson(response, 200, { items: this.keys.list(), groups: this.keys.listGroups() })
     if (route === '/keys' && request.method === 'POST') return writeJson(response, 201, await this.keys.create(await readJson(request)))
-    const keyRoute = route.match(/^\/keys\/([^/]+)\/(note|bind|lock|unlock|reveal|deploy|revoke|delete|dismiss-failure)$/)
+    if (route === '/key-groups' && request.method === 'GET') return writeJson(response, 200, { items: this.keys.listGroups() })
+    if (route === '/key-groups' && request.method === 'POST') return writeJson(response, 201, await this.keys.saveGroup(null, await readJson(request)))
+    const groupRoute = route.match(/^\/key-groups\/([^/]+)\/(update|deploy|delete)$/)
+    if (groupRoute && request.method === 'POST') {
+      const [, id, action] = groupRoute; const body = await readJson(request)
+      if (action === 'deploy') return writeJson(response, 200, await this.keys.deployGroup(id, body, username))
+      if (action === 'delete') return writeJson(response, 200, await this.keys.deleteGroup(id))
+      return writeJson(response, 200, await this.keys.saveGroup(id, body))
+    }
+    const keyRoute = route.match(/^\/keys\/([^/]+)\/(note|group|bind|lock|unlock|reveal|deploy|revoke|delete|dismiss-failure)$/)
     if (keyRoute && request.method === 'POST') {
       const [, id, action] = keyRoute; const body = await readJson(request)
       if (action === 'reveal') return writeJson(response, 200, await this.keys.reveal(id))

@@ -17,6 +17,20 @@
 .key-filter[aria-pressed="true"] > span { background: rgb(255 255 255 / 18%); }
 .key-filter:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 3px; }
 .key-filter-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.key-groups { display: grid; gap: 14px; margin-top: 18px; }
+.key-group { border: 1px solid var(--line); border-radius: 12px; background: var(--floating-surface); overflow: hidden; }
+.key-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 16px; }
+.key-group-toggle { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.key-group-toggle strong { overflow-wrap: anywhere; }
+.key-group-toggle[aria-expanded="true"] .key-expand-chevron { transform: rotate(180deg); }
+.key-group-toggle:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 4px; border-radius: 4px; }
+.key-group-count { flex-shrink: 0; color: var(--muted); font-size: 12px; }
+.key-group-content { border-top: 1px solid var(--line); }
+.key-group-content > p { padding: 0 16px; }
+.key-group-content .key-list { margin-top: 0; border: 0; border-radius: 0; }
+.key-group-heading .button { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+.key-dialog select { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--floating-surface); color: var(--ink); font: inherit; }
+.key-choices .checkbox-label small { display: block; margin-top: 3px; overflow-wrap: anywhere; }
 .key-list { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--floating-surface); }
 .key-list:empty { display: none; }
 .key-card { padding: 12px 16px; }

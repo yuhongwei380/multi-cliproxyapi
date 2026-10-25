@@ -33,6 +33,9 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
     this.db.exec('CREATE TABLE IF NOT EXISTS plugin_jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS key_groups (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, created_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS managed_keys (
         id TEXT PRIMARY KEY, note TEXT NOT NULL, ciphertext TEXT NOT NULL,
         fingerprint TEXT NOT NULL UNIQUE, locked INTEGER NOT NULL DEFAULT 0,
@@ -177,6 +180,9 @@ export class Store {
       CREATE INDEX IF NOT EXISTS audit_logs_created_idx ON audit_logs(created_at DESC, id DESC);
       CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at);
     `)
+    const keyColumns = new Set(this.db.prepare('PRAGMA table_info(managed_keys)').all().map(row => row.name))
+    if (!keyColumns.has('group_id')) this.db.exec('ALTER TABLE managed_keys ADD COLUMN group_id TEXT REFERENCES key_groups(id) ON DELETE SET NULL')
+    this.db.exec('CREATE INDEX IF NOT EXISTS managed_keys_group_idx ON managed_keys(group_id)')
     // Existing installations were created before Webhook signing was added.
     // Add the columns explicitly so an upgrade keeps the current settings row.
     const instanceColumns = new Set(this.db.prepare('PRAGMA table_info(instances)').all().map(row => row.name))
@@ -211,13 +217,28 @@ export class Store {
     this.db.prepare('INSERT INTO instance_limits VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET max_instances=excluded.max_instances,max_backups=excluded.max_backups').run(value.max_instances, value.max_backups)
   }
   init() {}
+  transaction(work) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try { const result = work(); this.db.exec('COMMIT'); return result } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+  listKeyGroups() { return this.db.prepare('SELECT * FROM key_groups ORDER BY created_at, id').all() }
+  getKeyGroup(id) { const group = this.db.prepare('SELECT * FROM key_groups WHERE id=?').get(id); if (!group) throw new NotFoundError('分组不存在'); return group }
+  saveKeyGroup(group, keyIds) {
+    this.transaction(() => {
+      try { this.db.prepare('INSERT INTO key_groups(id,name,created_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name').run(group.id, group.name, group.created_at) }
+      catch (error) { if (this.db.prepare('SELECT id FROM key_groups WHERE name=? AND id<>?').get(group.name, group.id)) throw new ConflictError('分组名称已存在'); throw error }
+      this.db.prepare('UPDATE managed_keys SET group_id=NULL WHERE group_id=?').run(group.id)
+      for (const id of keyIds) this.db.prepare('UPDATE managed_keys SET group_id=? WHERE id=?').run(group.id, id)
+    })
+  }
+  deleteKeyGroup(id) { this.db.prepare('DELETE FROM key_groups WHERE id=?').run(id) }
   listManagedKeys() { return this.db.prepare('SELECT * FROM managed_keys ORDER BY created_at DESC, id').all().map(row => ({ ...row, locked: Boolean(row.locked), deleting: Boolean(row.deleting) })) }
   getManagedKey(id) { const key = this.db.prepare('SELECT * FROM managed_keys WHERE id=?').get(id); if (!key) throw new NotFoundError('Key 不存在'); return { ...key, locked: Boolean(key.locked), deleting: Boolean(key.deleting) } }
   createManagedKey(key) {
-    try { this.db.prepare('INSERT INTO managed_keys(id,note,ciphertext,fingerprint,locked,deleting,created_at) VALUES(?,?,?,?,?,?,?)').run(key.id,key.note,key.ciphertext,key.fingerprint,0,0,key.created_at) }
+    try { this.db.prepare('INSERT INTO managed_keys(id,note,ciphertext,fingerprint,locked,deleting,created_at,group_id) VALUES(?,?,?,?,?,?,?,?)').run(key.id,key.note,key.ciphertext,key.fingerprint,0,0,key.created_at,key.group_id ?? null) }
     catch (error) { if (this.db.prepare('SELECT id FROM managed_keys WHERE fingerprint=?').get(key.fingerprint)) throw new ConflictError('Key 已存在'); throw error }
   }
-  saveManagedKey(key) { this.db.prepare('UPDATE managed_keys SET note=?,locked=?,deleting=? WHERE id=?').run(key.note,key.locked ? 1 : 0,key.deleting ? 1 : 0,key.id) }
+  saveManagedKey(key) { this.db.prepare('UPDATE managed_keys SET note=?,locked=?,deleting=?,group_id=? WHERE id=?').run(key.note,key.locked ? 1 : 0,key.deleting ? 1 : 0,key.group_id ?? null,key.id) }
   deleteManagedKey(id) { if (this.keyBindings(id).length) throw new ConflictError('Key 仍有未撤销绑定'); this.db.prepare('DELETE FROM managed_keys WHERE id=?').run(id) }
   keyBindings(id) { return this.db.prepare('SELECT b.*,i.name AS instance_name,i.port AS instance_port FROM key_bindings b LEFT JOIN instances i ON i.id=b.instance_id WHERE key_id=? ORDER BY instance_id').all(id) }
   bindKey(id, instanceId) { this.db.prepare("INSERT OR IGNORE INTO key_bindings(key_id,instance_id,status,message) VALUES(?,?,'pending','')").run(id,instanceId) }

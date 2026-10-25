@@ -6,14 +6,17 @@ vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
 const key = { id: 'key-one', note: '测试', masked_key: 'sk-…1234', locked: false, deleting: false, bindings: [{ instance_id: 'one', instance_name: 'CPA 一', instance_port: 8317, status: 'deployed', message: '' }] }
-function setup(items = [key]) {
-  vi.mocked(api.get).mockImplementation(async path => path === '/keys' ? { items } : { items: [{ id: 'one', name: 'CPA 一', port: 8317, status: { state: 'running' } }, { id: 'two', name: 'CPA 二', port: 8318, status: { state: 'stopped' }, locked: true }] })
+type TestKey = typeof key & { group_id?: string | null }
+async function setup(items: TestKey[] = [key], groups: { id: string; name: string }[] = [], expand = true) {
+  vi.mocked(api.get).mockImplementation(async path => path === '/keys' ? { items, groups } : { items: [{ id: 'one', name: 'CPA 一', port: 8317, status: { state: 'running' } }, { id: 'two', name: 'CPA 二', port: 8318, status: { state: 'stopped' }, locked: true }] })
   vi.mocked(api.post).mockResolvedValue({})
   render(<KeyPanel />)
+  const toggle = await screen.findByRole('button', { name: /^未分组/ })
+  if (expand && toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
 }
 
 test('creates a server generated key with a persisted note, or a securely generated manual value', async () => {
-  setup([]); fireEvent.click(screen.getByRole('button', { name: '创建 Key' }))
+  await setup([]); fireEvent.click(screen.getByRole('button', { name: '创建 Key' }))
   fireEvent.change(screen.getByLabelText('Key 备注'), { target: { value: '集成测试' } })
   fireEvent.click(screen.getByRole('button', { name: '保存' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys', { note: '集成测试' }))
@@ -23,7 +26,7 @@ test('creates a server generated key with a persisted note, or a securely genera
 })
 
 test('revealing a key updates only the row without reloading the module', async () => {
-  setup(); vi.mocked(api.post).mockResolvedValue({ key: 'sk-test-secret' })
+  await setup(); vi.mocked(api.post).mockResolvedValue({ key: 'sk-test-secret' })
   await screen.findByRole('button', { name: '显示' })
   expect(api.get).toHaveBeenCalledTimes(2)
   fireEvent.click(screen.getByRole('button', { name: '显示' }))
@@ -35,7 +38,7 @@ test('revealing a key updates only the row without reloading the module', async 
 })
 
 test('revealing a key does not flash or disable unrelated key actions', async () => {
-  setup()
+  await setup()
   let resolveReveal!: (value: { key: string }) => void
   vi.mocked(api.post).mockImplementation(() => new Promise(resolve => { resolveReveal = resolve }) as any)
   const show = await screen.findByRole('button', { name: '显示' })
@@ -48,7 +51,7 @@ test('revealing a key does not flash or disable unrelated key actions', async ()
 })
 
 test('searches API key notes and shows only matching rows', async () => {
-  setup([{ ...key, note: '测试环境' }, { ...key, id: 'production', note: '生产环境', bindings: [] }])
+  await setup([{ ...key, note: '测试环境' }, { ...key, id: 'production', note: '生产环境', bindings: [] }])
   const input = await screen.findByRole('textbox', { name: '搜索 API Key 备注' })
   fireEvent.change(input, { target: { value: '测试' } })
   expect(screen.getByRole('heading', { name: '测试环境' })).toBeInTheDocument()
@@ -63,7 +66,7 @@ test('searches API key notes and shows only matching rows', async () => {
 })
 
 test('binding selects only new children and does not implicitly deploy', async () => {
-  setup(); fireEvent.click(await screen.findByRole('button', { name: '绑定' }))
+  await setup(); fireEvent.click(await screen.findByRole('button', { name: '绑定' }))
   const dialog = within(screen.getByRole('dialog'))
   expect(dialog.getByRole('checkbox', { name: /CPA 一/ })).toBeDisabled()
   fireEvent.click(dialog.getByRole('checkbox', { name: /CPA 二/ })); fireEvent.click(dialog.getByRole('button', { name: '保存' }))
@@ -72,7 +75,7 @@ test('binding selects only new children and does not implicitly deploy', async (
 })
 
 test('delete confirms affected instances and retains partial failure for retry', async () => {
-  setup(); vi.mocked(api.post).mockResolvedValue({ deleted: false, results: [{ instance_id: 'one', status: 'failed' }] })
+  await setup(); vi.mocked(api.post).mockResolvedValue({ deleted: false, results: [{ instance_id: 'one', status: 'failed' }] })
   fireEvent.click(await screen.findByRole('button', { name: '删除' }))
   expect(within(screen.getByRole('dialog')).getByText(/CPA 一/)).toBeInTheDocument()
   expect(api.post).not.toHaveBeenCalled()
@@ -83,10 +86,10 @@ test('delete confirms affected instances and retains partial failure for retry',
 })
 
 test('single unbind explicitly revokes and locked keys block destructive actions', async () => {
-  setup(); fireEvent.click(await screen.findByRole('button', { name: /绑定实例/ })); expect(screen.getByText('端口 8317')).toBeInTheDocument(); fireEvent.click(screen.getByRole('button', { name: '解绑并撤销' }))
+  await setup(); fireEvent.click(await screen.findByRole('button', { name: /绑定实例/ })); expect(screen.getByText('端口 8317')).toBeInTheDocument(); fireEvent.click(screen.getByRole('button', { name: '解绑并撤销' }))
   fireEvent.click(screen.getByRole('button', { name: '确认撤销' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/revoke', { instance_id: 'one' }))
-  cleanup(); setup([{ ...key, locked: true }])
+  cleanup(); await setup([{ ...key, locked: true }])
   expect(await screen.findByText('CPA已锁定')).toBeInTheDocument()
   expect(await screen.findByRole('button', { name: '删除' })).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: /绑定实例/ }))
@@ -98,7 +101,7 @@ test('single unbind explicitly revokes and locked keys block destructive actions
 })
 
 test('failed binding details open automatically and the failure badge survives collapse', async () => {
-  setup([{ ...key, bindings: [{ ...key.bindings[0], status: 'failed', message: '实例连接失败' }] }])
+  await setup([{ ...key, bindings: [{ ...key.bindings[0], status: 'failed', message: '实例连接失败' }] }])
   const toggle = await screen.findByRole('button', { name: /绑定实例/ })
   expect(toggle).toHaveAttribute('aria-expanded', 'true')
   expect(toggle).toHaveTextContent('1 个失败')
@@ -111,7 +114,7 @@ test('failed binding details open automatically and the failure badge survives c
 
 test('instance filters include multi-bound keys and allow returning to all or unbound', async () => {
   const second = { instance_id: 'two', instance_name: 'CPA 二', instance_port: 8318, status: 'pending', message: '' }
-  setup([
+  await setup([
     key,
     { ...key, id: 'multi', note: '多实例 Key', bindings: [...key.bindings, second] },
     { ...key, id: 'two-only', note: '二号 Key', bindings: [second] },
@@ -134,4 +137,100 @@ test('instance filters include multi-bound keys and allow returning to all or un
   expect(screen.queryByRole('heading', { name: '多实例 Key' })).not.toBeInTheDocument()
   fireEvent.click(filters.getByRole('button', { name: '全部4' }))
   expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(4)
+})
+
+test('shows collapsed groups by default and assigns keys without a group to ungrouped', async () => {
+  await setup([key, { ...key, id: 'grouped', note: '组内 Key', group_id: 'production' }], [{ id: 'production', name: '生产组' }], false)
+  const production = within(screen.getByRole('region', { name: '生产组' }))
+  expect(production.getByRole('button', { name: '生产组1 个 Key' })).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByRole('heading', { name: '组内 Key' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '测试' })).not.toBeInTheDocument()
+  fireEvent.click(production.getByRole('button', { name: '生产组1 个 Key' }))
+  expect(screen.getByRole('heading', { name: '组内 Key' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '未分组1 个 Key' }))
+  expect(screen.getByRole('heading', { name: '测试' })).toBeInTheDocument()
+})
+
+test('search opens matching groups while allowing them to be collapsed and combines with instance filters', async () => {
+  await setup([{ ...key, note: '生产 Key', group_id: 'work' }, { ...key, id: 'other', note: '生产备用', bindings: [] }], [{ id: 'work', name: '工作组' }], false)
+  fireEvent.change(screen.getByLabelText('搜索 API Key 备注'), { target: { value: '生产' } })
+  expect(screen.getByRole('heading', { name: '生产 Key' })).toBeInTheDocument()
+  const toggle = screen.getByRole('button', { name: '工作组1 个 Key' })
+  fireEvent.click(toggle)
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByRole('heading', { name: '生产 Key' })).not.toBeInTheDocument()
+  fireEvent.click(within(screen.getByRole('group', { name: '绑定实例筛选' })).getByRole('button', { name: 'CPA 一1' }))
+  expect(screen.getByRole('heading', { name: '生产 Key' })).toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: '未分组' })).not.toBeInTheDocument()
+})
+
+test('creates a named group with selected keys and edits its membership', async () => {
+  await setup([key, { ...key, id: 'locked', note: '锁定 Key', locked: true }])
+  fireEvent.click(screen.getByRole('button', { name: '新建组' }))
+  const dialog = within(screen.getByRole('dialog'))
+  expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled()
+  fireEvent.change(dialog.getByLabelText('分组名称'), { target: { value: '工作组' } })
+  expect(dialog.getByRole('checkbox', { name: /锁定 Key/ })).toBeDisabled()
+  fireEvent.click(dialog.getByRole('checkbox', { name: /^测试/ }))
+  fireEvent.click(dialog.getByRole('button', { name: '保存' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/key-groups', { name: '工作组', key_ids: ['key-one'] }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  cleanup()
+  await setup([{ ...key, group_id: 'work' }, { ...key, id: 'other', note: '另一个 Key', group_id: 'other-group' }], [{ id: 'work', name: '工作组' }, { id: 'other-group', name: '其他组' }])
+  fireEvent.click(within(screen.getByRole('region', { name: '工作组' })).getByRole('button', { name: '编辑组' }))
+  const edit = within(screen.getByRole('dialog'))
+  expect(edit.getByRole('checkbox', { name: /^测试/ })).toBeChecked()
+  fireEvent.click(edit.getByRole('checkbox', { name: /^测试/ }))
+  fireEvent.click(edit.getByRole('checkbox', { name: /^另一个 Key/ }))
+  fireEvent.change(edit.getByLabelText('分组名称'), { target: { value: '新组名' } })
+  fireEvent.click(edit.getByRole('button', { name: '保存' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/key-groups/work/update', { name: '新组名', key_ids: ['other'] }))
+})
+
+test('moves an individual key to a group and creates keys directly in that group', async () => {
+  await setup([key], [{ id: 'work', name: '工作组' }])
+  fireEvent.click(screen.getByRole('button', { name: '分组' }))
+  fireEvent.click(screen.getByRole('combobox', { name: /所属分组/ }))
+  fireEvent.click(screen.getByRole('option', { name: '工作组' }))
+  fireEvent.click(screen.getByRole('button', { name: '保存' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/group', { group_id: 'work' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  fireEvent.click(screen.getByRole('button', { name: '创建 Key' }))
+  fireEvent.click(screen.getByRole('combobox', { name: /所属分组/ }))
+  fireEvent.click(screen.getByRole('option', { name: '工作组' }))
+  fireEvent.click(screen.getByRole('button', { name: '保存' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys', { note: '', group_id: 'work' }))
+})
+
+test('group deployment selects target instances, reports partial failures, and blocks locked binding changes', async () => {
+  await setup([{ ...key, group_id: 'work' }], [{ id: 'work', name: '工作组' }], false)
+  vi.mocked(api.post).mockResolvedValue({ results: [{ key_id: key.id, instance_id: 'one', status: 'failed' }] })
+  fireEvent.click(within(screen.getByRole('region', { name: '工作组' })).getByRole('button', { name: '批量下发' }))
+  const dialog = within(screen.getByRole('dialog'))
+  expect(dialog.getByRole('checkbox', { name: /CPA 一/ })).toBeChecked()
+  expect(dialog.getByRole('checkbox', { name: /CPA 二/ })).toBeDisabled()
+  fireEvent.click(dialog.getByRole('button', { name: '确认下发' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/key-groups/work/deploy', { instances: ['one'] }))
+  expect(await screen.findByRole('status')).toHaveTextContent('0 项成功，1 项失败')
+  expect(screen.getByRole('heading', { name: '测试' })).toBeInTheDocument()
+  cleanup()
+  await setup([{ ...key, group_id: 'work', locked: true, bindings: [] }], [{ id: 'work', name: '工作组' }], false)
+  fireEvent.click(within(screen.getByRole('region', { name: '工作组' })).getByRole('button', { name: '批量下发' }))
+  expect(screen.getByRole('button', { name: '确认下发' })).toBeDisabled()
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /CPA 一/ }))
+  expect(screen.getByText(/组内含待删除 Key/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '确认下发' })).toBeDisabled()
+})
+
+test('deleting a group confirms that keys return to ungrouped and leaves key records intact', async () => {
+  await setup([{ ...key, group_id: 'work' }], [{ id: 'work', name: '工作组' }], false)
+  fireEvent.click(screen.getByRole('button', { name: '删除组' }))
+  expect(within(screen.getByRole('dialog')).getByText(/1 个 Key 将归入/)).toBeInTheDocument()
+  expect(api.post).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: '继续删除' }))
+  expect(within(screen.getByRole('dialog')).getByText(/请再次确认删除/)).toBeInTheDocument()
+  expect(api.post).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: '确认删除组' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/key-groups/work/delete', {}))
+  expect(await screen.findByRole('status')).toHaveTextContent('组内 Key 已归入')
 })

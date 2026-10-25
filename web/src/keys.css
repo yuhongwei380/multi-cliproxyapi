@@ -17,6 +17,23 @@
 .key-filter[aria-pressed="true"] > span { background: rgb(255 255 255 / 18%); }
 .key-filter:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 3px; }
 .key-filter-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.key-groups { display: grid; gap: 14px; margin-top: 18px; }
+.key-group { border: 1px solid var(--line); border-radius: 12px; background: var(--floating-surface); overflow: hidden; }
+.key-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 16px; }
+.key-group-toggle { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.key-group-toggle strong { overflow-wrap: anywhere; }
+.key-group-toggle[aria-expanded="true"] .key-expand-chevron { transform: rotate(180deg); }
+.key-group-toggle:focus-visible { outline: 2px solid var(--primary-active); outline-offset: 4px; border-radius: 4px; }
+.key-group-count { flex-shrink: 0; color: var(--muted); font-size: 12px; }
+.key-group-content { border-top: 1px solid var(--line); }
+.key-group-content > p { padding: 0 16px; }
+.key-group-content .key-list { margin-top: 0; border: 0; border-radius: 0; }
+.key-group-heading .button { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+.key-group-selector { display: grid; gap: 6px; margin: 14px 0; color: var(--ink); font-size: 12px; font-weight: 650; }
+.key-group-selector .dropdown-picker { height: 42px; }
+.key-group-selector .dropdown-trigger { font-size: 13px; }
+.key-group-selector .dropdown-value { color: var(--ink); }
+.key-choices .checkbox-label small { display: block; margin-top: 3px; overflow-wrap: anywhere; }
 .key-list { margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--floating-surface); }
 .key-list:empty { display: none; }
 .key-card { padding: 12px 16px; }
@@ -59,5 +76,16 @@
 .key-input { display: flex; gap: 8px; }
 .key-input input { min-width: 0; flex: 1; }
 .key-choices { display: grid; gap: 12px; max-height: 45vh; overflow-y: auto; }
+.dialog.key-group-dialog { width: min(760px, 100%); }
+.key-group-dialog form > label { margin: 12px 0; }
+.key-group-dialog .key-choices { align-content: start; gap: 2px; max-height: min(36vh, 320px); padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-secondary); overscroll-behavior: contain; }
+.key-group-dialog .key-choices .checkbox-label { min-height: 42px; margin: 0; padding: 6px 8px; border-radius: 5px; font-size: 12px; line-height: 1.35; cursor: pointer; }
+.key-group-dialog .key-choices .checkbox-label > span { min-width: 0; overflow-wrap: anywhere; }
+.key-group-dialog .key-choices .checkbox-label:has(input:checked) { background: var(--blue-soft); }
+.key-group-dialog .key-choices .checkbox-label:not(:has(input:disabled)):hover { background: var(--bg-tertiary); }
+.key-group-dialog .key-choices .checkbox-label:has(input:disabled) { cursor: not-allowed; }
+.key-group-dialog .key-choices small { margin-top: 2px; font-size: 11px; line-height: 1.3; }
+.key-group-dialog p.key-muted { margin: 10px 0 0; line-height: 1.5; }
+.key-group-dialog .dialog-actions { margin-top: 16px; }
 @media (max-width: 1200px) { .key-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; } .key-row-actions { grid-column: 1 / -1; } }
 @media (max-width: 600px) { .key-panel { padding: 16px; } .key-search-bar { align-items: stretch; } .key-search-label { width: 100%; } .key-search-label input { width: 100%; min-width: 0; } .key-card { padding: 10px 12px; } .key-name { flex-wrap: wrap; gap: 4px 8px; } .key-name h3 { max-width: 100%; } .key-expand { flex-wrap: wrap; } .key-binding-summary { max-width: 120px; } }

@@ -73,5 +73,16 @@
 .key-input { display: flex; gap: 8px; }
 .key-input input { min-width: 0; flex: 1; }
 .key-choices { display: grid; gap: 12px; max-height: 45vh; overflow-y: auto; }
+.dialog.key-group-dialog { width: min(760px, 100%); }
+.key-group-dialog form > label { margin: 12px 0; }
+.key-group-dialog .key-choices { align-content: start; gap: 2px; max-height: min(36vh, 320px); padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-secondary); overscroll-behavior: contain; }
+.key-group-dialog .key-choices .checkbox-label { min-height: 42px; margin: 0; padding: 6px 8px; border-radius: 5px; font-size: 12px; line-height: 1.35; cursor: pointer; }
+.key-group-dialog .key-choices .checkbox-label > span { min-width: 0; overflow-wrap: anywhere; }
+.key-group-dialog .key-choices .checkbox-label:has(input:checked) { background: var(--blue-soft); }
+.key-group-dialog .key-choices .checkbox-label:not(:has(input:disabled)):hover { background: var(--bg-tertiary); }
+.key-group-dialog .key-choices .checkbox-label:has(input:disabled) { cursor: not-allowed; }
+.key-group-dialog .key-choices small { margin-top: 2px; font-size: 11px; line-height: 1.3; }
+.key-group-dialog p.key-muted { margin: 10px 0 0; line-height: 1.5; }
+.key-group-dialog .dialog-actions { margin-top: 16px; }
 @media (max-width: 1200px) { .key-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; } .key-row-actions { grid-column: 1 / -1; } }
 @media (max-width: 600px) { .key-panel { padding: 16px; } .key-search-bar { align-items: stretch; } .key-search-label { width: 100%; } .key-search-label input { width: 100%; min-width: 0; } .key-card { padding: 10px 12px; } .key-name { flex-wrap: wrap; gap: 4px 8px; } .key-name h3 { max-width: 100%; } .key-expand { flex-wrap: wrap; } .key-binding-summary { max-width: 120px; } }

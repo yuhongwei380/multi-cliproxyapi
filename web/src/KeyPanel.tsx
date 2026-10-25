@@ -159,7 +159,7 @@ export function KeyPanel() {
     </article>)}</div></div>}
       </section>
     })}</div>
-    {dialog && <dialog open className="modal-backdrop"><div className="dialog key-dialog"><button type="button" className="dialog-close" disabled={busy} aria-label="关闭" onClick={() => setDialog(null)}>×</button><h2>{{ create: '创建 Key', bind: '绑定 CPA 实例', note: '编辑备注', unlock: '解锁 Key', delete: '删除 Key', revoke: '解绑并撤销', group: '调整 Key 分组', 'create-group': '新建组', 'edit-group': '编辑分组', 'delete-group': '删除分组', 'deploy-group': '批量下发 Key' }[dialog.kind]}</h2>
+    {dialog && <dialog open className="modal-backdrop"><div className={`dialog key-dialog${choosingKeys ? ' key-group-dialog' : ''}`}><button type="button" className="dialog-close" disabled={busy} aria-label="关闭" onClick={() => setDialog(null)}>×</button><h2>{{ create: '创建 Key', bind: '绑定 CPA 实例', note: '编辑备注', unlock: '解锁 Key', delete: '删除 Key', revoke: '解绑并撤销', group: '调整 Key 分组', 'create-group': '新建组', 'edit-group': '编辑分组', 'delete-group': '删除分组', 'deploy-group': '批量下发 Key' }[dialog.kind]}</h2>
       <form onSubmit={event => { event.preventDefault(); void submit() }}>
         {['create', 'note'].includes(dialog.kind) && <label>备注（可选）<input aria-label="Key 备注" value={note} maxLength={200} onChange={event => setNote(event.target.value)} placeholder="例如：测试" /></label>}
         {['create', 'group'].includes(dialog.kind) && <label>所属分组<select aria-label="所属分组" value={groupId} onChange={event => setGroupId(event.target.value)}>{groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>}

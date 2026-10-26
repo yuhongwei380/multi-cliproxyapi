@@ -55,7 +55,7 @@ test('requires login before showing instance cards', async () => {
   expect(fetchMock).toHaveBeenCalledTimes(5)
 })
 
-test('uses an optional child password and provides a show/hide control', async () => {
+test('uses an optional CPA management key and provides a show/hide control', async () => {
   vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
     .mockImplementationOnce(() => response({ items: [] }) as any)
@@ -64,7 +64,7 @@ test('uses an optional child password and provides a show/hide control', async (
   const user = userEvent.setup(); render(<App />)
   await screen.findByRole('button', { name: '+ 创建实例' })
   await user.click(screen.getByRole('button', { name: '+ 创建实例' }))
-  const password = screen.getByLabelText('子实例管理密码（可选）')
+  const password = screen.getByLabelText('CPA 管理密钥（可选）')
   expect(password).toHaveAttribute('type', 'password')
   expect(password).not.toBeRequired()
   await user.click(screen.getByRole('button', { name: '显示密码' }))

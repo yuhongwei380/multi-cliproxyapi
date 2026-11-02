@@ -121,8 +121,7 @@ export class DirectGitHubSource extends GitHubSource {
     if (!safeTag(tag)) throw new Error('invalid release tag')
     const version = tag.replace(/^v/, '')
     const candidates = [
-      `CLIProxyAPI_${version}_linux_amd64.tar.gz`,
-      `CLIProxyAPI_${version}_linux_amd64_no-plugin.tar.gz`
+      `CLIProxyAPI_${version}_linux_amd64.tar.gz`
     ]
     const checksumUrl = `https://github.com/${this.owner}/${this.repo}/releases/download/${encodeURIComponent(tag)}/checksums.txt`
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs)
@@ -157,9 +156,7 @@ function selectAsset(release) {
   const normal = candidates.filter(asset => !/no[-_.]?plugin/i.test(asset.name || ''))
   if (normal.length === 1) return normal[0]
   if (normal.length > 1) throw new Error('release contains multiple matching Linux amd64 assets')
-  if (candidates.length === 1) return candidates[0]
-  if (candidates.length === 0) throw new Error('release has no supported Linux amd64 asset')
-  throw new Error('release contains multiple matching Linux amd64 assets')
+  throw new Error('release has no supported Linux amd64 asset with plugins')
 }
 
 function safeArchiveName(name) {

@@ -57,6 +57,20 @@ test('insufficient backup capacity prevents CPA version switching before stoppin
   } finally { f.close() }
 })
 
+test('installation selects the plugin-enabled archive and never falls back to no-plugin', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-assets-'))
+  const normal = { name: 'CLIProxyAPI_8.0.50_linux_amd64.tar.gz' }
+  const noPlugin = { name: 'CLIProxyAPI_8.0.50_linux_amd64_no-plugin.tar.gz' }
+  try {
+    for (const assets of [[noPlugin, normal], [normal, noPlugin], [noPlugin]]) {
+      let selected
+      const installer = new Installer({ root, source: { latest: async () => ({ tag: '8.0.50', assets }), download: async asset => { selected = asset.name; throw new Error('download stopped') } } })
+      await assert.rejects(installer.install(), assets.length === 1 ? /no supported Linux amd64 asset with plugins/ : /download stopped/)
+      assert.equal(selected, assets.length === 1 ? undefined : normal.name)
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
 test('duplicate version installation reports conflict without downloading again', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-duplicate-'))
   let downloads = 0

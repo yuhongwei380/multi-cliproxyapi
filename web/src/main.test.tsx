@@ -5,7 +5,7 @@ import { App } from './main'
 
 function response(body: unknown, status = 200) { return Promise.resolve({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }) }
 
-beforeEach(() => { vi.restoreAllMocks(); window.location.hash = '' })
+beforeEach(() => { vi.restoreAllMocks(); window.location.hash = ''; sessionStorage.clear() })
 afterEach(() => { cleanup() })
 
 test('administrator settings load and save independent instance limits and retain errors', async () => {
@@ -362,6 +362,26 @@ test('edits managed instance fields with the current revision', async () => {
   expect(patchCall[0]).toBe('/api/instances/cpa_1')
   expect((patchCall[1] as RequestInit).method).toBe('PATCH')
   expect(JSON.parse(String((patchCall[1] as RequestInit).body))).toEqual({ name: 'renamed', port: 8318, expected_revision: 4 })
+})
+
+test('dismisses a completed rollback across navigation without hiding a newer result', async () => {
+  let state = { state: 'rolled-back', old_version: '8.0.50', new_version: '8.0.51', message: 'fetch failed', updated_at: '2030-01-01T00:00:00Z' }
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const route = String(input)
+    if (route === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (route === '/api/upgrade/state') return response(state) as any
+    if (route === '/api/versions') return response({ items: [{ tag: '8.0.50', usable: true }] }) as any
+    return response({ items: [] }) as any
+  })
+  const user = userEvent.setup(); const view = render(<App />)
+  expect(await screen.findByText('fetch failed')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '关闭升级状态' }))
+  expect(screen.queryByText('fetch failed')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('link', { name: '版本管理' }))
+  expect(screen.queryByText('fetch failed')).not.toBeInTheDocument()
+  state = { ...state, message: 'new failure', updated_at: '2030-01-01T00:01:00Z' }
+  view.unmount(); render(<App />)
+  expect(await screen.findByText('new failure')).toBeInTheDocument()
 })
 
 test('shows installed versions and submits a unified upgrade', async () => {

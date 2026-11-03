@@ -22,7 +22,7 @@ export type Instance = {
   status: InstanceStatus
 }
 
-export type QuotaValue = { name: string; remaining?: number; total?: number; unit?: string; reset_at?: string }
+export type QuotaValue = { name: string; remaining?: number; total?: number; unit?: string; reset_at?: string; credit_status?: 'unlimited' | 'available' | 'unavailable' }
 export type QuotaSnapshot = {
   instance_id: string
   account_id: string

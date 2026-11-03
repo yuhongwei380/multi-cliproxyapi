@@ -199,6 +199,8 @@ test('changed remote lists and unsuccessful verification retain binding without 
 test('creation encrypts secrets, masks listings, rejects duplicates and persists metadata', async t => {
   const f = fixture(t); const key = await f.service.create({ key: secret, note: '测试' })
   assert.equal(key.note, '测试'); assert.equal(key.ciphertext, undefined)
+  assert.equal(key.masked_key, secret.slice(0, 10) + '…')
+  const short = await f.service.create({ key: '12345678' }); assert.equal(short.masked_key, '1234567…')
   assert.ok(!JSON.stringify(f.service.list()).includes(secret)); assert.ok(!JSON.stringify(f.store.getManagedKey(key.id)).includes(secret))
   await assert.rejects(f.service.create({ key: secret }), /已存在/)
   assert.equal((await f.service.reveal(key.id)).key, secret)

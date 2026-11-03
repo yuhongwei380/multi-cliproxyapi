@@ -28,7 +28,12 @@ test('deployment record deletion requires a session, rejects active records and 
     assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers })).status, 200)
     assert.equal((await fetch(`${base}/plugins/jobs/finished`, { method: 'DELETE', headers })).status, 404)
     assert.ok(store.listAuditLogs().some(item => item.action === 'plugin.record.delete' && item.resource_id === 'finished' && item.outcome === 'success'))
-    assert.deepEqual(store.listPluginJobs().map(item => item.id), ['recovering'])
+    store.savePluginJob({ id: 'failed', state: 'failed' }); store.savePluginJob({ id: 'running', state: 'running' })
+    assert.equal((await fetch(`${base}/plugins/jobs`, { method: 'DELETE' })).status, 401)
+    const cleared = await fetch(`${base}/plugins/jobs`, { method: 'DELETE', headers })
+    assert.deepEqual(await cleared.json(), { deleted: 1 })
+    assert.deepEqual(store.listPluginJobs().map(item => item.id).sort(), ['recovering', 'running'])
+    assert.ok(store.listAuditLogs().some(item => item.action === 'plugin.record.clear' && item.outcome === 'success'))
   } finally { server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); store.close() }
 })
 

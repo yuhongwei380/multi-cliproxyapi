@@ -10,7 +10,7 @@ export class KeyService {
   view(key) {
     const { ciphertext, fingerprint, ...visible } = key
     const secret = this.secrets.decrypt(ciphertext)
-    return { ...visible, masked_key: `${secret.slice(0, 3)}…${secret.slice(-4)}`, bindings: this.store.keyBindings(key.id) }
+    return { ...visible, masked_key: `${secret.slice(0, Math.min(10, secret.length - 1))}…`, bindings: this.store.keyBindings(key.id) }
   }
   run(fn) { return this.instances.operations.run('global', fn) }
   editable(key) { if (key.locked) throw new ConflictError('Key 已锁定，请先解锁') }

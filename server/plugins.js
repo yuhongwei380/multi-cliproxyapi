@@ -57,6 +57,7 @@ export class PluginService {
   assertIdle() { if (this.store.listPluginJobs().some(active)) throw new ConflictError('plugin deployment requires completion or recovery first') }
   jobs() { return this.store.listPluginJobs() }
   deleteRecord(id) { this.store.deletePluginJob(id) }
+  clearRecords() { return this.store.clearFinishedPluginJobs() }
   save(job) {
     const previous = this.store.listPluginJobs().find(item => item.id === job.id)
     job.updated_at = new Date().toISOString(); this.store.savePluginJob(job)
@@ -86,11 +87,11 @@ export class PluginService {
     }
     return { catalog: this.artifacts.catalog.map(({ id, name, owner, repo }) => ({ id, name, repository: `${owner}/${repo}` })), instances: items }
   }
-  submit({ plugin, version = '', instances: ids, enable = false }) {
+  submit({ plugin, version = '', instances: ids, enable = true }) {
     this.assertIdle(); this.instances.assertUpgradeIdle(); this.artifacts.descriptor(plugin)
     if (typeof version !== 'string' || (version && !/^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version)) || typeof enable !== 'boolean' || !Array.isArray(ids) || !ids.length || ids.length > 100 || new Set(ids).size !== ids.length) throw Object.assign(new Error('invalid plugin deployment request'), { status: 400 })
     const results = ids.map(id => { const instance = this.store.getInstance(id); return { id, state: instance.locked ? 'skipped-locked' : 'pending' } })
-    const job = { id: crypto.randomUUID(), plugin, version, enable, state: 'queued', results, created_at: new Date().toISOString(), message: '' }; this.save(job)
+    const job = { id: crypto.randomUUID(), plugin, version, enable: true, state: 'queued', results, created_at: new Date().toISOString(), message: '' }; this.save(job)
     this.pending = this.instances.operations.run('global', () => this.run(job)).catch(error => { job.state = 'blocked'; job.message = error.message; this.save(job) }).finally(() => { this.pending = null })
     return job
   }

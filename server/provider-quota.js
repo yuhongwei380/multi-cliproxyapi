@@ -100,6 +100,15 @@ export function parseProviderQuota(provider, payload) {
     }
     append('Codex', payload.rate_limit)
     append('代码审查', payload.code_review_rate_limit)
+    const credits = payload.credits
+    if (credits && typeof credits === 'object' && !Array.isArray(credits)) {
+      const balance = credits.balance
+      const amount = typeof balance === 'number' || (typeof balance === 'string' && balance.trim()) ? Number(balance) : NaN
+      if (credits.unlimited === true) values.push({ name: 'Codex 积分', unit: '积分', credit_status: 'unlimited' })
+      else if (Number.isFinite(amount) && amount >= 0) values.push({ name: 'Codex 积分', remaining: amount, unit: '积分' })
+      else if (credits.has_credits === true) values.push({ name: 'Codex 积分', unit: '积分', credit_status: 'available' })
+      else if (credits.has_credits === false) values.push({ name: 'Codex 积分', unit: '积分', credit_status: 'unavailable' })
+    }
     if (payload.additional_rate_limits !== undefined && payload.additional_rate_limits !== null && !Array.isArray(payload.additional_rate_limits)) throw new Error('invalid additional quota limits')
     for (const limit of payload.additional_rate_limits || []) append(limit.limit_name || limit.metered_feature || '附加额度', limit.rate_limit)
   } else if (provider === 'claude') {

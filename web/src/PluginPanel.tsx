@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { api } from './api'
 import './plugins.css'
 import { Dropdown } from './Dropdown'
@@ -12,13 +12,12 @@ const finished = (job: Job) => ['completed', 'failed'].includes(job.state)
 const tone = (state: string) => state === 'completed' || state === 'verified' ? 'success' : state === 'failed' || state === 'blocked' ? 'danger' : ['running', 'queued', 'installing', 'verifying', 'restoring'].includes(state) ? 'progress' : 'neutral'
 const dateLabel = (value?: string) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '时间未知'
 
-export function PluginPanel() {
+export function PluginPanel({ versionPanel }: { versionPanel?: ReactNode }) {
   const [inventory, setInventory] = useState<Inventory>({ catalog: [], instances: [] })
   const [jobs, setJobs] = useState<Job[]>([])
   const [plugin, setPlugin] = useState('cpa-key-billing')
   const [version, setVersion] = useState('')
   const [selected, setSelected] = useState<string[]>([])
-  const [enable, setEnable] = useState(false)
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -29,6 +28,7 @@ export function PluginPanel() {
   async function refresh() {
     try {
       const [data, history] = await Promise.all([api.get('/plugins'), api.get('/plugins/jobs')])
+      if (!Array.isArray(data.catalog) || !Array.isArray(data.instances) || !Array.isArray(history.items)) throw new Error('插件数据格式无效')
       setInventory(data); setJobs(history.items); setLoadError('')
       setSelected(ids => ids.filter(id => data.instances.some((item: Inventory['instances'][number]) => item.id === id)))
     } catch (cause) { setLoadError(cause instanceof Error ? cause.message : '读取插件失败') }
@@ -46,7 +46,7 @@ export function PluginPanel() {
   }, [deleteTarget, busy])
   async function deploy() {
     setBusy(true); setError('')
-    try { await api.post('/plugins/deploy', { plugin, version: version.trim(), instances: selected, enable }); await refresh() }
+    try { await api.post('/plugins/deploy', { plugin, version: version.trim(), instances: selected, enable: true }); await refresh() }
     catch (cause) { setError(cause instanceof Error ? cause.message : '部署失败') }
     finally { setBusy(false) }
   }
@@ -63,24 +63,31 @@ export function PluginPanel() {
     catch (cause) { setError(cause instanceof Error ? cause.message : '删除记录失败') }
     finally { setBusy(false) }
   }
+  async function clearRecords() {
+    setBusy(true); setError('')
+    try { await api.delete('/plugins/jobs'); await refresh() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '清空记录失败') }
+    finally { setBusy(false) }
+  }
   const eligible = selected.map(id => inventory.instances.find(item => item.id === id)).filter(item => item && !item.locked)
   const descriptor = inventory.catalog.find(item => item.id === plugin)
   const instanceName = (id: string) => inventory.instances.find(item => item.id === id)?.name || id
   return <section className="module-pane plugins-module" aria-label="插件管理">
-    <div className="section-heading module-heading"><div><div className="eyebrow">PLUGIN CONTROL</div><h1>插件管理</h1><p>集中管理插件版本，按所选顺序逐个部署到实例。</p></div><div className="section-actions"><button className="button ghost" disabled={busy} onClick={() => void refresh()}>刷新</button></div></div>
+    <div className="section-heading module-heading"><div><div className="eyebrow">PLUGIN CONTROL</div><h1>版本与插件管理</h1><p>集中管理 CPA 版本和插件部署。</p></div><div className="section-actions"><button className="button ghost" disabled={busy} onClick={() => void refresh()}>刷新</button></div></div>
     {(error || loadError) && !deleteTarget && <p className="settings-inline-error" role="alert">{error || loadError}</p>}
     {jobs.some(job => job.state === 'blocked') && <div className="plugin-recovery"><div><strong>部署需要恢复</strong><p>上次回滚未完成，恢复后可继续安装或升级插件。</p></div><button className="button ghost" disabled={busy} onClick={() => void recover()}>重试回滚</button></div>}
+    <div className="version-plugin-grid">{versionPanel}
     <form className="plugin-card plugin-form" onSubmit={event => { event.preventDefault(); void deploy() }}>
       <div className="plugin-card-heading"><div><h2>部署插件</h2><p>部署前自动创建备份子实例，再安装或升级。备份自动分配端口，默认停止并锁定；名额不足或备份失败时中止。</p></div><span className="plugin-badge neutral">{inventory.instances.length} 个实例</span></div>
-      <div className="plugin-fields"><div className="plugin-field"><label htmlFor="plugin-picker">插件</label><Dropdown id="plugin-picker" label="插件" disabled={busy || active || loading} value={plugin} onChange={setPlugin} options={inventory.catalog.map(item => ({ value: item.id, label: item.name }))} placeholder="请选择插件" /><small>{descriptor?.repository || '正在读取插件目录'}</small></div><label>目标版本<input aria-label="插件版本" disabled={busy || active} placeholder="latest，例如 1.3.20" value={version} onChange={event => setVersion(event.target.value)} /><small>留空使用最新发布版本</small></label><div className="plugin-enable"><label className="checkbox-label"><input type="checkbox" disabled={busy || active} checked={enable} onChange={event => setEnable(event.target.checked)} />安装后启用</label><small>默认保留当前启用状态</small></div></div>
+      <div className="plugin-fields"><div className="plugin-field"><label htmlFor="plugin-picker">插件</label><Dropdown id="plugin-picker" label="插件" disabled={busy || active || loading} value={plugin} onChange={setPlugin} options={inventory.catalog.map(item => ({ value: item.id, label: item.name }))} placeholder="请选择插件" /><small>{descriptor?.repository || '正在读取插件目录'}</small></div><label>目标版本<input aria-label="插件版本" disabled={busy || active} placeholder="latest，例如 1.3.20" value={version} onChange={event => setVersion(event.target.value)} /><small>留空使用最新发布版本</small></label><div className="plugin-enable"><label className="checkbox-label"><input type="checkbox" disabled checked readOnly />安装后启用</label><small>安装后自动启用</small></div></div>
       <div className="plugin-target-heading"><h3>选择实例</h3><button className="button ghost" type="button" disabled={busy || active || !inventory.instances.some(item => !item.locked)} onClick={() => setSelected(inventory.instances.filter(item => !item.locked).map(item => item.id))}>选择未锁定实例</button></div>
       {loading ? <div className="plugin-empty">正在读取实例…</div> : !inventory.instances.length ? <div className="plugin-empty">暂无实例。创建 CPA 实例后即可部署插件。</div> : <div className="plugin-table-wrap"><table className="plugin-table"><thead><tr><th>实例</th><th>插件版本</th><th>插件状态</th><th>运行状态</th></tr></thead><tbody>{inventory.instances.map(instance => {
         const item = instance.plugins.find(item => item.id === plugin)
         return <tr key={instance.id}><td><label className="checkbox-label"><input type="checkbox" aria-label={`选择 ${instance.name}`} disabled={active || busy} checked={selected.includes(instance.id)} onChange={event => setSelected(ids => event.target.checked ? [...ids, instance.id] : ids.filter(id => id !== instance.id))} /><span>{instance.name}{instance.locked && <small className="plugin-lock">已锁定</small>}</span></label>{instance.message && <small className="plugin-instance-error">{instance.message}</small>}</td><td className="plugin-version">{item?.installed ? item.version || '版本待确认' : '—'}</td><td><span className={`plugin-badge ${item?.enabled ? 'success' : 'neutral'}`}>{!item?.installed ? '未安装' : item.enabled === null ? '待启动验证' : item.enabled ? '已启用' : '未启用'}</span></td><td><span className={`plugin-runtime ${instance.state === 'running' ? 'live' : ''}`}>{runtimeLabels[instance.state] || instance.state}</span></td></tr>
       })}</tbody></table></div>}
       <div className="plugin-deploy-footer"><div><p role="status">将部署 {eligible.length} 个实例，跳过 {selected.length - eligible.length} 个已锁定实例。</p><small>首个实例：{eligible[0]?.name || '—'}；首个失败会回滚并停止后续部署。</small></div><button className="button primary" disabled={loading || busy || active || !eligible.length}>{busy ? '处理中…' : '统一安装 / 升级'}</button></div>
-    </form>
-    <section className="plugin-card plugin-history" aria-label="部署记录"><div className="plugin-card-heading"><div><h2>部署记录</h2><p>查看每次部署结果，已结束的记录可删除。</p></div><div className="plugin-history-actions"><span className="plugin-badge neutral">{jobs.length} 条记录</span><button type="button" className="button ghost plugin-history-toggle" aria-expanded={historyExpanded} aria-controls="plugin-history-content" onClick={() => setHistoryExpanded(expanded => !expanded)}>{historyExpanded ? '折叠' : '展开'}</button></div></div>
+    </form></div>
+    <section className="plugin-card plugin-history" aria-label="部署记录"><div className="plugin-card-heading"><div><h2>部署记录</h2><p>查看每次部署结果，已结束的记录可删除。</p></div><div className="plugin-history-actions"><span className="plugin-badge neutral">{jobs.length} 条记录</span><button type="button" className="button ghost plugin-history-toggle" disabled={busy || !jobs.some(finished)} onClick={() => void clearRecords()}>清空已结束记录</button><button type="button" className="button ghost plugin-history-toggle" aria-expanded={historyExpanded} aria-controls="plugin-history-content" onClick={() => setHistoryExpanded(expanded => !expanded)}>{historyExpanded ? '折叠' : '展开'}</button></div></div>
       <div id="plugin-history-content" hidden={!historyExpanded}>
       {!jobs.length ? <div className="plugin-empty">{loading ? '正在读取记录…' : '暂无部署记录'}</div> : <div className="plugin-job-list">{jobs.map(job => <article className="plugin-job" key={job.id}>
         <div className="plugin-job-heading"><div><strong>{inventory.catalog.find(item => item.id === job.plugin)?.name || job.plugin}</strong><span className="plugin-version">{job.version || 'latest'}</span><span className={`plugin-badge ${tone(job.state)}`}>{labels[job.state] || job.state}</span></div><button className="button ghost plugin-record-delete" type="button" disabled={busy || !finished(job)} title={!finished(job) ? '运行中或待恢复的记录无法删除' : '删除此部署记录'} aria-label={`删除部署记录 ${job.id}`} onClick={() => { setError(''); setDeleteTarget(job) }}>删除记录</button></div>

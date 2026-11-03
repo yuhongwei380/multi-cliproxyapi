@@ -75,3 +75,8 @@
 
 .plugin-field .dropdown-picker { width: 100%; }
 .plugin-field .dropdown-trigger { height: 42px; border-radius: 8px; font-size: 13px; font-weight: 450; }
+
+.version-plugin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 20px; }
+.version-plugin-grid > * { min-width: 0; }
+.version-plugin-grid .version-heading { flex-wrap: wrap; }
+@media (max-width: 1100px) { .version-plugin-grid { grid-template-columns: 1fr; } }

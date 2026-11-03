@@ -4,7 +4,7 @@ import { PluginPanel } from './PluginPanel'
 import { api } from './api'
 vi.mock('./api', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
-test('themed plugin picker supports keyboard selection and unchecked deployment', async () => {
+test('themed plugin picker supports keyboard selection and forced enablement', async () => {
   vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [] } : { catalog: [{ id: 'cpa-key-billing', name: 'Key Billing', repository: 'haowang02/cpa-plugin-key-billing' }, { id: 'other', name: 'Other', repository: 'demo/other' }], instances: [{ id: 'one', name: '实例一', locked: false, state: 'running', plugins: [] }] })
   render(<PluginPanel />)
   fireEvent.click(await screen.findByLabelText('选择 实例一'))
@@ -14,9 +14,10 @@ test('themed plugin picker supports keyboard selection and unchecked deployment'
   fireEvent.keyDown(screen.getByRole('option', { name: 'Key Billing' }), { key: 'End' })
   fireEvent.click(screen.getByRole('option', { name: 'Other' }))
   expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
-  expect(screen.getByLabelText('安装后启用')).not.toBeChecked()
+  expect(screen.getByLabelText('安装后启用')).toBeChecked()
+  expect(screen.getByLabelText('安装后启用')).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: '统一安装 / 升级' }))
-  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/deploy', { plugin: 'other', version: '', instances: ['one'], enable: false }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/deploy', { plugin: 'other', version: '', instances: ['one'], enable: true }))
 })
 test('shows locked skips, submits selected instances and explicit enable option', async () => {
   vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [] } : { catalog: [{ id: 'cpa-key-billing', name: 'Key Billing', repository: 'haowang02/cpa-plugin-key-billing' }], instances: [
@@ -77,4 +78,14 @@ test('running and blocked records cannot be deleted, and failure keeps the recor
   expect(await screen.findByRole('alert')).toHaveTextContent('删除失败，请重试')
   expect(screen.getByRole('dialog')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '删除部署记录 failed' })).toBeInTheDocument()
+})
+
+test('clears finished deployment records with one click', async () => {
+  let items = [{ id: 'done', plugin: 'p', version: '', state: 'completed', message: '', results: [] }]
+  vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items } : { catalog: [], instances: [] })
+  vi.mocked(api.delete).mockImplementation(async () => { items = []; return { deleted: 1 } })
+  render(<PluginPanel />)
+  fireEvent.click(await screen.findByRole('button', { name: '清空已结束记录' }))
+  await waitFor(() => expect(api.delete).toHaveBeenCalledWith('/plugins/jobs'))
+  expect(await screen.findByText('暂无部署记录')).toBeInTheDocument()
 })

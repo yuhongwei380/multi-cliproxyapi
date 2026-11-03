@@ -13,6 +13,17 @@ test('Codex accepts a missing additional quota list', () => {
   assert.equal(values[0].remaining, 75)
 })
 
+test('Codex preserves credit balances and availability without inventing a percentage', () => {
+  const credit = credits => parseProviderQuota('codex', { credits })[0]
+  assert.deepEqual(credit({ has_credits: true, unlimited: false, balance: '12.50' }), { name: 'Codex 积分', remaining: 12.5, unit: '积分' })
+  assert.equal(credit({ balance: '0' }).remaining, 0)
+  assert.equal(credit({ unlimited: true, balance: null }).credit_status, 'unlimited')
+  assert.equal(credit({ has_credits: true, balance: null }).credit_status, 'available')
+  assert.equal(credit({ has_credits: false, balance: null }).credit_status, 'unavailable')
+  assert.throws(() => credit({ balance: 'invalid' }))
+  assert.equal(parseProviderQuota('codex', { rate_limit: { primary_window: { used_percent: 20 } }, credits: { balance: 'invalid' } }).length, 1)
+})
+
 test('Codex uses the real CPA api-call contract and preserves exactly zero remaining', async () => {
   let request
   const server = http.createServer(async (incoming, response) => {

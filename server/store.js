@@ -452,6 +452,9 @@ export class Store {
   clearUpgradeState() { this.db.prepare('DELETE FROM upgrade_state WHERE id=?').run('singleton') }
   savePluginJob(job) { this.db.prepare('INSERT INTO plugin_jobs(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(job.id, json(job)) }
   listPluginJobs() { return this.db.prepare('SELECT payload FROM plugin_jobs ORDER BY rowid DESC LIMIT 100').all().map(row => parse(row.payload, {})) }
+  clearFinishedPluginJobs() {
+    return Number(this.db.prepare("DELETE FROM plugin_jobs WHERE json_extract(payload, '$.state') IN ('completed','failed')").run().changes)
+  }
   deletePluginJob(id) {
     const result = this.db.prepare("DELETE FROM plugin_jobs WHERE id=? AND json_extract(payload, '$.state') IN ('completed','failed')").run(id)
     if (Number(result.changes) === 1) return

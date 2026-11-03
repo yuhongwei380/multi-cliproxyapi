@@ -25,29 +25,11 @@ test('creates a server generated key with a persisted note, or a securely genera
   expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toMatch(/^sk-[A-Za-z0-9]{48}$/)
 })
 
-test('revealing a key updates only the row without reloading the module', async () => {
-  await setup(); vi.mocked(api.post).mockResolvedValue({ key: 'sk-test-secret' })
-  await screen.findByRole('button', { name: '显示' })
-  expect(api.get).toHaveBeenCalledTimes(2)
-  fireEvent.click(screen.getByRole('button', { name: '显示' }))
-  expect(await screen.findByText('sk-test-secret')).toBeInTheDocument()
-  expect(api.get).toHaveBeenCalledTimes(2)
-  fireEvent.click(screen.getByRole('button', { name: '隐藏' }))
-  expect(screen.getByText('sk-…1234')).toBeInTheDocument()
-  expect(api.get).toHaveBeenCalledTimes(2)
-})
-
-test('revealing a key does not flash or disable unrelated key actions', async () => {
+test('shows only a masked key and keeps copying available', async () => {
   await setup()
-  let resolveReveal!: (value: { key: string }) => void
-  vi.mocked(api.post).mockImplementation(() => new Promise(resolve => { resolveReveal = resolve }) as any)
-  const show = await screen.findByRole('button', { name: '显示' })
-  fireEvent.click(show)
-  expect(show).toBeDisabled()
-  expect(screen.getByRole('button', { name: '创建 Key' })).toBeEnabled()
-  expect(screen.getByRole('button', { name: '删除' })).toBeEnabled()
-  resolveReveal({ key: 'sk-test-secret' })
-  expect(await screen.findByText('sk-test-secret')).toBeInTheDocument()
+  expect(screen.getByText('sk-…1234')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '显示' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '复制' })).toBeInTheDocument()
 })
 
 test('searches API key notes and shows only matching rows', async () => {
@@ -187,19 +169,11 @@ test('creates a named group with selected keys and edits its membership', async 
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/key-groups/work/update', { name: '新组名', key_ids: ['other'] }))
 })
 
-test('moves an individual key to a group and creates keys directly in that group', async () => {
+test('assigns keys only through group editing', async () => {
   await setup([key], [{ id: 'work', name: '工作组' }])
-  fireEvent.click(screen.getByRole('button', { name: '分组' }))
-  fireEvent.click(screen.getByRole('combobox', { name: /所属分组/ }))
-  fireEvent.click(screen.getByRole('option', { name: '工作组' }))
-  fireEvent.click(screen.getByRole('button', { name: '保存' }))
-  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys/key-one/group', { group_id: 'work' }))
-  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  expect(screen.queryByRole('button', { name: '分组' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '创建 Key' }))
-  fireEvent.click(screen.getByRole('combobox', { name: /所属分组/ }))
-  fireEvent.click(screen.getByRole('option', { name: '工作组' }))
-  fireEvent.click(screen.getByRole('button', { name: '保存' }))
-  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/keys', { note: '', group_id: 'work' }))
+  expect(screen.queryByText('所属分组')).not.toBeInTheDocument()
 })
 
 test('group deployment selects target instances, reports partial failures, and blocks locked binding changes', async () => {

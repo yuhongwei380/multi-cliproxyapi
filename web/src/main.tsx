@@ -42,7 +42,7 @@ const MODULE_LABELS: Record<Module, string> = {
   instances: 'CLIProxyAPI 实例管理',
   quotas: '额度观察',
   'quota-notifications': '定时额度通知',
-  versions: '版本管理',
+  versions: '版本与插件管理',
   plugins: '插件管理',
   keys: 'API Key 管理',
   'runtime-logs': '运行日志',
@@ -54,7 +54,7 @@ const MAX_LOGO_BYTES = 256 * 1024
 
 function moduleFromHash(hash: string): Module {
   if (hash === '#keys') return 'keys'
-  if (hash === '#plugins') return 'plugins'
+  if (hash === '#plugins') return 'versions'
   const value = hash.replace(/^#/, '')
   if (value === 'instances' || value === 'quotas' || value === 'quota-notifications' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
   return 'overview'
@@ -330,8 +330,7 @@ function App() {
       <nav className="sidebar-nav">
         <NavigationLink module="instances" activeModule={activeModule} onNavigate={navigate} icon="◈" ariaLabel="CLIProxyAPI 实例管理（实例运行轨）">CLIProxyAPI 实例管理<span className="nav-count">{instances.length}</span></NavigationLink>
         <NavigationLink module="quotas" activeModule={activeModule} onNavigate={navigate} icon="◌">额度观察</NavigationLink>
-        <NavigationLink module="versions" activeModule={activeModule} onNavigate={navigate} icon="↥">版本管理</NavigationLink>
-        <NavigationLink module="plugins" activeModule={activeModule} onNavigate={navigate} icon="◇">插件管理</NavigationLink>
+        <NavigationLink module="versions" activeModule={activeModule} onNavigate={navigate} icon="↥">版本与插件管理</NavigationLink>
         <NavigationLink module="keys" activeModule={activeModule} onNavigate={navigate} icon="⚿">API Key 管理</NavigationLink>
       </nav>
       <div className="sidebar-caption nav-section-caption">观测</div>
@@ -365,9 +364,8 @@ function App() {
         {activeModule === 'instances' && <InstanceManagement instances={instances} quotas={quotas} loading={loading} instanceBusy={instanceBusy} onCreate={() => { setModal('create'); setError('') }} onRefresh={load} onAction={act} onDelete={beginDelete} onConfigure={instance => { setEditTarget(instance); setModal('edit'); setError('') }} />}
         {activeModule === 'quotas' && <QuotaObservation instances={instances} quotas={quotas} busy={busy} instanceBusy={instanceBusy} onRefreshAll={refreshAllQuotas} onRefreshInstance={instance => act(instance, 'quotas')} onCreate={() => { setModal('create'); setError('') }} onNavigate={navigate} />}
         {activeModule === 'quota-notifications' && <QuotaNotificationModule instances={instances} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} notificationSettings={quotaNotificationSettings} notificationSettingsLoaded={quotaNotificationSettingsLoaded} notificationSettingsLoading={quotaNotificationSettingsLoading} notificationSettingsError={quotaNotificationSettingsError} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} onNotificationSaved={saveQuotaNotificationSettings} onNotificationError={message => { setQuotaNotificationSettingsError(message); setError(message) }} onRefresh={() => { void loadQuotaSettings(); void loadQuotaNotificationSettings() }} />}
-        {activeModule === 'versions' && <section className="module-pane versions-module"><VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} /></section>}
+        {activeModule === 'versions' && <PluginPanel versionPanel={<VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} />} />}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
-        {activeModule === 'plugins' && <PluginPanel />}
         {activeModule === 'keys' && <KeyPanel />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
@@ -418,7 +416,7 @@ function Overview({ branding, instances, quotas, versions, upgradeState, loading
 }
 
 function InstanceManagement({ instances, quotas, loading, instanceBusy, onCreate, onRefresh, onAction, onDelete, onConfigure }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; loading: boolean; instanceBusy: Record<string, string>; onCreate: () => void; onRefresh: () => void; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
-  return <section className="module-pane instances-module"><section className="section-heading module-heading"><div><div className="eyebrow">CLIPROXYAPI INSTANCES</div><h1>CLIProxyAPI 实例管理</h1><p>创建、停止、重启和配置独立的 CLIProxyAPI 子实例。</p></div><div className="section-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><button className="button ghost" onClick={onRefresh}>重新同步</button></div></section>{loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}</section>
+  return <section className="module-pane instances-module"><section className="section-heading module-heading"><div><div className="eyebrow">CLIPROXYAPI INSTANCES</div><h1>CLIProxyAPI 实例管理</h1><p>创建、停止、重启和配置独立的 CLIProxyAPI 子实例。</p></div><div className="section-actions"><button className="button primary" onClick={onCreate}>+ 创建实例</button><button className="button ghost" onClick={onRefresh}>重新同步</button></div></section>{loading && instances.length === 0 ? <LoadingState label="正在同步实例…" /> : instances.length === 0 ? <EmptyState onCreate={onCreate} /> : <div className="instance-list">{instances.map(instance => <InstanceCard compact key={instance.id} instance={instance} quotas={quotas[instance.id] ?? []} instanceBusy={instanceBusy} onAction={onAction} onDelete={onDelete} onConfigure={onConfigure} />)}</div>}</section>
 }
 
 function QuotaObservation({ instances, quotas, busy, instanceBusy, onRefreshAll, onRefreshInstance, onCreate, onNavigate }: { instances: Instance[]; quotas: Record<string, QuotaSnapshot[]>; busy: string | null; instanceBusy: Record<string, string>; onRefreshAll: () => void; onRefreshInstance: (instance: Instance) => void; onCreate: () => void; onNavigate: (module: Module) => void }) {
@@ -829,7 +827,7 @@ function upgradeStateLabel(state: string) {
   return ({ prepared: '准备中', 'stopping-old': '停止旧版本', 'old-stopped': '旧版本已停止', 'starting-new': '启动新版本', committed: '已完成', 'restoring-old': '正在回滚', 'rolled-back': '已回滚', blocked: '回滚受阻' } as Record<string, string>)[state] ?? state
 }
 
-function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure }: { instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
+function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onConfigure, compact = false }: { compact?: boolean; instance: Instance; quotas: QuotaSnapshot[]; instanceBusy: Record<string, string>; onAction: (instance: Instance, action: 'start' | 'stop' | 'restart' | 'quotas' | 'lock' | 'unlock' | 'backup') => void; onDelete: (instance: Instance) => void; onConfigure: (instance: Instance) => void }) {
   const running = instance.status?.ready
   const actualState = instance.status?.state ?? 'unknown'
   const actualActive = ['running', 'starting', 'stopping'].includes(actualState)
@@ -869,11 +867,11 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
       <button type="button" className="button danger" disabled={actionBusy || !running || instance.locked} onClick={() => onAction(instance, 'stop')}>停止</button>
       <button type="button" className="button danger delete-instance" disabled={actionBusy || instance.locked} onClick={() => onDelete(instance)}>删除</button>
     </div>
-    <div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div>
+    {!compact && <div className="current-state" aria-label={`${instance.name} 当前状态`}><span className={'current-state-indicator ' + (actualActive ? 'active' : '')} /><span className="current-state-label">当前状态</span><b>{stateLabel(actualState)}</b></div>}
     <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>额度观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
-    <div className="card-status"><span className={instance.status?.management_ready ? 'ready-text' : 'muted-text'}>{instance.status?.management_ready ? '管理接口已就绪' : running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>
+    {!instance.status?.management_ready && <div className="card-status"><span className="muted-text">{running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>}
     {instance.backup && <div className="card-status"><span className="muted-text">{instance.backup.automatic ? '升级前自动备份' : '手动备份'} · 来源：{instance.backup.source_name}{instance.backup.reason && ` · ${instance.backup.reason}`} · {new Date(instance.backup.created_at).toLocaleString('zh-CN', { hour12: false })}</span></div>}
-    <QuotaDetails quotas={quotas} />
+    {!compact && <QuotaDetails quotas={quotas} />}
   </article>
 }
 
@@ -887,6 +885,7 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
     { name: '5 小时限额', title: '5h额度', label: '5 小时额度剩余' },
     { name: '周限额', title: '周额度', label: '周额度剩余' },
     { name: '月限额', title: '月额度', label: '月额度剩余' },
+    { name: 'Codex 积分', title: 'Codex 积分', label: 'Codex 积分余额' },
   ]
   const availableColumns = windowColumns.filter(column => quotas.some(quota => quota.values?.some(value => value.name === column.name)))
   const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)
@@ -907,7 +906,7 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
 
 function QuotaSummaryValue({ value, status, label }: { value?: QuotaValue; status: QuotaSnapshot['status']; label: string }) {
   const percent = value ? quotaPercent(value) : null
-  return <div className="quota-summary-value"><strong>{value ? formatQuotaValue(value) : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}{value && <QuotaResetTime resetAt={value.reset_at} compact />}</div>
+  return <div className="quota-summary-value"><strong>{value ? formatQuotaValue(value) : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}{value && value.unit !== '积分' && <QuotaResetTime resetAt={value.reset_at} compact />}</div>
 }
 
 function QuotaResetTime({ resetAt, compact = false }: { resetAt?: string; compact?: boolean }) {
@@ -964,7 +963,7 @@ function QuotaWindow({ value }: { value: QuotaValue }) {
   const percent = quotaPercent(value)
   const tone = percent === null ? '' : percent <= 20 ? ' low' : percent < 60 ? ' warning' : ' healthy'
   const label = value.name || '默认窗口'
-  return <div className="quota-window"><div className="quota-window-title">{label}</div><div className="quota-window-meta"><strong>{formatQuotaValue(value)}</strong><QuotaResetTime resetAt={value.reset_at} /></div>{percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={`${label} 剩余配额`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
+  return <div className="quota-window"><div className="quota-window-title">{label}</div><div className="quota-window-meta"><strong>{formatQuotaValue(value)}</strong>{value.unit !== '积分' && <QuotaResetTime resetAt={value.reset_at} />}</div>{percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={`${label} 剩余配额`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
 }
 
 function quotaStatusLabel(status: string) {
@@ -972,6 +971,9 @@ function quotaStatusLabel(status: string) {
 }
 
 function formatQuotaValue(value: QuotaValue) {
+  if (value.credit_status === 'unlimited') return '无限积分'
+  if (value.credit_status === 'available') return '有积分（余额未提供）'
+  if (value.credit_status === 'unavailable') return '无可用积分'
   const number = (item: number | undefined) => item === undefined ? '' : new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(item)
   const unit = value.unit ? ' ' + value.unit : ''
   if (value.unit === '%' && value.remaining !== undefined) return number(value.remaining) + '%'

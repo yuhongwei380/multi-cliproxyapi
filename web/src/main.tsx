@@ -10,7 +10,7 @@ import { PluginPanel } from './PluginPanel'
 import { KeyPanel } from './KeyPanel'
 
 type Modal = 'create' | 'backup' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
-type Module = 'overview' | 'instances' | 'quotas' | 'quota-notifications' | 'versions' | 'plugins' | 'keys' | 'runtime-logs' | 'audit-logs'
+type Module = 'overview' | 'instances' | 'quotas' | 'quota-notifications' | 'versions' | 'plugins' | 'keys' | 'key-groups' | 'runtime-logs' | 'audit-logs'
 
 const DEFAULT_QUOTA_SETTINGS: QuotaSettings = {
   instance_ids: [],
@@ -45,6 +45,7 @@ const MODULE_LABELS: Record<Module, string> = {
   versions: '版本与插件管理',
   plugins: '插件管理',
   keys: 'API Key 管理',
+  'key-groups': '组管理',
   'runtime-logs': '运行日志',
   'audit-logs': '审计日志'
 }
@@ -54,6 +55,7 @@ const MAX_LOGO_BYTES = 256 * 1024
 
 function moduleFromHash(hash: string): Module {
   if (hash === '#keys') return 'keys'
+  if (hash === '#key-groups') return 'key-groups'
   if (hash === '#plugins') return 'versions'
   const value = hash.replace(/^#/, '')
   if (value === 'instances' || value === 'quotas' || value === 'quota-notifications' || value === 'versions' || value === 'runtime-logs' || value === 'audit-logs') return value
@@ -331,7 +333,7 @@ function App() {
         <NavigationLink module="instances" activeModule={activeModule} onNavigate={navigate} icon="◈" ariaLabel="CLIProxyAPI 实例管理（实例运行轨）">CLIProxyAPI 实例管理<span className="nav-count">{instances.length}</span></NavigationLink>
         <NavigationLink module="quotas" activeModule={activeModule} onNavigate={navigate} icon="◌">额度观察</NavigationLink>
         <NavigationLink module="versions" activeModule={activeModule} onNavigate={navigate} icon="↥">版本与插件管理</NavigationLink>
-        <NavigationLink module="keys" activeModule={activeModule} onNavigate={navigate} icon="⚿">API Key 管理</NavigationLink>
+        <NavigationLink module="keys" activeModule={activeModule === 'key-groups' ? 'keys' : activeModule} onNavigate={navigate} icon="⚿">API Key 管理</NavigationLink>
       </nav>
       <div className="sidebar-caption nav-section-caption">观测</div>
       <nav className="sidebar-nav">
@@ -366,7 +368,7 @@ function App() {
         {activeModule === 'quota-notifications' && <QuotaNotificationModule instances={instances} settings={quotaSettings ?? DEFAULT_QUOTA_SETTINGS} settingsLoaded={quotaSettingsLoaded} settingsLoading={quotaSettingsLoading} settingsError={quotaSettingsError} notificationSettings={quotaNotificationSettings} notificationSettingsLoaded={quotaNotificationSettingsLoaded} notificationSettingsLoading={quotaNotificationSettingsLoading} notificationSettingsError={quotaNotificationSettingsError} onSettingsSaved={saveQuotaSettings} onSettingsError={message => { setQuotaSettingsError(message); setError(message) }} onNotificationSaved={saveQuotaNotificationSettings} onNotificationError={message => { setQuotaNotificationSettingsError(message); setError(message) }} onRefresh={() => { void loadQuotaSettings(); void loadQuotaNotificationSettings() }} />}
         {activeModule === 'versions' && <PluginPanel versionPanel={<VersionPanel versions={versions} instances={instances} upgradeState={upgradeState} busy={busy} onInstall={installVersion} onUpgrade={upgradeVersion} onRecover={recoverUpgrade} onUninstall={beginUninstall} />} />}
         {activeModule === 'runtime-logs' && <LogPage kind="runtime" instances={instances} />}
-        {activeModule === 'keys' && <KeyPanel />}
+        {(activeModule === 'keys' || activeModule === 'key-groups') && <KeyPanel key={activeModule} page={activeModule === 'keys' ? 'keys' : 'groups'} />}
         {activeModule === 'audit-logs' && <LogPage kind="audit" instances={instances} />}
       </main>
       <footer className="content-copyright" aria-label="版权信息"><span>{branding.copyright}</span><span className="content-version">v{APP_VERSION}</span></footer>
@@ -871,11 +873,11 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
     <div className="card-meta"><div><span>版本</span><strong>{instance.version || '未安装'}</strong></div><div><span>额度观察</span><strong className={quotas.some(q => q.status === 'failed' || q.status === 'stale') ? 'warn-text' : ''}>{quotaLabel}</strong></div></div>
     {!instance.status?.management_ready && <div className="card-status"><span className="muted-text">{running ? (instance.status?.management_message || '管理接口未验证') : '实例未运行'}</span></div>}
     {instance.backup && <div className="card-status"><span className="muted-text">{instance.backup.automatic ? '升级前自动备份' : '手动备份'} · 来源：{instance.backup.source_name}{instance.backup.reason && ` · ${instance.backup.reason}`} · {new Date(instance.backup.created_at).toLocaleString('zh-CN', { hour12: false })}</span></div>}
-    {!compact && <QuotaDetails quotas={quotas} />}
+    <QuotaDetails quotas={quotas} showDetailButton={!compact} />
   </article>
 }
 
-function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
+function QuotaDetails({ quotas, showDetailButton = true }: { quotas: QuotaSnapshot[]; showDetailButton?: boolean }) {
   const [showDetails, setShowDetails] = useState(false)
   const summary = useRef<HTMLElement>(null)
   const closeDetails = () => { setShowDetails(false); queueMicrotask(() => summary.current?.querySelector('button')?.focus()) }
@@ -891,7 +893,7 @@ function QuotaDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)
   const gridStyle = { gridTemplateColumns: columns.length > 2 ? `repeat(${columns.length}, minmax(0, 1fr))` : `minmax(0, 1fr) repeat(${columns.length}, 88px)` }
   return <section ref={summary} className={'quota-summary' + (columns.length > 2 ? ' has-many-windows' : '')}>
-    <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong><button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button></div>
+    <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong>{showDetailButton && <button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button>}</div>
     <div className="quota-summary-columns" style={gridStyle}><span>账户</span>{columns.map(column => <span key={column.name}>{column.title}</span>)}</div>
     {quotas.map(quota => {
       const label = quota.account_id === '__discovery__' ? 'OAuth 账户' : quota.account_id

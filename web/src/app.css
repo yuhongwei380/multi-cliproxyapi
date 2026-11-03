@@ -1570,3 +1570,10 @@ body { background: var(--bg-secondary); }
   .quota-notifications-module .quota-settings-panel { padding: 12px 12px 11px; }
   .quota-notifications-module .notification-work-hours small { flex-basis: 100%; }
 }
+
+/* All workspaces share the same full-width content edge as instance and quota pages. */
+.dashboard-content { width: 100%; padding-inline: 24px; }
+.dashboard-content > .module-pane { width: 100%; min-width: 0; }
+@media (max-width: 760px) { .dashboard-content { padding-inline: 18px; } }
+
+@media (max-width: 760px) { .dashboard-content:has(.instances-module), .dashboard-content:has(.quotas-module) { padding-inline: 18px; } }

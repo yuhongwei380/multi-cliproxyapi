@@ -7,12 +7,14 @@ afterEach(() => { cleanup(); vi.resetAllMocks() })
 
 const key = { id: 'key-one', note: '测试', masked_key: 'sk-…1234', locked: false, deleting: false, bindings: [{ instance_id: 'one', instance_name: 'CPA 一', instance_port: 8317, status: 'deployed', message: '' }] }
 type TestKey = typeof key & { group_id?: string | null }
-async function setup(items: TestKey[] = [key], groups: { id: string; name: string }[] = [], expand = true) {
+async function setup(items: TestKey[] = [key], groups: { id: string; name: string }[] = [], expand = true, page: 'keys' | 'groups' = 'keys') {
   vi.mocked(api.get).mockImplementation(async path => path === '/keys' ? { items, groups } : { items: [{ id: 'one', name: 'CPA 一', port: 8317, status: { state: 'running' } }, { id: 'two', name: 'CPA 二', port: 8318, status: { state: 'stopped' }, locked: true }] })
   vi.mocked(api.post).mockResolvedValue({})
-  render(<KeyPanel />)
-  const toggle = await screen.findByRole('button', { name: /^未分组/ })
-  if (expand && toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+  render(<KeyPanel page={page} />)
+  if (page === 'groups') {
+    const toggle = await screen.findByRole('button', { name: /^未分组/ })
+    if (expand && toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+  } else await screen.findByRole('button', { name: '创建 Key' })
 }
 
 test('creates a server generated key with a persisted note, or a securely generated manual value', async () => {
@@ -122,7 +124,7 @@ test('instance filters include multi-bound keys and allow returning to all or un
 })
 
 test('shows collapsed groups by default and assigns keys without a group to ungrouped', async () => {
-  await setup([key, { ...key, id: 'grouped', note: '组内 Key', group_id: 'production' }], [{ id: 'production', name: '生产组' }], false)
+  await setup([key, { ...key, id: 'grouped', note: '组内 Key', group_id: 'production' }], [{ id: 'production', name: '生产组' }], false, 'groups')
   const production = within(screen.getByRole('region', { name: '生产组' }))
   expect(production.getByRole('button', { name: '生产组1 个 Key' })).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByRole('heading', { name: '组内 Key' })).not.toBeInTheDocument()
@@ -134,7 +136,7 @@ test('shows collapsed groups by default and assigns keys without a group to ungr
 })
 
 test('search opens matching groups while allowing them to be collapsed and combines with instance filters', async () => {
-  await setup([{ ...key, note: '生产 Key', group_id: 'work' }, { ...key, id: 'other', note: '生产备用', bindings: [] }], [{ id: 'work', name: '工作组' }], false)
+  await setup([{ ...key, note: '生产 Key', group_id: 'work' }, { ...key, id: 'other', note: '生产备用', bindings: [] }], [{ id: 'work', name: '工作组' }], false, 'groups')
   fireEvent.change(screen.getByLabelText('搜索 API Key 备注'), { target: { value: '生产' } })
   expect(screen.getByRole('heading', { name: '生产 Key' })).toBeInTheDocument()
   const toggle = screen.getByRole('button', { name: '工作组1 个 Key' })
@@ -147,7 +149,7 @@ test('search opens matching groups while allowing them to be collapsed and combi
 })
 
 test('creates a named group with selected keys and edits its membership', async () => {
-  await setup([key, { ...key, id: 'locked', note: '锁定 Key', locked: true }])
+  await setup([key, { ...key, id: 'locked', note: '锁定 Key', locked: true }], [], true, 'groups')
   fireEvent.click(screen.getByRole('button', { name: '新建组' }))
   const dialog = within(screen.getByRole('dialog'))
   expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled()
@@ -158,7 +160,7 @@ test('creates a named group with selected keys and edits its membership', async 
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/key-groups', { name: '工作组', key_ids: ['key-one'] }))
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   cleanup()
-  await setup([{ ...key, group_id: 'work' }, { ...key, id: 'other', note: '另一个 Key', group_id: 'other-group' }], [{ id: 'work', name: '工作组' }, { id: 'other-group', name: '其他组' }])
+  await setup([{ ...key, group_id: 'work' }, { ...key, id: 'other', note: '另一个 Key', group_id: 'other-group' }], [{ id: 'work', name: '工作组' }, { id: 'other-group', name: '其他组' }], true, 'groups')
   fireEvent.click(within(screen.getByRole('region', { name: '工作组' })).getByRole('button', { name: '编辑组' }))
   const edit = within(screen.getByRole('dialog'))
   expect(edit.getByRole('checkbox', { name: /^测试/ })).toBeChecked()
@@ -177,7 +179,7 @@ test('assigns keys only through group editing', async () => {
 })
 
 test('group deployment selects target instances, reports partial failures, and blocks locked binding changes', async () => {
-  await setup([{ ...key, group_id: 'work' }], [{ id: 'work', name: '工作组' }], false)
+  await setup([{ ...key, group_id: 'work' }], [{ id: 'work', name: '工作组' }], false, 'groups')
   vi.mocked(api.post).mockResolvedValue({ results: [{ key_id: key.id, instance_id: 'one', status: 'failed' }] })
   fireEvent.click(within(screen.getByRole('region', { name: '工作组' })).getByRole('button', { name: '批量下发' }))
   const dialog = within(screen.getByRole('dialog'))
@@ -188,7 +190,7 @@ test('group deployment selects target instances, reports partial failures, and b
   expect(await screen.findByRole('status')).toHaveTextContent('0 项成功，1 项失败')
   expect(screen.getByRole('heading', { name: '测试' })).toBeInTheDocument()
   cleanup()
-  await setup([{ ...key, group_id: 'work', locked: true, bindings: [] }], [{ id: 'work', name: '工作组' }], false)
+  await setup([{ ...key, group_id: 'work', locked: true, bindings: [] }], [{ id: 'work', name: '工作组' }], false, 'groups')
   fireEvent.click(within(screen.getByRole('region', { name: '工作组' })).getByRole('button', { name: '批量下发' }))
   expect(screen.getByRole('button', { name: '确认下发' })).toBeDisabled()
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /CPA 一/ }))
@@ -197,7 +199,7 @@ test('group deployment selects target instances, reports partial failures, and b
 })
 
 test('deleting a group confirms that keys return to ungrouped and leaves key records intact', async () => {
-  await setup([{ ...key, group_id: 'work' }], [{ id: 'work', name: '工作组' }], false)
+  await setup([{ ...key, group_id: 'work' }], [{ id: 'work', name: '工作组' }], false, 'groups')
   fireEvent.click(screen.getByRole('button', { name: '删除组' }))
   expect(within(screen.getByRole('dialog')).getByText(/1 个 Key 将归入/)).toBeInTheDocument()
   expect(api.post).not.toHaveBeenCalled()

@@ -34,6 +34,32 @@ test('administrator settings load and save independent instance limits and retai
   expect(fetchMock).toHaveBeenCalledWith('/api/instance-limits', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ max_instances: 5, max_backups: 20 }) }))
 })
 
+test('API Key and group management are separate addressable subpages', async () => {
+  window.location.hash = '#keys'
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const route = String(input)
+    if (route === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (route === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    if (route === '/api/keys') return response({ items: [{ id: 'key-1', note: '测试 Key', masked_key: 'sk-1234567…', group_id: 'work', locked: false, deleting: false, bindings: [] }], groups: [{ id: 'work', name: '工作组' }] }) as any
+    return response({ items: [] }) as any
+  })
+  const user = userEvent.setup(); const view = render(<App />)
+  expect(await screen.findByRole('heading', { name: 'API Key 管理' })).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: '测试 Key' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '新建组' })).not.toBeInTheDocument()
+  await user.click(within(screen.getByRole('navigation', { name: 'API Key 子页面' })).getByRole('link', { name: '组管理' }))
+  expect(await screen.findByRole('heading', { name: '组管理' })).toBeInTheDocument()
+  expect(window.location.hash).toBe('#key-groups')
+  expect(await screen.findByRole('region', { name: '工作组' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '创建 Key' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'API Key 管理', current: 'page' })).toHaveAttribute('href', '#keys')
+  await user.click(within(screen.getByRole('navigation', { name: 'API Key 子页面' })).getByRole('link', { name: 'API Key 管理' }))
+  expect(await screen.findByRole('heading', { name: 'API Key 管理' })).toBeInTheDocument()
+  expect(window.location.hash).toBe('#keys')
+  view.unmount(); window.location.hash = '#key-groups'; render(<App />)
+  expect(await screen.findByRole('heading', { name: '组管理' })).toBeInTheDocument()
+})
+
 test('requires login before showing instance cards', async () => {
   const fetchMock = vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: false }) as any)
@@ -178,6 +204,12 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   const instancesIndex = links.findIndex(link => link.getAttribute('href') === '#instances')
   expect(links[instancesIndex + 1]).toHaveTextContent('额度观察')
   expect(screen.queryByRole('link', { name: '配额观察' })).not.toBeInTheDocument()
+  await userEvent.setup().click(within(quotaDialog).getByRole('button', { name: '关闭' }))
+  await userEvent.setup().click(screen.getByRole('link', { name: /CLIProxyAPI 实例管理/ }))
+  expect(screen.queryByRole('button', { name: '额度详情' })).not.toBeInTheDocument()
+  expect(screen.getByText('oauth-1')).toBeInTheDocument()
+  expect(screen.getByRole('progressbar', { name: 'oauth-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '31')
+  expect(document.querySelector('.quota-summary-reset time')).toHaveAttribute('datetime', '2030-09-19T08:09:00Z')
 })
 
 test('keeps reset times attached to their accounts and windows in cards, dialogs and quota observation', async () => {

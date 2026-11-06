@@ -1,14 +1,17 @@
-import { InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
+import { CSSProperties, InputHTMLAttributes, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createPortal } from 'react-dom'
 import webPackage from '../package.json'
 import { api, AuditLog, BrandingSettings, Instance, QuotaNotificationSettings, QuotaSettings, QuotaSnapshot, QuotaValue, RuntimeLog, UpgradeState, VersionInstall } from './api'
 import './app.css'
 import './management-link.css'
+import './quota-observation.css'
+import './instance-quota.css'
 import { Dropdown, DropdownOption, MultiSelect } from './Dropdown'
 import { PluginPanel } from './PluginPanel'
 import { KeyPanel } from './KeyPanel'
 import { SubscriptionSync } from './SubscriptionSync'
+import { quotaAccountLabel } from './account-label'
 
 type Modal = 'create' | 'backup' | 'delete' | 'edit' | 'unlock' | 'uninstall-version' | 'admin-settings' | null
 type Module = 'overview' | 'instances' | 'quotas' | 'quota-notifications' | 'versions' | 'plugins' | 'keys' | 'key-groups' | 'runtime-logs' | 'audit-logs'
@@ -854,7 +857,7 @@ function InstanceCard({ instance, quotas, instanceBusy, onAction, onDelete, onCo
         <span className={'status-orb ' + (running ? 'live' : '')} />
         <div className="instance-title-copy">
           <h3>{instance.name}{instance.locked && <span className="state-pill">已锁定</span>}</h3>
-          <p className="instance-endpoint"><span className="instance-port">端口 {instance.port}</span><span className="instance-id">实例 ID {instance.id}</span></p>
+          <p className="instance-endpoint"><span className="instance-port">端口 {instance.port}</span><span className="instance-id" title={`实例 ID ${instance.id}`}>实例 ID {instance.id}</span></p>
         </div>
       </div>
       <div className="card-top-actions" aria-label={`${instance.name} 快捷操作`}>
@@ -892,14 +895,15 @@ function QuotaDetails({ quotas, showDetailButton = true }: { quotas: QuotaSnapsh
   ]
   const availableColumns = windowColumns.filter(column => quotas.some(quota => quota.values?.some(value => value.name === column.name)))
   const columns = availableColumns.length ? availableColumns : windowColumns.slice(0, 2)
-  const gridStyle = { gridTemplateColumns: columns.length > 2 ? `repeat(${columns.length}, minmax(0, 1fr))` : `minmax(0, 1fr) repeat(${columns.length}, 88px)` }
-  return <section ref={summary} className={'quota-summary' + (columns.length > 2 ? ' has-many-windows' : '')}>
+  const windowGrid = columns.map(column => column.name === 'Codex 积分' ? 'minmax(0, 1.25fr)' : 'minmax(0, 1fr)').join(' ')
+  const gridStyle = { '--quota-summary-grid': columns.length > 2 ? windowGrid : `minmax(0, 1fr) ${columns.map(column => column.name === 'Codex 积分' ? '108px' : '88px').join(' ')}`, '--quota-window-grid': windowGrid } as CSSProperties
+  return <section ref={summary} className={'quota-summary' + (columns.length > 2 ? ' has-many-windows' : '')} style={gridStyle}>
     <div className="quota-summary-heading"><strong>OAuth 配额（{accounts.length} 个账户）</strong>{showDetailButton && <button type="button" className="button ghost" onClick={() => setShowDetails(true)}>额度详情</button>}</div>
-    <div className="quota-summary-columns" style={gridStyle}><span>账户</span>{columns.map(column => <span key={column.name}>{column.title}</span>)}</div>
+    <div className="quota-summary-columns"><span>账户</span>{columns.map(column => <span key={column.name}>{column.title}</span>)}</div>
     {quotas.map(quota => {
       const label = quota.account_id === '__discovery__' ? 'OAuth 账户' : quota.account_id
-      return <div className="quota-summary-row" style={gridStyle} key={quota.account_id}>
-        <div className="quota-summary-account"><strong title={label}>{label}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && columns.some(column => quota.values?.some(value => value.name === column.name)) ? ' · 缓存' : ''}</small></div>
+      return <div className="quota-summary-row" key={quota.account_id}>
+        <div className="quota-summary-account"><strong title={label}>{quotaAccountLabel(quota.account_id, quota.provider)}</strong><small className={'quota-state ' + quota.status}>{quota.provider ? `${quota.provider} · ` : ''}{quotaStatusLabel(quota.status)}{quota.status !== 'ok' && columns.some(column => quota.values?.some(value => value.name === column.name)) ? ' · 缓存' : ''}</small></div>
         {columns.map(column => <QuotaSummaryValue key={column.name} value={quota.values?.find(value => value.name === column.name)} status={quota.status} label={`${label} ${column.label}`} />)}
       </div>
     })}
@@ -909,7 +913,19 @@ function QuotaDetails({ quotas, showDetailButton = true }: { quotas: QuotaSnapsh
 
 function QuotaSummaryValue({ value, status, label }: { value?: QuotaValue; status: QuotaSnapshot['status']; label: string }) {
   const percent = value ? quotaPercent(value) : null
-  return <div className="quota-summary-value"><strong>{value ? formatQuotaValue(value) : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'}</strong>{percent !== null && <div className={'quota-progress' + (percent <= 20 ? ' low' : percent < 60 ? ' warning' : '')} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}{value && value.unit !== '积分' && <QuotaResetTime resetAt={value.reset_at} compact />}</div>
+  const credit = value?.unit === '积分'
+  const numericCredit = credit && !value.credit_status && value.remaining !== undefined && Number.isFinite(value.remaining)
+  const number = (amount: number) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(amount)
+  const formatted = value ? formatQuotaValue(value).trim() : status === 'empty' ? '—' : status === 'failed' ? '查询失败' : '未提供'
+  const text = numericCredit ? number(value.remaining!) : credit && value.credit_status === 'available' ? '有积分' : formatted
+  const caption = numericCredit ? `剩余积分${value.total !== undefined ? ` · 总量 ${number(value.total)}` : ''}` : credit && value.credit_status === 'available' ? '余额未提供' : ''
+  const tone = percent !== null ? percent <= 20 ? ' low' : percent < 60 ? ' warning' : ' healthy' : value?.credit_status === 'unavailable' || value?.remaining === 0 || (!value && status === 'failed') ? ' low' : ''
+  return <div className={'quota-summary-value' + (credit ? ' quota-summary-credit' : '') + tone}>
+    <strong title={formatted}>{text}</strong>
+    {caption && <small className="quota-summary-caption">{caption}</small>}
+    {percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}
+    {value && !credit && <QuotaResetTime resetAt={value.reset_at} compact />}
+  </div>
 }
 
 function QuotaResetTime({ resetAt, compact = false }: { resetAt?: string; compact?: boolean }) {
@@ -943,7 +959,7 @@ function QuotaDetailDialog({ quotas, onClose }: { quotas: QuotaSnapshot[]; onClo
       label="选择其他 OAuth 账户"
       className="quota-account-dropdown"
       placeholder="选择要查看的账户"
-      options={[{ value: '', label: '选择要查看的账户' }, ...accounts.slice(2).map(quota => ({ value: quota.account_id, label: `${quota.provider || 'OAuth'} · ${quota.account_id}` }))]}
+      options={[{ value: '', label: '选择要查看的账户' }, ...accounts.slice(2).map(quota => { const label = quotaAccountLabel(quota.account_id, quota.provider); return { value: quota.account_id, label: label === quota.account_id ? `${quota.provider || 'OAuth'} · ${label}` : label } })]}
       value={additionalAccountId}
       onChange={setAdditionalAccountId}
     /></label>}
@@ -959,14 +975,14 @@ function QuotaDetailPanel({ quotas }: { quotas: QuotaSnapshot[] }) {
 function QuotaFullDetails({ quotas }: { quotas: QuotaSnapshot[] }) {
   if (!quotas.length) return null
   const accountCount = quotas.filter(quota => quota.account_id !== '__discovery__').length
-  return <section className="quota-details"><div className="quota-heading">OAuth 配额（{accountCount} 个账户）</div><div className="quota-rows">{quotas.map(quota => { const accountLabel = quota.account_id === '__discovery__' ? 'OAuth 账户' : (quota.provider || 'OAuth') + ' · ' + quota.account_id; return <div className="quota-row" key={quota.account_id}><div className="quota-row-head"><strong title={accountLabel}>{accountLabel}</strong><span className={'quota-state ' + quota.status}>{quotaStatusLabel(quota.status)}</span></div>{quota.values?.length ? <div className="quota-values">{quota.values.map((value, index) => <QuotaWindow key={value.name + '-' + index} value={value} />)}</div> : <p className="quota-message">{quota.message || '子实例未返回可展示的配额窗口。'}</p>}{validTimestamp(quota.collected_at) && <small className="quota-timestamp">最近成功采集于 {new Date(quota.collected_at).toLocaleString('zh-CN')}</small>}{validTimestamp(quota.attempted_at) && quota.status !== 'ok' && <small className="quota-timestamp">最近尝试于 {new Date(quota.attempted_at).toLocaleString('zh-CN')}</small>}</div> })}</div></section>
+  return <section className="quota-details"><div className="quota-heading">OAuth 配额（{accountCount} 个账户）</div><div className="quota-rows">{quotas.map(quota => { const accountLabel = quota.account_id === '__discovery__' ? 'OAuth 账户' : (quota.provider || 'OAuth') + ' · ' + quota.account_id; const shortLabel = quotaAccountLabel(quota.account_id, quota.provider); return <div className="quota-row" key={quota.account_id}><div className="quota-row-head"><strong title={accountLabel}>{shortLabel === quota.account_id ? accountLabel : shortLabel}</strong><span className={'quota-state ' + quota.status}>{quotaStatusLabel(quota.status)}</span></div>{quota.values?.length ? <div className="quota-values">{quota.values.map((value, index) => <QuotaWindow key={value.name + '-' + index} value={value} />)}</div> : <p className="quota-message">{quota.message || '子实例未返回可展示的配额窗口。'}</p>}{validTimestamp(quota.collected_at) && <small className="quota-timestamp">最近成功采集于 {new Date(quota.collected_at).toLocaleString('zh-CN')}</small>}{validTimestamp(quota.attempted_at) && quota.status !== 'ok' && <small className="quota-timestamp">最近尝试于 {new Date(quota.attempted_at).toLocaleString('zh-CN')}</small>}</div> })}</div></section>
 }
 
 function QuotaWindow({ value }: { value: QuotaValue }) {
   const percent = quotaPercent(value)
   const tone = percent === null ? '' : percent <= 20 ? ' low' : percent < 60 ? ' warning' : ' healthy'
   const label = value.name || '默认窗口'
-  return <div className="quota-window"><div className="quota-window-title">{label}</div><div className="quota-window-meta"><strong>{formatQuotaValue(value)}</strong>{value.unit !== '积分' && <QuotaResetTime resetAt={value.reset_at} />}</div>{percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={`${label} 剩余配额`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
+  return <div className="quota-window"><div className="quota-window-title">{label}</div><div className="quota-window-meta"><strong className={'quota-window-value' + (value.credit_status === 'unavailable' || value.remaining === 0 ? ' low' : tone)}>{formatQuotaValue(value)}</strong>{value.unit !== '积分' && <QuotaResetTime resetAt={value.reset_at} />}</div>{percent !== null && <div className={'quota-progress' + tone} role="progressbar" aria-label={`${label} 剩余配额`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{ width: `${percent}%` }} /></div>}</div>
 }
 
 function quotaStatusLabel(status: string) {

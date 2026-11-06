@@ -1,0 +1,72 @@
+/* Keep balances readable inside the instance card's quota table. */
+.instance-card .quota-summary { container: instance-quota / inline-size; }
+.instance-card .quota-summary-columns,
+.instance-card .quota-summary-row { grid-template-columns: var(--quota-summary-grid); align-items: start; gap: 8px 10px; }
+.instance-card .quota-summary-columns { font-size: 10.5px; }
+.instance-card .quota-summary-account > strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 11.5px; font-weight: 550; line-height: 1.5; }
+.instance-card .quota-summary-account > small { font-size: 10.5px; }
+.instance-card .quota-summary-value { min-width: 0; }
+.instance-card .quota-summary-value > strong { display: block; font-size: 14px; font-weight: 650; line-height: 1.4; }
+.instance-card .quota-summary-value.healthy > strong { color: var(--green-ink, #087443); }
+.instance-card .quota-summary-value.warning > strong { color: var(--amber); }
+.instance-card .quota-summary-value.low > strong { color: var(--red); }
+.instance-card .quota-summary-credit > strong { overflow: hidden; color: var(--primary-active); text-overflow: ellipsis; white-space: nowrap; }
+.instance-card .quota-summary-caption { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.instance-card .quota-summary-reset { gap: 1px; margin-top: 4px; color: var(--primary-active); font-size: 11.5px; font-weight: 550; }
+.instance-card .quota-summary-reset > small { color: var(--muted); font-size: 10px; font-weight: 400; }
+
+@container instance-quota (max-width: 300px) {
+  .instance-card .quota-summary-columns,
+  .instance-card .quota-summary-row { grid-template-columns: var(--quota-window-grid); }
+  .instance-card .quota-summary-columns > :first-child { display: none; }
+  .instance-card .quota-summary-account { grid-column: 1 / -1; }
+}
+
+/* Fit two rows of instances on desktop while letting extra accounts grow naturally. */
+.instances-module { padding-top: 16px; }
+.instances-module .module-heading { margin-bottom: 12px; }
+.instances-module .module-heading h1 { margin-top: 4px; font-size: 24px; }
+.instances-module .module-heading p { font-size: 12px; }
+.instances-module .instance-list { gap: 12px; }
+.instances-module .instance-card { padding: 12px; border-radius: 11px; }
+.instances-module .card-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.instances-module .instance-title { flex: 1 1 100%; align-items: center; gap: 10px; }
+.instances-module .instance-title h3 { font-size: 16px; font-weight: 650; line-height: 1.3; letter-spacing: -.02em; }
+.instances-module .instance-title h3 .state-pill { padding: 2px 6px; vertical-align: 1px; font-size: 9px; }
+.instances-module .instance-title .instance-endpoint { flex-direction: row; align-items: baseline; gap: 8px; margin-top: 3px; line-height: 1.4; }
+.instances-module .instance-port { flex-shrink: 0; font-size: 11px; font-weight: 600; letter-spacing: 0; line-height: inherit; }
+.instances-module .instance-id { font-size: 10px; font-weight: 400; letter-spacing: 0; line-height: inherit; }
+.instances-module .card-top-actions { width: auto; justify-content: flex-end; gap: 5px; }
+.instances-module .card-top-actions .button { flex: 0 0 auto; min-width: 0; min-height: 28px; padding: 3px 6px; border-radius: 6px; font-size: 11px; line-height: 1.4; }
+.instances-module .instance-card .card-actions { display: grid; grid-template-columns: 1fr 1fr 1.5fr 1fr 1fr; gap: 4px; margin-top: 7px; overflow: visible; }
+.instances-module .instance-card .card-actions .button { min-height: 28px; padding: 3px; border-radius: 6px; font-size: 11px; line-height: 1.4; }
+.instances-module .card-meta { gap: 5px 12px; margin-top: 7px; padding: 5px 0; }
+.instances-module .card-meta > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; min-width: 0; }
+.instances-module .card-meta span { font-size: 10px; font-weight: 500; letter-spacing: 0; }
+.instances-module .card-meta strong { margin-top: 0; font-size: 11px; font-weight: 550; }
+.instances-module .card-status { min-height: 0; margin-top: 6px; font-size: 10px; }
+.instances-module .quota-summary { margin-top: 0; border-top: 0; }
+.instances-module .quota-summary-heading { padding: 3px 0; }
+.instances-module .quota-summary-heading > strong { font-size: 11px; font-weight: 550; }
+.instances-module .quota-summary-columns { padding: 0 0 3px; line-height: 1.4; }
+.instances-module .quota-summary-row { padding: 5px 0; row-gap: 4px; }
+.instances-module .quota-summary-account > strong { line-height: 1.4; }
+.instances-module .quota-summary-account > small { margin-top: 1px; font-size: 10px; line-height: 1.4; }
+.instances-module .quota-summary.has-many-windows .quota-summary-account { display: flex; align-items: baseline; gap: 6px; }
+.instances-module .quota-summary.has-many-windows .quota-summary-account > strong { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.instances-module .quota-summary.has-many-windows .quota-summary-account > small { flex: 0 0 auto; }
+.instances-module .quota-summary-value .quota-progress { margin-top: 3px; }
+.instances-module .quota-summary-reset { margin-top: 3px; font-size: 11px; line-height: 1.35; }
+.instances-module .quota-summary-reset > small { font-size: 9px; }
+
+@media (max-width: 380px) {
+  .instances-module .card-top { grid-template-columns: minmax(0, 1fr); }
+  .instances-module .card-top-actions { justify-content: flex-start; }
+  .instances-module .card-top-actions .button { flex: 1 1 0; }
+  .instances-module .instance-card .card-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .instance-card .quota-summary-value.warning > strong { color: #f4c471; }
+  .instance-card .quota-summary-value.low > strong { color: #f29f90; }
+}

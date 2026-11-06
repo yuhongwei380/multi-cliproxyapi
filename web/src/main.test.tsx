@@ -170,6 +170,37 @@ test('shows quota values returned by the child instance', async () => {
   expect(screen.getByText('3 / 10 requests')).toBeInTheDocument()
 })
 
+test('uses compact account labels across cards, observation and detail selectors while retaining full identities', async () => {
+  const ids = [
+    'claude-55865e71-gptxxxx@xxxx.com-self-serve-business-prolite.json',
+    'codex-8657d006-other@example.com-plus.json',
+    'claude-12345678-third@example.com-pro.json',
+  ]
+  const snapshots = ids.map((account_id, index) => ({ account_id, provider: index === 1 ? 'codex' : 'claude', status: 'ok', values: [{ name: '周限额', remaining: 80, total: 100, unit: '%' }] }))
+  vi.spyOn(globalThis, 'fetch').mockImplementation(url => {
+    const route = String(url)
+    if (route.endsWith('/auth/status')) return response({ authenticated: true, username: 'admin' }) as any
+    if (route.endsWith('/instances')) return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any
+    if (route.endsWith('/quotas')) return response({ items: snapshots }) as any
+    return response(route.endsWith('/state') ? { state: 'idle' } : { items: [] }) as any
+  })
+  const user = userEvent.setup()
+  render(<App />)
+  expect(await screen.findByText('gptxxxx-Pro 200')).toHaveAttribute('title', ids[0])
+  expect(screen.getByRole('progressbar', { name: `${ids[0]} 周额度剩余` })).toHaveAttribute('aria-valuenow', '80')
+  await user.click(screen.getByRole('button', { name: '额度详情' }))
+  const dialog = screen.getByRole('dialog', { name: 'OAuth 额度详情' })
+  expect(within(dialog).getByText('gptxxxx-Pro 200')).toHaveAttribute('title', `claude · ${ids[0]}`)
+  await user.click(within(dialog).getByRole('combobox', { name: /^选择其他 OAuth 账户/ }))
+  await user.click(screen.getByRole('option', { name: 'third-Pro' }))
+  expect(within(dialog.querySelector('.quota-detail-additional') as HTMLElement).getByText('third-Pro')).toHaveAttribute('title', `claude · ${ids[2]}`)
+  await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+  await user.click(screen.getByRole('link', { name: /CLIProxyAPI 实例管理/ }))
+  expect(screen.getByText('gptxxxx-Pro 200')).toHaveAttribute('title', ids[0])
+  await user.click(screen.getByRole('link', { name: '额度观察' }))
+  expect(screen.getByText('gptxxxx-Pro 200')).toHaveAttribute('title', `claude · ${ids[0]}`)
+})
+
 test('renders OAuth windows as percentage bars with reset metadata', async () => {
   vi.spyOn(globalThis, 'fetch')
     .mockImplementationOnce(() => response({ authenticated: true, username: 'admin' }) as any)
@@ -183,7 +214,8 @@ test('renders OAuth windows as percentage bars with reset metadata', async () =>
   expect(screen.getByText('5h额度')).toBeInTheDocument()
   expect(screen.getByText('周额度')).toBeInTheDocument()
   expect(screen.getByText('Codex 积分')).toBeInTheDocument()
-  expect(screen.getByText('剩余 12.5 积分')).toBeInTheDocument()
+  expect(screen.getByText('12.5', { selector: '.quota-summary-credit > strong' })).toHaveAttribute('title', '剩余 12.5 积分')
+  expect(screen.getByText('剩余积分')).toBeInTheDocument()
   expect(screen.getByRole('progressbar', { name: 'oauth-1 5 小时额度剩余' })).toHaveAttribute('aria-valuenow', '12')
   expect(screen.getByRole('progressbar', { name: 'oauth-1 周额度剩余' })).toHaveAttribute('aria-valuenow', '31')
   expect(screen.queryByText('GPT-5.3-Codex-Spark 5 小时限额')).not.toBeInTheDocument()

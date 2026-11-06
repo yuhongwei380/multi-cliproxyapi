@@ -1,0 +1,70 @@
+/* Keep observation cards dense; use color to distinguish important values. */
+.quotas-module { --quota-warning: var(--amber); --quota-low: var(--red); }
+.quotas-module .quota-instance-list { gap: 12px; }
+.quotas-module .quota-instance-card { padding: 14px; border-radius: 11px; color: var(--ink); font-size: 12px; line-height: 1.5; }
+.quotas-module .quota-instance-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.quotas-module .quota-instance-head .eyebrow { display: none; }
+.quotas-module .quota-instance-head h2 { margin: 0 0 3px; font-size: 16px; font-weight: 650; letter-spacing: -.02em; line-height: 1.3; }
+.quotas-module .quota-instance-head p { font-size: 10.5px; line-height: 1.5; }
+.quotas-module .quota-instance-card .button { min-height: 29px; margin-top: 0; padding: 4px 9px; border-radius: 7px; font-size: 11px; line-height: 1.4; white-space: nowrap; }
+.quotas-module .quota-details { margin-top: 12px; border-radius: 8px; }
+.quotas-module .quota-heading { padding: 7px 10px; font-size: 11px; font-weight: 600; }
+.quotas-module .quota-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.quotas-module .quota-row { min-width: 0; padding: 10px; border-top: 0; }
+.quotas-module .quota-row:only-child { grid-column: 1 / -1; }
+.quotas-module .quota-row:nth-child(even) { border-left: 1px solid var(--line); }
+.quotas-module .quota-row:nth-child(n + 3) { border-top: 1px solid var(--line); }
+.quotas-module .quota-row-head { align-items: center; gap: 8px; }
+.quotas-module .quota-row-head strong { overflow: hidden; font-size: 11px; font-weight: 550; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.quotas-module .quota-row-head .quota-state { margin-top: 0; font-size: 10px; }
+.quotas-module .quota-values { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; margin-top: 10px; }
+.quotas-module .quota-window { align-content: start; gap: 4px; }
+.quotas-module .quota-window-title { font-size: 11px; font-weight: 550; line-height: 1.4; }
+.quotas-module .quota-window-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 10px; }
+.quotas-module .quota-window-meta strong { color: var(--primary-active); font-size: 15px; font-weight: 650; letter-spacing: 0; white-space: normal; overflow-wrap: anywhere; }
+.quotas-module .quota-window-meta .quota-window-value.healthy { color: var(--green-ink, #087443); }
+.quotas-module .quota-window-meta .quota-window-value.warning { color: var(--quota-warning); }
+.quotas-module .quota-window-meta .quota-window-value.low { color: var(--quota-low); }
+.quotas-module .quota-window-meta span.quota-reset-time { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-size: 12px; font-weight: 550; line-height: 1.5; }
+.quotas-module .quota-reset-time time { color: var(--primary-active); }
+.quotas-module .quota-reset-time > small,
+.quotas-module .quota-reset-unknown { color: var(--muted); font-size: 10px; font-weight: 400; }
+.quotas-module .quota-progress { height: 4px; background: var(--bg-tertiary); }
+.quotas-module .quota-timestamp { margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.quotas-module .quota-message,
+.quotas-module .quota-empty-message { font-size: 11px; line-height: 1.5; }
+
+.quotas-module .subscription-sync { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.quotas-module .subscription-sync-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; }
+.quotas-module .subscription-sync-head > strong { font-size: 12px; font-weight: 650; }
+.quotas-module .subscription-sync p { margin: 6px 0 0; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.quotas-module .subscription-sync-description,
+.quotas-module .subscription-sync-message { color: var(--muted); }
+.quotas-module .subscription-sync-status { display: grid; gap: 6px; margin-top: 8px; }
+.quotas-module .subscription-sync-status > p { margin: 0; }
+.quotas-module .subscription-sync-date { color: var(--muted); }
+.quotas-module .subscription-sync-date time { color: var(--primary-active); font-weight: 600; font-variant-numeric: tabular-nums; }
+.quotas-module .subscription-sync-notice { padding: 6px 8px; border-left: 2px solid currentColor; border-radius: 4px; }
+.quotas-module .subscription-sync-notice.warning { color: var(--quota-warning); background: var(--amber-soft); }
+.quotas-module .subscription-sync-date.warning time { color: var(--quota-warning); }
+.quotas-module .subscription-sync-notice.danger { color: var(--quota-low); background: var(--red-soft); }
+.quotas-module .subscription-sync .settings-inline-error { margin: 6px 0 0; padding: 6px 8px; font-size: 11px; }
+
+.quotas-module .quota-overview-card { gap: 10px; margin-bottom: 14px; }
+.quotas-module .quota-overview-card > div { min-height: 56px; padding: 9px 12px; border-radius: 9px; }
+.quotas-module .quota-overview-card span { font-size: 11px; }
+.quotas-module .quota-overview-card strong { font-size: 18px; }
+
+@media (min-width: 761px) {
+  .quotas-module .quota-row:not(:only-child) .quota-window-meta { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 3px; }
+}
+
+@media (max-width: 760px) {
+  .quotas-module .quota-rows { grid-template-columns: minmax(0, 1fr); }
+  .quotas-module .quota-row:nth-child(even) { border-left: 0; }
+  .quotas-module .quota-row + .quota-row { border-top: 1px solid var(--line); }
+}
+
+@media (prefers-color-scheme: dark) {
+  .quotas-module { --quota-warning: #f4c471; --quota-low: #f29f90; }
+}

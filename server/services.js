@@ -715,11 +715,12 @@ export class QuotaService {
   intervalMs(instanceId = null) { const settings = instanceId ? this.instanceSettingsWithSecret(instanceId) : this.getSettings(); return Math.max(60000, Number(settings.refresh_interval_minutes) * 60000) }
   scheduledInstances() {
     const globalIds = new Set(this.getSettings().instance_ids || []); const customIds = new Set(this.store.listQuotaInstanceSettingIds?.() || [])
-    return this.store.listInstances().filter(instance => globalIds.has(instance.id) || customIds.has(instance.id))
+    return this.store.listInstances().filter(instance => globalIds.has(instance.id) || customIds.has(instance.id) || this.subscriptionSync)
   }
   schedulerIntervalMs() {
     const instances = this.scheduledInstances()
-    return instances.length ? Math.min(...instances.map(instance => this.intervalMs(instance.id))) : this.intervalMs()
+    const regular = instances.length ? Math.min(...instances.map(instance => this.intervalMs(instance.id))) : this.intervalMs()
+    return this.subscriptionSync && instances.length ? Math.max(1000, Math.min(regular, ...instances.map(instance => this.subscriptionSync.nextRefreshAt(instance.id) - this.clock().getTime()))) : regular
   }
   notificationCoolingDown(key, now) {
     const sentAt = typeof this.store.getQuotaNotification === 'function' ? this.store.getQuotaNotification(key) : this.notificationSentAt.get(key) || ''
@@ -733,7 +734,7 @@ export class QuotaService {
   async refreshInstance(instanceId, signal, { notify = true } = {}) {
     if (this.running.has(instanceId)) throw new Error('quota refresh already in progress'); this.running.add(instanceId)
     try {
-      return await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
+      const results = await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
         signal?.throwIfAborted()
         const instance = this.store.getInstance(instanceId); const attempt = this.clock().toISOString(); let client
         if (this.instances.runtime && isStopped((await this.instances.runtime.status(instance)).state)) {
@@ -767,11 +768,14 @@ export class QuotaService {
           return results
         } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); recordRuntimeEvent(this.store, 'quota', '额度刷新失败，请检查 OAuth 账户及 CPA 连接', { event: 'quota.refresh.failed', instanceId, level: 'error' }); throw new Error(`list OAuth accounts: ${error.message}`) }
       }))
+      try { await this.subscriptionSync?.observe(instanceId, results, { signal }) } catch { recordRuntimeEvent(this.store, 'quota', '自动订阅同步状态处理失败，请检查同步状态', { instanceId, level: 'warn' }) }
+      this.wakeScheduler?.()
+      return results
     } finally { this.running.delete(instanceId) }
   }
   markDiscoveryFailure(instanceId, attempt, error) { const previous = this.store.listQuotas(instanceId); if (!previous.length) this.store.saveQuota({ instance_id: instanceId, account_id: DiscoveryAccountId, provider: '', values: [], status: 'failed', message: error.message, attempted_at: attempt, collected_at: '' }); else for (const item of previous) this.store.saveQuota({ ...item, attempted_at: attempt, status: 'failed', message: error.message }) }
   async list(instanceId) { this.store.getInstance(instanceId); const now = this.clock().getTime(); const interval = this.intervalMs(instanceId); return this.store.listQuotas(instanceId).map(item => item.status === 'ok' && (!item.attempted_at || now - Date.parse(item.attempted_at) >= interval) ? { ...item, status: 'stale', message: 'quota snapshot is older than the refresh interval' } : item) }
-  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.scheduledInstances()) { const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if (!snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
+  async refreshDue(signal) { const now = this.clock().getTime(); for (const instance of this.scheduledInstances()) { if (signal?.aborted) break; const interval = this.intervalMs(instance.id); const snapshots = this.store.listQuotas(instance.id); if ((this.subscriptionSync && now >= this.subscriptionSync.nextRefreshAt(instance.id)) || !snapshots.length || snapshots.some(item => item.status === 'failed' || !item.attempted_at || now - Date.parse(item.attempted_at) >= interval)) { try { await this.refreshInstance(instance.id, signal) } catch {} } } }
   async run(signal) {
     if (signal?.aborted) return
     await this.refreshDue(signal)

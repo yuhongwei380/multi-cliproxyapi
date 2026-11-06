@@ -16,6 +16,7 @@ import { Controller, createHttpServer } from './http.js'
 import { ManagementAssets } from './management-assets.js'
 import { BrandingService } from './branding.js'
 import { PluginService, PluginArtifacts } from './plugins.js'
+import { SubscriptionSync } from './subscription-sync.js'
 import { DEFAULT_LOG_FILE, DEFAULT_LOG_LEVEL, normalizeLogLevel, ServiceLogger } from './logging.js'
 
 export const DEFAULT_ADMIN_PASSWORD = 'admin'
@@ -76,8 +77,10 @@ export function createApplication(config, overrides = {}) {
   const plugins = overrides.plugins || new PluginService({ store, instances, runtime, clients, verifyInstance, artifacts: new PluginArtifacts({ root: path.join(config.dataDir, 'plugin-cache') }) })
   instances.pluginService = plugins
   const keys = new KeyService({ store, instances, clients, secrets, auth })
-  const controller = new Controller({ auth, instances, deleteService, quota, upgrade, installer, versionService, activator, branding, plugins, keys, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
-  return { store, secrets, auth, runtime, units, instances, deleteService, quota, installer, versionService, branding, activator, upgrade, plugins, keys, controller }
+  const subscriptionSync = new SubscriptionSync({ store, quota, instances, clients })
+  quota.subscriptionSync = subscriptionSync
+  const controller = new Controller({ auth, instances, deleteService, quota, subscriptionSync, upgrade, installer, versionService, activator, branding, plugins, keys, store, staticRoot: config.staticRoot, secureCookies: config.secureCookies, logger: overrides.logger || console })
+  return { store, secrets, auth, runtime, units, instances, deleteService, quota, subscriptionSync, installer, versionService, branding, activator, upgrade, plugins, keys, controller }
 }
 
 async function ensureInitialVersion(app, config, logger) {

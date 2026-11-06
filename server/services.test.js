@@ -529,3 +529,37 @@ test('expired sessions and delete challenges are rejected without deleting data'
     assert.equal(f.store.getInstance(item.id).name, 'expiry-test')
   } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
 })
+
+
+test('automatic subscription observation runs after releasing quota locks and does not poison fresh quota results', { timeout: 5000 }, async () => {
+  const f = fixture()
+  try {
+    const item = await f.instances.create({ name: 'auto-observer-locks', port: await port() }); await f.instances.start(item.id)
+    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => new StaticClient({ accounts: [{ id: 'a' }], quotas: { a: { values: [] } } }), secrets: f.secrets })
+    let observed = 0
+    quota.subscriptionSync = { observe: async (id, results) => {
+      await f.instances.operations.run('global', () => f.instances.withInstanceLock(id, async () => { observed++; assert.equal(results.length, 1) }))
+      throw new Error('observer failure must not invalidate quotas')
+    } }
+    assert.equal((await quota.refreshInstance(item.id))[0].status, 'ok'); assert.equal(observed, 1)
+    assert.equal(f.store.listQuotas(item.id)[0].status, 'ok')
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
+test('automatic reset observation advances ordinary six-hour quota scheduling and stops cleanly on abort', async () => {
+  const f = fixture()
+  try {
+    const item = await f.instances.create({ name: 'auto-observer-schedule', port: await port() }); await f.instances.start(item.id)
+    const quota = new QuotaService({ store: f.store, instances: f.instances, secrets: f.secrets, clock: () => new Date('2026-11-06T00:00:00Z') })
+    const now = Date.parse('2026-11-06T00:00:00Z')
+    let due = now + 30000, refreshes = 0
+    f.store.saveQuota({ instance_id: item.id, account_id: 'a', provider: '', values: [], status: 'ok', attempted_at: new Date(now).toISOString(), collected_at: new Date(now).toISOString() })
+    quota.subscriptionSync = { nextRefreshAt: () => due }
+    quota.refreshInstance = async () => { refreshes++ }
+    assert.ok(quota.scheduledInstances().some(value => value.id === item.id))
+    assert.equal(quota.schedulerIntervalMs(), 30000)
+    await quota.refreshDue(); assert.equal(refreshes, 0)
+    due = now; await quota.refreshDue(); assert.equal(refreshes, 1)
+    const abort = new AbortController(); abort.abort(); await quota.refreshDue(abort.signal); assert.equal(refreshes, 1)
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})

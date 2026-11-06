@@ -334,6 +334,7 @@ test('reports partial quota refresh failures while keeping successful instances 
     if (path === '/api/instances') return response({ items: instances }) as any
     if (path === '/api/versions') return response({ items: [] }) as any
     if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    if (path.endsWith('/subscription-sync')) return response({ available: false }) as any
     if (path === '/api/quota/settings') return response({ refresh_interval_minutes: 360, webhook_enabled: false, webhook_url: '', webhook_url_configured: false, alert_threshold_percent: 20, webhook_signing_enabled: false, webhook_secret_configured: false }) as any
     if (path === '/api/instances/cpa_1/quotas') {
       if (init?.method === 'POST') return response({ status: 'refreshed', items: [] }, 202) as any

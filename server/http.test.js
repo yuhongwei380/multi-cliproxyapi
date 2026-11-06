@@ -290,3 +290,21 @@ test('branding API exposes defaults and persists a partial update', async () => 
     assert.equal(f.store.listAuditLogs()[0].action, 'branding.update')
   } finally { await closeFixture(f) }
 })
+
+test('automatic subscription sync status requires a session and all manual mutations are rejected', async () => {
+  const store = new Store(':memory:'); const auth = new AuthService(store); auth.initializeAdmin('sync-admin')
+  const calls = []
+  const subscriptionSync = { inspect: async id => { calls.push(['read', id]); return { instance_id: id, available: true } } }
+  const controller = new Controller({ auth, store, subscriptionSync, logger: { error() {} } }); const server = createHttpServer(controller)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); const base = `http://127.0.0.1:${server.address().port}/api`; const route = `${base}/instances/cpa-test/subscription-sync`
+  try {
+    assert.equal((await fetch(route)).status, 401)
+    const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'sync-admin' }) })
+    const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'content-type': 'application/json' }
+    assert.equal((await fetch(route, { headers })).status, 200)
+    assert.equal((await fetch(route, { method: 'POST', headers: { ...headers, origin: 'https://invalid.example' }, body: '{}' })).status, 403)
+    assert.equal((await fetch(route, { method: 'PATCH', headers, body: JSON.stringify({ enabled: true }) })).status, 405)
+    assert.equal((await fetch(route, { method: 'POST', headers, body: '{}' })).status, 405)
+    assert.deepEqual(calls, [['read', 'cpa-test']])
+  } finally { server.closeAllConnections?.(); await new Promise(resolve => server.close(resolve)); store.close() }
+})

@@ -2,7 +2,8 @@ import { expect, test } from 'vitest'
 import { quotaAccountLabel } from './account-label'
 
 test.each([
-  ['claude-55865e71-gptxxxx@xxxx.com-self-serve-business-prolite.json', 'claude', 'gptxxxx-Pro 200'],
+  ['claude-55865e71-gptxxxx@xxxx.com-self-serve-business-prolite.json', 'claude', 'gptxxxx-Business Premium'],
+  ['claude-55865e71-user@example.com-business-prolite.json', 'claude', 'user-Business Premium'],
   ['codex-8657d006-first.last+work@example.com-pro.json', 'codex', 'first.last+work-Pro'],
   ['claude-55865e71-gpt-team@company-domain.co.uk-pro-200.json', 'claude', 'gpt-team-Pro 200'],
   ['first-last@example.com-plus.json', '', 'first-last-Plus'],

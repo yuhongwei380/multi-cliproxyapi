@@ -1,5 +1,6 @@
 const planLabels = new Map(Object.entries({
-  'self-serve-business-prolite': 'Pro 200',
+  'self-serve-business-prolite': 'Business Premium',
+  'business-prolite': 'Business Premium',
   free: 'Free',
   plus: 'Plus',
   pro: 'Pro',

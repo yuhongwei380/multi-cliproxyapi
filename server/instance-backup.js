@@ -37,9 +37,11 @@ export function backupMetadata(instance) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) return undefined
     const value = JSON.parse(fs.readFileSync(file, 'utf8'))
     if (typeof value.source_id !== 'string' || typeof value.source_name !== 'string') return undefined
-    return { source_id: value.source_id, source_name: value.source_name, automatic: value.automatic === true, reason: String(value.reason || ''), created_at: String(value.created_at || '') }
+    return { source_id: value.source_id, source_name: value.source_name, automatic: value.automatic === true, reason: String(value.reason || ''), created_at: String(value.created_at || ''), ...(value.automatic === true && value.upgrade_failed === true ? { upgrade_failed: true } : {}) }
   } catch { return undefined }
 }
+
+export const isFailedUpgradeBackup = instance => backupMetadata(instance)?.upgrade_failed === true
 
 export function copyBackupTree(from, to) {
   const stat = fs.lstatSync(from)

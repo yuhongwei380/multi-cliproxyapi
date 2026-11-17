@@ -879,6 +879,45 @@ test('creates and removes a per-instance quota override from the dialog', async 
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 })
 
+test('a failed-upgrade backup cannot be locked and can be managed without unlocking', async () => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [{ id: 'backup', name: 'failed-backup', port: 18317, locked: false, desired_state: 'stopped', version: 'v1', revision: 2, backup: { source_id: 'source', source_name: 'source', automatic: true, upgrade_failed: true, reason: 'CPA v2', created_at: '2026-11-17T12:00:00Z' }, status: { state: 'stopped', ready: false } }] }) as any
+    if (path.endsWith('/quotas') || path === '/api/versions') return response({ items: [] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    return response({}) as any
+  })
+  render(<App />)
+  const lock = await screen.findByRole('button', { name: '备份不可锁定' })
+  expect(lock).toBeDisabled()
+  expect(lock).toHaveAttribute('title', '升级失败保留的备份实例不允许锁定')
+  for (const name of ['配置', '启动实例', '删除']) expect(screen.getByRole('button', { name })).toBeEnabled()
+  await userEvent.setup().click(lock)
+  expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/lock'))).toBe(false)
+  expect(screen.queryByRole('button', { name: '解锁实例' })).not.toBeInTheDocument()
+})
+
+test('failed-upgrade backups do not offer another unified upgrade for the current version', async () => {
+  window.location.hash = '#versions'
+  vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+    const path = String(input)
+    if (path === '/api/auth/status') return response({ authenticated: true, username: 'admin' }) as any
+    if (path === '/api/instances') return response({ items: [
+      { id: 'source', name: 'source', port: 8317, locked: false, desired_state: 'running', version: 'v2', revision: 1, status: { state: 'running', ready: true } },
+      { id: 'backup', name: 'backup', port: 18317, locked: false, desired_state: 'stopped', version: 'v1', revision: 2, backup: { automatic: true, upgrade_failed: true }, status: { state: 'stopped', ready: false } }
+    ] }) as any
+    if (path === '/api/versions') return response({ items: [{ tag: 'v2', usable: true }] }) as any
+    if (path === '/api/upgrade/state') return response({ state: 'idle' }) as any
+    if (path === '/api/plugins') return response({ catalog: [], instances: [] }) as any
+    return response({ items: [] }) as any
+  })
+  render(<App />)
+  const panel = await screen.findByRole('region', { name: '版本管理' })
+  expect(await within(panel).findByText('v2')).toBeInTheDocument()
+  expect(within(panel).queryByRole('button', { name: '统一升级' })).not.toBeInTheDocument()
+})
+
 test('instance lock disables disruptive actions and unlock restores them', async () => {
   let locked = false
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {

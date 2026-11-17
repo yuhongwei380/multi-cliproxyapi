@@ -10,7 +10,7 @@ import { NotFoundError, ConflictError } from './store.js'
 import { unsupported } from './cpa.js'
 import { prepareInstanceBinary } from './instance-binary.js'
 import { editChildConfig } from './child-config.js'
-import { backupMetadata, copyBackupTree, relocateBackupConfig } from './instance-backup.js'
+import { backupMetadata, copyBackupTree, isFailedUpgradeBackup, relocateBackupConfig } from './instance-backup.js'
 import { recordRuntimeEvent } from './logging.js'
 
 export const ErrInvalidCredentials = Object.assign(new Error('invalid credentials'), { code: 'ERR_INVALID_CREDENTIALS', status: 401 })
@@ -120,6 +120,7 @@ export class InstanceService {
     return this.operations.run('global', () => this.withInstanceLock(instanceId, async () => {
       this.assertUpgradeIdle()
       const current = this.store.getInstance(instanceId)
+      if (locked && isFailedUpgradeBackup(current)) throw new ConflictError('升级失败保留的备份实例不允许锁定')
       if (current.locked === locked) return current
       const next = { ...current, locked, revision: current.revision + 1, updated_at: this.clock().toISOString() }
       this.store.updateInstance(next, current.revision)
@@ -243,13 +244,48 @@ export class InstanceService {
       plans.push({ source, port, name: `${source.name.slice(0, 30)}-backup-${this.clock().toISOString().replace(/\D/g, '').slice(0, 14)}-${crypto.randomUUID().slice(0, 4)}` })
     }
     const backups = []
-    for (const plan of plans) {
-      await onStarting(plan.source.id)
-      const backup = await this.backupUnlocked(plan.source.id, { name: plan.name, port: plan.port }, { automatic: true, reason })
-      backups.push(backup); await onSaved(plan.source.id, backup)
-      this.store.appendAuditLog?.({ actor: 'system', action: 'instance.backup', resource_type: 'instance', resource_id: backup.id, outcome: 'success', detail: `source=${plan.source.id}; reason=${reason}`, created_at: this.clock().toISOString() })
+    try {
+      for (const plan of plans) {
+        await onStarting(plan.source.id)
+        const backup = await this.backupUnlocked(plan.source.id, { name: plan.name, port: plan.port }, { automatic: true, reason })
+        backups.push(backup); await onSaved(plan.source.id, backup)
+        this.store.appendAuditLog?.({ actor: 'system', action: 'instance.backup', resource_type: 'instance', resource_id: backup.id, outcome: 'success', detail: `source=${plan.source.id}; reason=${reason}`, created_at: this.clock().toISOString() })
+      }
+    } catch (error) {
+      try { await this.failAutomaticBackups(backups.map(backup => backup.id)) }
+      catch (backupError) { throw new Error(`${error.message}; ${backupError.message}`, { cause: error }) }
+      throw error
     }
     return backups
+  }
+  // Call under the global operation lock. Persist the failure independently of
+  // upgrade history, which can be cleared by recovery or a later upgrade.
+  async failAutomaticBackups(ids) {
+    const failures = []
+    for (const instanceId of new Set(ids)) {
+      try {
+        await this.withInstanceLock(instanceId, async () => {
+          const instance = this.store.getInstance(instanceId)
+          const expected = path.resolve(this.root, 'instances', instance.id)
+          if (path.resolve(instance.directory) !== expected) throw new ConflictError('unsafe backup instance directory')
+          const stat = fs.lstatSync(expected)
+          if (!stat.isDirectory() || stat.isSymbolicLink()) throw new ConflictError('backup instance directory must be a real directory')
+          const metadata = backupMetadata(instance)
+          if (!instance.is_backup || !metadata?.automatic) throw new ConflictError('instance is not an automatic backup')
+          if (!metadata.upgrade_failed) {
+            const file = path.join(expected, '.multi-cpa-backup.json'); const temporary = `${file}.${crypto.randomUUID()}.tmp`
+            try {
+              fs.writeFileSync(temporary, JSON.stringify({ ...metadata, upgrade_failed: true }), { flag: 'wx', mode: 0o600 })
+              fs.renameSync(temporary, file)
+            } finally { fs.rmSync(temporary, { force: true }) }
+          }
+          if (instance.locked) this.store.updateInstance({ ...instance, locked: false, revision: instance.revision + 1, updated_at: this.clock().toISOString() }, instance.revision)
+        })
+      } catch (error) {
+        if (error.code !== 'ERR_NOT_FOUND') failures.push(`${instanceId}: ${error.message}`)
+      }
+    }
+    if (failures.length) throw new Error(`升级失败备份解锁失败：${failures.join('; ')}`)
   }
   // Internal cleanup used after a successful upgrade/deployment. Automatic
   // backups are locked and inherit key bindings, so the normal administrator

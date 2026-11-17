@@ -67,8 +67,8 @@ function serviceFixture({ rejectedRequests = 0, status = 401, keys: initialKeys 
   const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'management', maxRetries: 0, fetchImpl: async (url, options) => {
     if (url.endsWith('/v1/models')) {
       testedKeys.push(options.headers.Authorization.slice(7)); modelRequests++
-      onModels?.({ keys, modelRequests, signal: options.signal })
-      return fakeResponse({ data: [{ id: 'model' }] }, modelRequests <= rejectedRequests ? status : 200)
+      const responseStatus = onModels?.({ keys, modelRequests, signal: options.signal, testKey: testedKeys.at(-1) })
+      return fakeResponse({ data: [{ id: 'model' }] }, responseStatus ?? (modelRequests <= rejectedRequests ? status : 200))
     }
     assert.equal(options.headers.Authorization, 'Bearer management')
     if (options.method === 'PUT') {
@@ -94,9 +94,51 @@ test('service verification waits for asynchronous authentication reload and pres
 
 test('persistent service-key rejection remains a bounded failure and removes the temporary key', async () => {
   const f = serviceFixture({ rejectedRequests: Infinity })
-  await assert.rejects(verifyServiceWithTestKey(f.client, { maxAttempts: 3, retryDelayMs: 0 }), error => error.upstreamStatus === 401 && /after waiting/.test(error.message))
-  assert.equal(f.modelRequests, 3)
+  await assert.rejects(verifyServiceWithTestKey(f.client, { maxAttempts: 10, retryDelayMs: 0 }), error => error.upstreamStatus === 401 && /after waiting/.test(error.message))
+  assert.equal(f.modelRequests, 10)
+  assert.equal(new Set(f.testedKeys).size, 3)
+  assert.equal(f.writes.length, 4)
   assert.deepEqual(f.keys, ['existing'])
+})
+
+test('service verification recovers a config write missed before watcher startup', async () => {
+  let watcherReady = false; let runtimeKeys = ['existing']
+  const f = serviceFixture({
+    onWrite: ({ keys }) => { if (watcherReady) runtimeKeys = [...keys] },
+    onModels: ({ keys, modelRequests, testKey }) => {
+      // Management reads see the saved key, but runtime auth still has its
+      // startup snapshot until another real change reaches the new watcher.
+      assert.ok(keys.includes(testKey))
+      if (modelRequests === 3) { watcherReady = true; keys.push('concurrent-key') }
+      return runtimeKeys.includes(testKey) ? 200 : 401
+    }
+  })
+  assert.deepEqual(await verifyServiceWithTestKey(f.client, { maxAttempts: 8, retryDelayMs: 0 }), { model_count: 1 })
+  assert.equal(f.modelRequests, 5)
+  assert.notEqual(f.testedKeys[0], f.testedKeys.at(-1))
+  assert.deepEqual(f.writes[1], ['existing', 'concurrent-key', f.testedKeys.at(-1)])
+  assert.deepEqual(f.keys, ['existing', 'concurrent-key'])
+  assert.deepEqual(runtimeKeys, f.keys)
+})
+
+test('ambiguous or cancelled rotation cleans all owned keys without retrying the write', async () => {
+  for (const cancelled of [false, true]) {
+    const controller = new AbortController()
+    let originalKey
+    const f = serviceFixture({ rejectedRequests: Infinity, onWrite: ({ keys, writes }) => {
+      if (writes.length === 1) originalKey = keys.at(-1)
+      if (writes.length === 2) {
+        // Reconcile every owned key, including an older key that reappeared.
+        keys.push(originalKey, 'concurrent-key')
+        if (cancelled) controller.abort(new Error('cancelled during rotation'))
+        else throw new TypeError('connection reset after rotation save')
+      }
+    } })
+    await assert.rejects(verifyServiceWithTestKey(f.client, { signal: controller.signal, retryDelayMs: 0 }), cancelled ? /cancelled during rotation/ : /connection reset after rotation/)
+    assert.equal(f.modelRequests, 4)
+    assert.equal(f.writes.length, 3)
+    assert.deepEqual(f.keys, ['existing', 'concurrent-key'])
+  }
 })
 
 test('policy rejection fails immediately and preexisting test keys are preserved', async () => {

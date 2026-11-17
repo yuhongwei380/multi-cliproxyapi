@@ -5,6 +5,7 @@ import { DirectGitHubSource, extractArchive } from './release.js'
 import { editChildConfig } from './child-config.js'
 import { ConflictError } from './store.js'
 import { recordRuntimeEvent } from './logging.js'
+import { isFailedUpgradeBackup } from './instance-backup.js'
 
 // Reviewed descriptors, not remote scripts. Additional plugins use the same engine.
 export const PLUGIN_CATALOG = [{ id: 'cpa-key-billing', name: 'Key Billing', owner: 'haowang02', repo: 'cpa-plugin-key-billing', entry: 'cpa-key-billing.so', asset: version => `cpa-key-billing_${version}_linux_amd64.tar.gz` }]
@@ -64,7 +65,7 @@ export class PluginService {
     const context = { job_id: job.id, plugin: job.plugin, version: job.version }
     const states = { queued: '已排队', running: '开始', completed: '完成', failed: '失败', blocked: '失败，等待恢复' }
     if (previous?.state !== job.state) recordRuntimeEvent(this.store, 'plugin', `插件安装 / 升级${states[job.state] || job.state}`, { ...context, event: 'plugin.job', status: job.state, level: ['failed', 'blocked'].includes(job.state) ? 'error' : 'info' })
-    const resultStates = { 'skipped-locked': '已跳过锁定实例', 'backing-up': '正在备份', 'backup-ready': '备份完成', prepared: '部署准备完成', installing: '正在安装', verifying: '正在验证', verified: '安装及验证成功', 'installed-disabled': '安装成功（未启用）', 'installed-pending-verification': '安装完成（待启动验证）', restoring: '正在回滚', 'rolled-back': '安装失败，已回滚', blocked: '回滚失败，等待恢复', failed: '安装失败', cancelled: '已取消' }
+    const resultStates = { 'skipped-locked': '已跳过锁定实例', 'skipped-backup': '已跳过升级失败保留的备份', 'backing-up': '正在备份', 'backup-ready': '备份完成', prepared: '部署准备完成', installing: '正在安装', verifying: '正在验证', verified: '安装及验证成功', 'installed-disabled': '安装成功（未启用）', 'installed-pending-verification': '安装完成（待启动验证）', restoring: '正在回滚', 'rolled-back': '安装失败，已回滚', blocked: '回滚失败，等待恢复', failed: '安装失败', cancelled: '已取消' }
     for (const result of job.results || []) {
       const before = previous?.results?.find(item => item.id === result.id)
       if (before?.state !== result.state && resultStates[result.state]) recordRuntimeEvent(this.store, 'plugin', `插件${resultStates[result.state]}`, { ...context, event: 'plugin.instance', instanceId: result.id, status: result.state, level: ['failed', 'blocked', 'rolled-back'].includes(result.state) ? 'error' : 'info' })
@@ -83,14 +84,14 @@ export class PluginService {
         const live = payload?.plugins?.find(item => item.id === descriptor.id)
         return { id: descriptor.id, installed, version: live?.metadata?.version || version, registered: live?.registered ?? null, enabled: live?.effective_enabled ?? null, verification: live ? 'live' : 'pending' }
       })
-      items.push({ id: instance.id, name: instance.name, locked: instance.locked, state: status.state, plugins, message })
+      items.push({ id: instance.id, name: instance.name, locked: instance.locked, upgrade_failed: isFailedUpgradeBackup(instance), state: status.state, plugins, message })
     }
     return { catalog: this.artifacts.catalog.map(({ id, name, owner, repo }) => ({ id, name, repository: `${owner}/${repo}` })), instances: items }
   }
   submit({ plugin, version = '', instances: ids, enable = true }) {
     this.assertIdle(); this.instances.assertUpgradeIdle(); this.artifacts.descriptor(plugin)
     if (typeof version !== 'string' || (version && !/^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version)) || typeof enable !== 'boolean' || !Array.isArray(ids) || !ids.length || ids.length > 100 || new Set(ids).size !== ids.length) throw Object.assign(new Error('invalid plugin deployment request'), { status: 400 })
-    const results = ids.map(id => { const instance = this.store.getInstance(id); return { id, state: instance.locked ? 'skipped-locked' : 'pending' } })
+    const results = ids.map(id => { const instance = this.store.getInstance(id); return { id, state: isFailedUpgradeBackup(instance) ? 'skipped-backup' : instance.locked ? 'skipped-locked' : 'pending' } })
     const job = { id: crypto.randomUUID(), plugin, version, enable: true, state: 'queued', results, created_at: new Date().toISOString(), message: '' }; this.save(job)
     this.pending = this.instances.operations.run('global', () => this.run(job)).catch(error => { job.state = 'blocked'; job.message = error.message; this.save(job) }).finally(() => { this.pending = null })
     return job
@@ -108,6 +109,7 @@ export class PluginService {
         if (result.state !== 'pending') continue
         await this.instances.withInstanceLock(result.id, async () => {
           const instance = this.store.getInstance(result.id)
+          if (isFailedUpgradeBackup(instance)) { result.state = 'skipped-backup'; this.save(job); return }
           if (instance.locked) { result.state = 'skipped-locked'; this.save(job); return }
           await this.deploy(job, result, instance, artifact)
         })
@@ -124,7 +126,15 @@ export class PluginService {
         if (['pending', 'backup-ready'].includes(result.state)) result.state = 'cancelled'
         else if (result.state === 'backing-up') { result.state = 'failed'; result.message = error.message }
       }
+      this.save(job)
+      await this.failBackups(job)
     }
+    this.save(job)
+  }
+  async failBackups(job) {
+    const results = job.results.filter(result => result.backup_id && !result.backup_removed)
+    await this.instances.failAutomaticBackups(results.map(result => result.backup_id))
+    for (const result of results) result.backup_unlocked = true
     this.save(job)
   }
   paths(job, instance) {
@@ -202,7 +212,8 @@ export class PluginService {
   async recover() {
     if (this.pending) throw new ConflictError('plugin deployment is still running')
     return this.instances.operations.run('global', async () => {
-      for (const job of this.jobs().filter(active)) {
+      for (const job of this.jobs()) {
+        if (!active(job)) { if (job.state === 'failed') await this.failBackups(job); continue }
         let blocked = false
         for (const result of job.results) {
           if (['prepared', 'installing', 'verifying', 'restoring', 'blocked'].includes(result.state)) {
@@ -211,6 +222,7 @@ export class PluginService {
           else if (['pending', 'backup-ready'].includes(result.state)) result.state = 'cancelled'
         }
         job.state = blocked ? 'blocked' : 'failed'; job.message = blocked ? 'rollback requires attention; retry recovery' : 'interrupted deployment recovered; submit a new deployment to continue'; this.save(job)
+        await this.failBackups(job)
       }
     })
   }

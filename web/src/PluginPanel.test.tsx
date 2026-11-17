@@ -31,6 +31,21 @@ test('shows locked skips, submits selected instances and explicit enable option'
   fireEvent.click(screen.getByRole('button', { name: '统一安装 / 升级' }))
   await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/deploy', { plugin: 'cpa-key-billing', version: '1.3.20', instances: ['one', 'two'], enable: true }))
 })
+test('failed-upgrade backups cannot be selected and failure history shows their unlocked state', async () => {
+  vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [{ id: 'failed', plugin: 'cpa-key-billing', state: 'failed', results: [{ id: 'one', state: 'rolled-back', backup_id: 'backup', backup_port: 18317, backup_unlocked: true }] }] } : { catalog: [{ id: 'cpa-key-billing', name: 'Key Billing', repository: 'haowang02/cpa-plugin-key-billing' }], instances: [
+    { id: 'one', name: '实例一', locked: false, state: 'running', plugins: [] },
+    { id: 'backup', name: '失败备份', locked: false, upgrade_failed: true, state: 'stopped', plugins: [] }
+  ] })
+  render(<PluginPanel />)
+  expect(await screen.findByLabelText('选择 失败备份')).toBeDisabled()
+  expect(screen.getByText(/升级失败，备份不锁定/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '选择未锁定实例' }))
+  expect(screen.getByLabelText('选择 实例一')).toBeChecked()
+  expect(screen.getByLabelText('选择 失败备份')).not.toBeChecked()
+  fireEvent.click(screen.getByRole('button', { name: '统一安装 / 升级' }))
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/plugins/deploy', { plugin: 'cpa-key-billing', version: '', instances: ['one'], enable: true }))
+})
+
 test('blocked deployment prevents another rollout and offers rollback recovery', async () => {
   vi.mocked(api.get).mockImplementation(async route => route === '/plugins/jobs' ? { items: [{ id: 'job', plugin: 'cpa-key-billing', version: '1.3.20', state: 'blocked', message: 'stop denied', results: [] }] } : { catalog: [], instances: [] })
   render(<PluginPanel />)

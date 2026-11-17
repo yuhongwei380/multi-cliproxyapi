@@ -212,15 +212,24 @@ async function upgradeFixture() {
   }
 }
 
-for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'rolls back persistent rejection' : 'waits for authentication reload'} and cleans its service key`, async () => {
+for (const mode of ['delayed', 'missed', 'permanent']) test(`unified upgrade handles ${mode} authentication reload and cleans its service key`, async () => {
   const f = await upgradeFixture()
-  let keys = ['existing']; let probes = 0
+  const permanent = mode === 'permanent'
+  let keys = ['existing']; let runtimeKeys = [...keys]; let probes = 0
   const client = new HTTPClient({ baseUrl: 'http://127.0.0.1:8317', managementSecret: 'management', maxRetries: 0, fetchImpl: async (url, options) => {
-    if (url.endsWith('/v1/models')) return Response.json({ data: [{ id: 'model' }] }, { status: ++probes < 3 || permanent ? 401 : 200 })
-    if (options.method === 'PUT') { keys = JSON.parse(options.body); return Response.json({ status: 'ok' }) }
+    if (url.endsWith('/v1/models')) {
+      probes++
+      const rejected = permanent || (mode === 'missed' ? !runtimeKeys.includes(options.headers.Authorization.slice(7)) : probes < 3)
+      return Response.json({ data: [{ id: 'model' }] }, { status: rejected ? 401 : 200 })
+    }
+    if (options.method === 'PUT') {
+      keys = JSON.parse(options.body)
+      if (probes >= 3) runtimeKeys = [...keys]
+      return Response.json({ status: 'ok' })
+    }
     return Response.json(keys)
   } })
-  f.upgrade.verifyInstance = () => verifyServiceWithTestKey(client, { maxAttempts: 3, retryDelayMs: 0 })
+  f.upgrade.verifyInstance = () => verifyServiceWithTestKey(client, { maxAttempts: 8, retryDelayMs: 0 })
   try {
     await f.instances.start(f.first.id)
     if (permanent) await assert.rejects(f.upgrade.upgrade('v2'), /after waiting/)
@@ -231,7 +240,7 @@ for (const permanent of [false, true]) test(`unified upgrade ${permanent ? 'roll
     assert.equal(logs.some(item => item.context.event === 'upgrade.completed'), !permanent)
     assert.equal(logs.some(item => item.context.event === 'upgrade.rollback.completed'), permanent)
     assert.ok(logs.some(item => item.instance_id === f.first.id && item.context.event === 'upgrade.instance.verifying'))
-    assert.equal(probes, 3)
+    assert.equal(probes, permanent ? 8 : mode === 'missed' ? 5 : 3)
     assert.deepEqual(keys, ['existing'])
     for (const item of [f.first, f.second]) assert.equal(f.store.getInstance(item.id).version, permanent ? 'v1' : 'v2')
     const running = await f.runtime.status(f.store.getInstance(f.first.id))
@@ -253,12 +262,12 @@ test('a rolled-back upgrade backup can be deleted without starting it or revokin
     await assert.rejects(f.upgrade.upgrade('v2'), /service verification failed/)
     const backup = f.store.listInstances().find(item => item.is_backup && f.store.keyBindings(key.id).some(binding => binding.instance_id === item.id))
     assert.ok(backup)
-    assert.equal(backup.locked, true)
+    assert.equal(backup.locked, false)
     assert.equal((await f.runtime.status(backup)).state, 'stopped')
     const auth = new AuthService(f.store); auth.initializeAdmin('cleanup-password')
     const deletion = new DeleteService({ store: f.store, runtime: f.runtime, instances: f.instances, units: new NoopUnitManager(), auth })
-    assert.throws(() => deletion.preview(backup.id), /锁定|locked/)
-    await f.instances.setLocked(backup.id, false)
+    await f.upgrade.recover()
+    await assert.rejects(f.instances.setLocked(backup.id, true), /升级失败.*不允许锁定/)
     f.runtime.start = async () => assert.fail('Cleanup must not start a CPA instance')
     const challenge = deletion.preview(backup.id)
     await assert.rejects(deletion.confirm(backup.id, challenge.id, 'wrong-password'))
@@ -270,6 +279,59 @@ test('a rolled-back upgrade backup can be deleted without starting it or revokin
     assert.equal(f.store.getManagedKey(key.id).locked, true)
     assert.equal((await f.runtime.status(f.first)).state, 'running')
     assert.equal(f.store.getInstance(f.first.id).version, 'v1')
+  } finally { f.close() }
+})
+
+test('retrying a failed upgrade preserves its unlocked backup and upgrades only the original instances', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    f.upgrade.verifyInstance = async () => { throw new Error('service verification failed') }
+    await assert.rejects(f.upgrade.upgrade('v2'), /service verification failed/)
+    const backups = f.store.listInstances().filter(item => item.is_backup)
+    assert.equal(backups.length, 2)
+    f.upgrade.verifyInstance = async instance => {
+      assert.equal(instance.id, f.first.id)
+      return { model_count: 1 }
+    }
+    await f.upgrade.upgrade('v2')
+    for (const backup of backups) {
+      const saved = f.store.getInstance(backup.id)
+      assert.equal(saved.version, 'v1')
+      assert.equal(saved.locked, false)
+      await assert.rejects(f.instances.setLocked(backup.id, true), /不允许锁定/)
+    }
+    assert.equal(f.store.listInstances().filter(item => item.is_backup).length, 2)
+    assert.equal(f.store.getInstance(f.first.id).version, 'v2')
+    assert.equal(f.store.getInstance(f.second.id).version, 'v2')
+  } finally { f.close() }
+})
+
+test('a later CPA backup failure unlocks backups created before the failure', async () => {
+  const f = await upgradeFixture()
+  try {
+    await f.instances.start(f.first.id)
+    fs.unlinkSync(path.join(f.second.directory, 'config.yaml'))
+    await assert.rejects(f.upgrade.upgrade('v2'), /config missing/)
+    const backups = f.store.listInstances().filter(item => item.is_backup)
+    assert.equal(backups.length, 1)
+    assert.equal(backups[0].locked, false)
+    await assert.rejects(f.instances.setLocked(backups[0].id, true), /不允许锁定/)
+    assert.equal((await f.runtime.status(f.first)).state, 'running')
+    assert.equal(f.store.getInstance(f.first.id).version, 'v1')
+    assert.throws(() => f.store.getUpgradeState(), /not found/)
+  } finally { f.close() }
+})
+
+for (const state of [UpgradeState.ROLLED_BACK, UpgradeState.STARTING_NEW]) test(`recovery unlocks legacy backups from ${state} upgrades`, async () => {
+  const f = await upgradeFixture()
+  try {
+    const backups = await f.instances.automaticBackups([f.first.id], 'CPA v2')
+    f.store.saveUpgradeState({ state, old_version: 'v1', new_version: 'v2', backup_instances: backups.map(item => item.id), original_desired: { [f.first.id]: { desired_state: 'stopped', version: 'v1' } }, original_running: [], instance_stages: { [f.first.id]: 'old-stopped' }, message: 'previous failure', updated_at: new Date().toISOString() })
+    await f.upgrade.recover()
+    assert.equal(f.store.getInstance(backups[0].id).locked, false)
+    if (state !== UpgradeState.ROLLED_BACK) await f.upgrade.recover()
+    await assert.rejects(f.instances.setLocked(backups[0].id, true), /不允许锁定/)
   } finally { f.close() }
 })
 
@@ -415,6 +477,7 @@ test('unified upgrade blocks before switching when an old instance will not stop
     await assert.rejects(() => f.upgrade.upgrade('v2'), /old instance refused to stop/)
     assert.equal(f.store.getUpgradeState().state, UpgradeState.BLOCKED)
     assert.ok(f.store.listInstances().every(item => item.version === 'v1'))
+    assert.ok(f.store.listInstances().filter(item => item.is_backup).every(item => !item.locked))
     assert.equal((await f.instances.status(f.first.id)).state, 'running')
   } finally { f.close() }
 })

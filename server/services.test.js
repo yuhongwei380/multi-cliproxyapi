@@ -38,6 +38,29 @@ import net from 'node:net'
 async function port() { return new Promise((resolve, reject) => { const server = net.createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const value = server.address().port; server.close(() => resolve(value)) }) }) }
 function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-cpa-service-')); const store = new Store(path.join(root, 'control.db')); const secrets = openSecretStore(path.join(root, 'secrets.key')); const runtime = new FakeRuntime(); const instances = new InstanceService({ store, runtime, secrets, units: new NoopUnitManager(), root, requireVersion: false }); return { root, store, secrets, runtime, instances } }
 
+test('failed automatic backups stay unlocked across service restarts while ordinary backups remain lockable', async () => {
+  const f = fixture()
+  try {
+    const source = await f.instances.create({ name: 'source', port: await port() })
+    const manual = await f.instances.backup(source.id, { name: 'manual', port: await port() })
+    const [automatic] = await f.instances.automaticBackups([source.id], 'CPA v2')
+    await f.instances.failAutomaticBackups([automatic.id, 'already-deleted'])
+    assert.equal(f.store.getInstance(automatic.id).locked, false)
+    assert.equal((await f.instances.list()).find(item => item.id === automatic.id).backup.upgrade_failed, true)
+    const reopened = new Store(path.join(f.root, 'control.db'))
+    try {
+      const instances = new InstanceService({ store: reopened, runtime: f.runtime, root: f.root })
+      await assert.rejects(instances.setLocked(automatic.id, true), error => error.status === 409 && /升级失败.*不允许锁定/.test(error.message))
+      await instances.setLocked(manual.id, true)
+      await instances.setLocked(source.id, true)
+      assert.equal(reopened.getInstance(manual.id).locked, true)
+      assert.equal(reopened.getInstance(source.id).locked, true)
+    } finally { reopened.close() }
+    await assert.rejects(f.instances.failAutomaticBackups([manual.id]), /not an automatic backup/)
+    assert.equal(f.store.getInstance(manual.id).locked, true)
+  } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
+})
+
 test('ordinary and backup limits are independent, persistent and enforced before source interruption', async () => {
   const f = fixture()
   try {

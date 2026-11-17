@@ -14,7 +14,7 @@ export type Instance = {
   name: string
   port: number
   locked?: boolean
-  backup?: { source_id: string; source_name: string; automatic: boolean; reason: string; created_at: string }
+  backup?: { source_id: string; source_name: string; automatic: boolean; reason: string; created_at: string; upgrade_failed?: boolean }
   desired_state: string
   version: string
 	revision: number

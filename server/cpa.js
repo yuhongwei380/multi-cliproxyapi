@@ -8,6 +8,7 @@ export const authentication = message => new CPAError(message || 'CPA management
 export const rateLimited = message => new CPAError(message || 'CPA endpoint is rate limited', 'ERR_RATE_LIMITED')
 // Prefix for a unique, short-lived post-upgrade smoke-test key.
 export const SERVICE_TEST_KEY = 'sk-multi-cliproxyapi-upgrade-check'
+const newServiceTestKey = () => `${SERVICE_TEST_KEY}-${crypto.randomBytes(16).toString('hex')}`
 
 const stringify = value => typeof value === 'string' ? value : typeof value === 'number' ? String(value) : value && typeof value === 'object' && typeof value.toString === 'function' ? value.toString() : ''
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -184,8 +185,9 @@ export class HTTPClient {
 
 // Verify the public service path instead of treating a running process as a
 // successful upgrade. CPA acknowledges config saves before asynchronously
-// reloading runtime authentication, so a newly added key can briefly get 401.
-export async function verifyServiceWithTestKey(client, { testKey = `${SERVICE_TEST_KEY}-${crypto.randomBytes(16).toString('hex')}`, signal, maxAttempts = 20, retryDelayMs = 500, timeoutMs = 30000 } = {}) {
+// reloading runtime authentication. A save before its watcher starts can also
+// miss the reload entirely, requiring a later, distinct configuration change.
+export async function verifyServiceWithTestKey(client, { testKey = newServiceTestKey(), signal, maxAttempts = 20, retryDelayMs = 500, timeoutMs = 30000 } = {}) {
   if (!client || typeof client.readClientKeys !== 'function' || typeof client.writeClientKeys !== 'function' || typeof client.listModels !== 'function') throw new Error('CPA service verifier is unavailable')
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0 || !Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error('CPA service verification retry settings are invalid')
   if (typeof testKey !== 'string' || !testKey) throw new CPAError('CPA service test key is invalid')
@@ -194,13 +196,28 @@ export async function verifyServiceWithTestKey(client, { testKey = `${SERVICE_TE
   verificationSignal.throwIfAborted()
   const current = await client.readClientKeys(verificationSignal)
   const hadKey = current.keys.includes(testKey)
+  const ownedKeys = new Set(hadKey ? [] : [testKey])
   try {
     // Include the mutation in cleanup: a disconnected PUT may already be saved.
     if (!hadKey) await client.writeClientKeys(current.path, [...current.keys, testKey], verificationSignal)
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       verificationSignal.throwIfAborted()
-      const saved = await client.readClientKeys(verificationSignal)
+      let saved = await client.readClientKeys(verificationSignal)
       if (!saved.keys.includes(testKey)) throw new CPAError('CPA service test key was not retained in configuration')
+      // Allow ordinary async reloads first. After four rejections, rotate only
+      // our temporary key using a fresh snapshot so a missed startup event can
+      // recover. Rewriting identical keys can be ignored by CPA's config hash.
+      if (!hadKey && attempt > 0 && attempt % 4 === 0) {
+        let replacement
+        do { replacement = newServiceTestKey() } while (saved.keys.includes(replacement) || ownedKeys.has(replacement))
+        // Track before PUT: an interrupted response may hide a successful save.
+        ownedKeys.add(replacement)
+        await client.writeClientKeys(saved.path, [...saved.keys.filter(key => !ownedKeys.has(key)), replacement], verificationSignal)
+        testKey = replacement
+        saved = await client.readClientKeys(verificationSignal)
+        if (!saved.keys.includes(testKey)) throw new CPAError('CPA service test key was not retained in configuration')
+      }
+      verificationSignal.throwIfAborted()
       try {
         const payload = await client.listModels(testKey, verificationSignal)
         return { model_count: payload.data.length }
@@ -218,9 +235,9 @@ export async function verifyServiceWithTestKey(client, { testKey = `${SERVICE_TE
     if (!hadKey) {
       // Cleanup must still run after cancellation and preserve unrelated keys.
       const latest = await client.readClientKeys()
-      if (latest.keys.includes(testKey)) await client.writeClientKeys(latest.path, latest.keys.filter(key => key !== testKey))
+      if (latest.keys.some(key => ownedKeys.has(key))) await client.writeClientKeys(latest.path, latest.keys.filter(key => !ownedKeys.has(key)))
       const cleaned = await client.readClientKeys()
-      if (cleaned.keys.includes(testKey)) throw new CPAError('CPA service test key cleanup failed')
+      if (cleaned.keys.some(key => ownedKeys.has(key))) throw new CPAError('CPA service test key cleanup failed')
     }
   }
 }

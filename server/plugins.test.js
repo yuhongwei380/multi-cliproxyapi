@@ -58,7 +58,8 @@ test('a later backup failure leaves earlier backups intact and prevents deployme
     fs.rmSync(path.join(second.directory, 'config.yaml'))
     const job = f.service.submit({ plugin: 'cpa-key-billing', instances: [first.id, second.id], enable: true }); await f.service.pending
     assert.equal(job.state, 'failed'); assert.equal(job.results[0].state, 'cancelled'); assert.equal(job.results[1].state, 'failed')
-    assert.equal(f.store.getInstance(job.results[0].backup_id).locked, true)
+    assert.equal(f.store.getInstance(job.results[0].backup_id).locked, false)
+    await assert.rejects(f.instances.setLocked(job.results[0].backup_id, true), /不允许锁定/)
     for (const source of [first, second]) assert.equal(fs.existsSync(path.join(source.directory, 'plugins', 'cpa-key-billing.so')), false)
   } finally { f.close() }
 })
@@ -127,6 +128,19 @@ test('failed verification restores old library/config and halts subsequent insta
     assert.equal((await f.runtime.status(first)).state, 'running'); assert.equal(fs.existsSync(path.join(second.directory, 'plugins', 'cpa-key-billing.so')), false)
     assert.equal(job.results[1].state, 'cancelled')
     assert.equal(fs.readFileSync(path.join(f.store.getInstance(job.results[0].backup_id).directory, 'plugins', 'cpa-key-billing.so'), 'utf8'), 'old library')
+    for (const result of job.results) {
+      assert.equal(f.store.getInstance(result.backup_id).locked, false)
+      assert.equal(result.backup_unlocked, true)
+      await assert.rejects(f.instances.setLocked(result.backup_id, true), /不允许锁定/)
+    }
+    const backupId = job.results[0].backup_id
+    f.service.verify = async () => true
+    const retried = f.service.submit({ plugin: 'cpa-key-billing', instances: [backupId, first.id] })
+    await f.service.pending
+    assert.equal(retried.state, 'completed')
+    assert.equal(retried.results[0].state, 'skipped-backup')
+    assert.equal(retried.results[0].backup_id, undefined)
+    assert.equal(f.store.getInstance(backupId).locked, false)
   } finally { f.close() }
 })
 test('interrupted deployment recovers from durable backups, with retry after rollback failure', async () => {
@@ -139,6 +153,21 @@ test('interrupted deployment recovers from durable backups, with retry after rol
     f.runtime.stop = stop; await f.service.recover(); assert.equal(f.service.jobs()[0].results[0].state, 'rolled-back'); assert.equal(fs.existsSync(files.file), false); f.service.assertIdle()
   } finally { f.close() }
 })
+test('recovery unlocks backups from historical failed plugin jobs before records are removed', async () => {
+  const f = fixture()
+  try {
+    const instance = await child(f, 'historical', 19395)
+    const [backup] = await f.instances.automaticBackups([instance.id], 'plugin cpa-key-billing 1.3.20')
+    const job = { id: crypto.randomUUID(), plugin: 'cpa-key-billing', state: 'failed', results: [{ id: instance.id, state: 'rolled-back', backup_id: backup.id }] }
+    f.store.savePluginJob(job)
+    await f.service.recover()
+    assert.equal(f.store.getInstance(backup.id).locked, false)
+    assert.equal(f.service.jobs()[0].results[0].backup_unlocked, true)
+    f.service.clearRecords()
+    await assert.rejects(f.instances.setLocked(backup.id, true), /不允许锁定/)
+  } finally { f.close() }
+})
+
 test('checksum failure occurs before touching an instance and cache tampering is rejected', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-cache-'))
   try {

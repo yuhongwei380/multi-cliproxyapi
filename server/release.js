@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { nowIso, ObservedState, DesiredState, isStopped } from './domain.js'
 import { ConflictError, NotFoundError } from './store.js'
 import { recordRuntimeEvent } from './logging.js'
+import { isFailedUpgradeBackup } from './instance-backup.js'
 
 const execFileAsync = promisify(execFile)
 const safeTag = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
@@ -306,10 +307,10 @@ export class UpgradeService {
       try {
         this.instances.pluginService?.assertIdle()
         if (!newVersion) throw new Error('new version is required'); const installed = this.store.getVersion(newVersion); if (!installed.usable) throw new Error('new version is not usable')
-        const allInstances = this.store.listInstances(); const instances = allInstances.filter(instance => !instance.locked && instance.version !== newVersion)
-        if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
         let oldState = null
-        try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
+        try { oldState = this.store.getUpgradeState(); if (![UpgradeState.COMMITTED, UpgradeState.ROLLED_BACK].includes(oldState.state)) throw new ConflictError(`upgrade state is ${oldState.state}`); if (oldState.state === UpgradeState.ROLLED_BACK) await this.instances.failAutomaticBackups(oldState.backup_instances || []); this.store.clearUpgradeState() } catch (error) { if (!(error instanceof NotFoundError) && error.code !== 'ERR_NOT_FOUND') throw error }
+        const allInstances = this.store.listInstances().filter(instance => !isFailedUpgradeBackup(instance)); const instances = allInstances.filter(instance => !instance.locked && instance.version !== newVersion)
+        if (allInstances.length && allInstances.every(instance => instance.locked)) throw new ConflictError('all instances are locked; unlock at least one instance before upgrading')
         if (!instances.length || instances.every(item => item.version === newVersion)) { recordRuntimeEvent(this.store, 'upgrade', 'CPA 统一升级已跳过：没有需要升级的实例', { ...logContext, event: 'upgrade.skipped' }); return { verified: false, verification_skipped: true, checked: [], backups_removed: true } }
         const oldVersion = instances[0].version
         // Complete network-dependent preparation before disrupting any process.
@@ -369,10 +370,12 @@ export class UpgradeService {
   async rollback(state, originalInstances, cause) {
     recordRuntimeEvent(this.store, 'upgrade', 'CPA 升级回滚开始', { event: 'upgrade.rollback.started', old_version: state.old_version, version: state.new_version })
     state.state = UpgradeState.RESTORING_OLD; state.message = cause.message; this.persist(state); let blocked = null
+    let backupError = null
+    try { await this.instances.failAutomaticBackups(state.backup_instances || []) } catch (error) { backupError = error }
     for (const old of originalInstances) { try { const current = this.store.getInstance(old.id); const status = await this.runtime.status(current); if (!isStopped(status.state)) { await this.runtime.stop(current); const stopped = await this.runtime.status(current); if (!isStopped(stopped.state)) throw new Error(`instance ${old.id} did not stop`) } } catch (error) { blocked ||= error } }
     if (blocked) {
       state.state = UpgradeState.BLOCKED
-      state.message = `${cause.message}; ${blocked.message}`
+      state.message = [cause.message, blocked.message, backupError?.message].filter(Boolean).join('; ')
       this.persist(state)
       recordRuntimeEvent(this.store, 'upgrade', 'CPA 回滚失败：新进程未确认停止，等待恢复', { event: 'upgrade.rollback.blocked', level: 'error', old_version: state.old_version, version: state.new_version })
       return
@@ -380,6 +383,7 @@ export class UpgradeService {
     try { if (this.activator) await this.activator.activateVersion(state.old_version) } catch (error) { blocked ||= error }
     for (const old of originalInstances) { try { const current = this.store.getInstance(old.id); const originalVersion = state.original_desired?.[old.id]?.version || state.old_version; const restored = current.version !== originalVersion ? { ...current, version: originalVersion, revision: current.revision + 1, updated_at: this.clock().toISOString() } : current; await this.instances.prepareBinary(restored); if (restored !== current) { this.store.updateInstance(restored, current.revision); await this.units?.install(restored) } } catch (error) { blocked ||= error } }
     if (!blocked) for (const old of originalInstances) if (state.original_running.includes(old.id)) { try { const current = this.store.getInstance(old.id); await this.instances.prepareBinary(current); await this.runtime.start(current); const status = await this.runtime.status(current); if (![ObservedState.RUNNING, ObservedState.STARTING].includes(status.state)) throw new Error(`old ${old.id} did not start`) } catch (error) { blocked ||= error } }
+    blocked ||= backupError
     state.state = blocked ? UpgradeState.BLOCKED : UpgradeState.ROLLED_BACK; state.message = blocked ? `${cause.message}; ${blocked.message}` : cause.message; this.persist(state)
     recordRuntimeEvent(this.store, 'upgrade', blocked ? 'CPA 回滚失败，等待恢复' : 'CPA 回滚完成，已恢复原版本', { event: blocked ? 'upgrade.rollback.blocked' : 'upgrade.rollback.completed', level: blocked ? 'error' : 'warn', old_version: state.old_version, version: state.new_version })
   }
@@ -387,7 +391,7 @@ export class UpgradeService {
     return this.instances.operations.run('global', async () => {
     let state; try { state = this.store.getUpgradeState() } catch (error) { if (error.code === 'ERR_NOT_FOUND') return; throw error }
     if (state.state === UpgradeState.COMMITTED) { if (this.verifyInstance) await this.removeBackups(state); this.store.clearUpgradeState(); return }
-    if (state.state === UpgradeState.ROLLED_BACK) { this.store.clearUpgradeState(); return }
+    if (state.state === UpgradeState.ROLLED_BACK) { await this.instances.failAutomaticBackups(state.backup_instances || []); this.store.clearUpgradeState(); return }
     const recordedStageIds = Object.keys(state.instance_stages || {}); const recordedIds = new Set(recordedStageIds.length ? recordedStageIds : Object.keys(state.original_desired || {})); const instances = this.store.listInstances().filter(instance => !recordedIds.size || recordedIds.has(instance.id)); await this.rollback(state, instances, new Error('upgrade interrupted; recovered to old version'))
     })
   }

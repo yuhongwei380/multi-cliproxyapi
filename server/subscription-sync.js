@@ -28,6 +28,23 @@ export function quotaResetCandidates(snapshots, now) {
 }
 const earliest = fresh => [...fresh.week, ...fresh.month].sort((a, b) => Date.parse(a.reset_at) - Date.parse(b.reset_at))[0]
 
+function earlyReset(snapshots, previous, now) {
+  for (const account of snapshots) {
+    // Rolling quota recovery (e.g. Kimi) is not evidence of a manual reset.
+    if (account.status !== 'ok' || !['codex', 'claude'].includes(account.provider)) continue
+    const old = previous.find(item => item.account_id === account.account_id && item.provider === account.provider && item.status === 'ok')
+    if (!old) continue
+    for (const value of account.values || []) {
+      if (!typeOf(value.name)) continue
+      const before = old.values?.find(item => item.name === value.name)
+      if (!before || !(Date.parse(before.reset_at) > now) || !(Date.parse(value.reset_at) >= Date.parse(before.reset_at))) continue
+      if (![before.remaining, value.remaining, value.total].every(Number.isFinite) || before.remaining < 0 || value.remaining <= before.remaining || value.remaining > value.total || value.total !== before.total || value.unit !== before.unit) continue
+      // Upstream exposes no manual-reset timestamp; start its retry window at detection.
+      return { account_id: account.account_id, provider: account.provider, window_name: value.name, reset_at: iso(now), source_reset_at: value.reset_at }
+    }
+  }
+}
+
 // Send only the original API's writable window fields, never quota views or keys.
 const windowFields = ['id', 'name', 'period_seconds', 'amount', 'token_limit', 'request_limit', 'cycle_anchor_at']
 function normalizePlan(plan) {
@@ -160,8 +177,9 @@ export class SubscriptionSync {
   nextRefreshAt(id) {
     const state = this.get(id), now = this.clock().getTime()
     const attempted = Math.max(0, ...this.store.listQuotas(id).map(item => Date.parse(item.attempted_at) || 0), Date.parse(state.last_observed_at) || 0)
-    if (state.watch) {
-      const due = Date.parse(state.watch.reset_at)
+    const event = state.upstream_reset || state.watch
+    if (event) {
+      const due = Date.parse(event.reset_at)
       // Do not poll stopped/unreachable instances every minute forever after
       // their execution window has expired. A later live query records the miss.
       return now > due + AUTO_WINDOW_MS && attempted > due + AUTO_WINDOW_MS ? attempted + this.quota.intervalMs(id) : Math.max(due, attempted + POLL_MS)
@@ -172,7 +190,7 @@ export class SubscriptionSync {
   log(id, message, level = 'info', context = {}) {
     try { this.store.appendRuntimeLog?.({ source: 'quota', level, instance_id: id, message, context }) } catch {}
   }
-  async observe(id, snapshots, { signal } = {}) {
+  async observe(id, snapshots, { signal, previous = [] } = {}) {
     if (this.running.has(id)) return
     this.running.add(id)
     const state = this.get(id)
@@ -180,11 +198,13 @@ export class SubscriptionSync {
       this.finishConfirmed(id, state)
       const now = this.clock().getTime()
       state.last_observed_at = iso(now)
-      const event = state.watch
+      state.upstream_reset ||= earlyReset(snapshots, previous, now)
+      const event = state.upstream_reset || state.watch
       const missed = event && now > Date.parse(event.reset_at) + AUTO_WINDOW_MS
       if (missed) {
         state.last_missed_reset_at = event.reset_at
         delete state.watch
+        delete state.upstream_reset
         state.message = '已错过本轮重置后 15 分钟窗口，跳过同步并等待下一轮'
         this.log(id, state.message, 'warn')
       }
@@ -194,31 +214,31 @@ export class SubscriptionSync {
         this.save(id, state); return
       }
       const next = earliest(fresh)
-      const arm = () => { state.watch = next; this.save(id, state) }
+      const arm = () => { state.watch = next; delete state.upstream_reset; this.save(id, state) }
       if (missed) { arm(); return }
       if (!event || now < Date.parse(event.reset_at)) {
-        if (!state.pending) state.message = '等待实例内最早账户重置，自动同步仅在重置后 15 分钟内执行'
+        if (!state.pending) state.message = '等待账户自然重置，或实时查询确认 Codex／Claude 上游提前恢复周／月额度'
         arm(); return
       }
       if ((state.last_attempted_reset_at && Date.parse(state.last_attempted_reset_at) >= Date.parse(event.reset_at)) || (state.pending?.status === 'in_flight' && (!state.pending.reset_at || state.pending.reset_at === event.reset_at))) {
         state.message = '本轮同步已有执行记录，不自动重复；结果未确认时请核对插件计划和额度'
         arm(); return
       }
-      const source = snapshots.find(item => item.account_id === event.account_id)?.values?.find(value => value.name === event.window_name)
-      if (!source || Date.parse(source.reset_at) <= Date.parse(event.reset_at)) {
+      const source = snapshots.find(item => item.account_id === event.account_id && (!event.provider || item.provider === event.provider))?.values?.find(value => value.name === event.window_name)
+      if (!source || Date.parse(source.reset_at) <= Date.parse(event.reset_at) || (event.source_reset_at && Date.parse(source.reset_at) < Date.parse(event.source_reset_at))) {
         state.message = '原重置账户或额度窗口已变化，跳过本轮并重新观察'
         arm(); return
       }
       try {
         await this.reset(id, state, { fresh, event, signal })
         this.finishConfirmed(id, state)
-        this.log(id, '账户自然重置后，全部订阅额度及统一周期自动同步完成', 'info', { reset_at: event.reset_at, next_reset_at: state.last_sync.next_reset_at, plans: state.last_sync.plans, windows: state.last_sync.windows })
+        this.log(id, '账户额度重置后，全部订阅额度及统一周期自动同步完成', 'info', { reset_at: event.reset_at, next_reset_at: state.last_sync.next_reset_at, plans: state.last_sync.plans, windows: state.last_sync.windows })
         try { this.store.appendAuditLog?.({ actor: 'system', action: 'subscription-sync.auto', resource_type: 'instance', resource_id: id, outcome: 'success', detail: JSON.stringify(state.last_sync) }) } catch {}
         arm()
       } catch (error) {
         const attempted = state.last_attempted_reset_at === event.reset_at
         state.message = attempted ? '本轮同步未全部确认，可能已修改部分计划或额度；本轮不自动重试，请核对插件' : error.message || '自动订阅同步暂不可用'
-        if (attempted) state.watch = next
+        if (attempted) { state.watch = next; delete state.upstream_reset }
         this.save(id, state)
         this.log(id, state.message, 'warn', { reset_at: event.reset_at })
         if (attempted) try { this.store.appendAuditLog?.({ actor: 'system', action: 'subscription-sync.auto', resource_type: 'instance', resource_id: id, outcome: 'failure', detail: '本轮自动同步未全部确认，不自动重发' }) } catch {}

@@ -62,7 +62,7 @@ test('quota refresh automatically resets and aligns every bound key through a re
         const response = await client.singleRequest('GET', '/v0/management/plugins')
         assert.equal(response.status, 200)
         const plugin = JSON.parse(response.body).plugins.find(item => item.id === 'cpa-key-billing')
-        assert.equal(plugin?.metadata?.version, '1.4.17'); assert.equal(plugin?.effective_enabled, true)
+        assert.equal(plugin?.metadata?.version, process.env.CPA_SYNC_TEST_PLUGIN_VERSION || '1.4.17'); assert.equal(plugin?.effective_enabled, true)
       })
     }
     await start()
@@ -86,7 +86,7 @@ test('quota refresh automatically resets and aligns every bound key through a re
     await eventually(async () => { const current = (await pluginCall('GET', '/keys')).keys; assert.ok(current.every(row => String(requestCount(row)) === '1')) })
     const baseTime = Math.floor(Date.now() / 1000) * 1000
     const due = baseTime + 60000, target = new Date(baseTime + 30 * 60000).toISOString()
-    let now = baseTime, refreshes = 0, rolledOver = false, tooFar = false
+    let now = baseTime, refreshes = 0, rolledOver = false, tooFar = false, earlyRecovery = false
     const clock = () => new Date(now)
     const at = new Date().toISOString()
     store.createInstance({ id: 'sync-test', name: 'sync test', port, directory: root, management_secret_ciphertext: 'unused', desired_state: 'running', revision: 1, version: 'test', created_at: at, updated_at: at })
@@ -94,13 +94,13 @@ test('quota refresh automatically resets and aligns every bound key through a re
     // before the plugin update reacquires the same instance/global locks.
     const instances = new InstanceService({ store, root, runtime: { status: async () => ({ state: 'running' }) }, requireVersion: false })
     const quota = new QuotaService({ store, instances, clock, clients: async () => ({
-      listAccounts: async () => { refreshes++; return [{ id: 'a' }, { id: 'b' }] },
-      fetchQuota: async account => ({ values: [{ name: account.id === 'a' ? '周限额' : '月限额', reset_at: tooFar ? new Date(baseTime + 20 * 86400000).toISOString() : account.id === 'a' ? new Date(baseTime + 2 * 3600000).toISOString() : rolledOver ? target : new Date(due).toISOString() }] })
+      listAccounts: async () => { refreshes++; return [{ id: 'a', provider: 'codex' }, { id: 'b', provider: 'claude' }] },
+      fetchQuota: async account => ({ values: [{ name: account.id === 'a' ? '周限额' : '月限额', remaining: account.id === 'a' ? earlyRecovery ? 100 : 10 : rolledOver ? 100 : 10, total: 100, unit: '%', reset_at: tooFar ? new Date(baseTime + 20 * 86400000).toISOString() : account.id === 'a' ? new Date(baseTime + 2 * 3600000).toISOString() : rolledOver ? target : new Date(due).toISOString() }] })
     }) })
     const sync = new SubscriptionSync({ store, quota, instances, clients: async () => client, clock })
     quota.subscriptionSync = sync
     const auth = new AuthService(store); auth.initializeAdmin('dummy-sync-admin')
-    server = createHttpServer(new Controller({ store, auth, subscriptionSync: sync, logger: { error() {} } }))
+    server = createHttpServer(new Controller({ store, auth, quota, subscriptionSync: sync, logger: { error() {} } }))
     const controlPort = await listen(server), route = `http://127.0.0.1:${controlPort}/api/instances/sync-test/subscription-sync`
     const login = await fetch(`http://127.0.0.1:${controlPort}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'dummy-sync-admin' }) })
     assert.equal(login.status, 200)
@@ -140,6 +140,18 @@ test('quota refresh automatically resets and aligns every bound key through a re
     const restarted = new SubscriptionSync({ store, quota, instances, clients: async () => client, clock })
     quota.subscriptionSync = restarted
     await quota.refreshInstance('sync-test')
+    assert.ok((await pluginCall('GET', '/keys')).keys.some(row => String(requestCount(row)) === '1'))
+    // A manual upstream refill is confirmed by live quota comparison, even
+    // when the original future reset date and plan anchors remain unchanged.
+    now = due + 2000; earlyRecovery = true
+    const liveRefresh = await fetch(route.replace('/subscription-sync', '/quotas'), { method: 'POST', headers })
+    assert.equal(liveRefresh.status, 202)
+    const refreshed = await (await fetch(route, { headers })).json()
+    assert.equal(refreshed.last_sync.reset_at, new Date(now).toISOString())
+    await assertAligned()
+    await consume(keys[0])
+    await eventually(async () => { const current = (await pluginCall('GET', '/keys')).keys; assert.ok(current.some(row => String(requestCount(row)) === '1')) })
+    assert.equal((await fetch(route.replace('/subscription-sync', '/quotas'), { method: 'POST', headers })).status, 202)
     assert.ok((await pluginCall('GET', '/keys')).keys.some(row => String(requestCount(row)) === '1'))
     // The next reset is observed, but a target beyond a 7-day window is rejected before any write.
     now = Date.parse(target) + 1000; tooFar = true

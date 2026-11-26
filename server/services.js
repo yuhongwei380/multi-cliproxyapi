@@ -770,7 +770,7 @@ export class QuotaService {
   async refreshInstance(instanceId, signal, { notify = true } = {}) {
     if (this.running.has(instanceId)) throw new Error('quota refresh already in progress'); this.running.add(instanceId)
     try {
-      const results = await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
+      const { results, previous } = await this.instances.operations.run('global', () => this.instances.withInstanceLock(instanceId, async () => {
         signal?.throwIfAborted()
         const instance = this.store.getInstance(instanceId); const attempt = this.clock().toISOString(); let client
         if (this.instances.runtime && isStopped((await this.instances.runtime.status(instance)).state)) {
@@ -801,10 +801,10 @@ export class QuotaService {
             recordRuntimeEvent(this.store, 'quota', `额度通知已跳过：${reason}`, { event: 'quota.notification.skipped', instanceId, reason, windows: low.length })
           }
           const seen = new Set(accounts.map(account => account.id)); for (const old of previous) if ((old.account_id === DiscoveryAccountId && accounts.length) || (old.account_id !== DiscoveryAccountId && !seen.has(old.account_id))) this.store.deleteQuota(instanceId, old.account_id)
-          return results
+          return { results, previous }
         } catch (error) { this.markDiscoveryFailure(instanceId, attempt, error); recordRuntimeEvent(this.store, 'quota', '额度刷新失败，请检查 OAuth 账户及 CPA 连接', { event: 'quota.refresh.failed', instanceId, level: 'error' }); throw new Error(`list OAuth accounts: ${error.message}`) }
       }))
-      try { await this.subscriptionSync?.observe(instanceId, results, { signal }) } catch { recordRuntimeEvent(this.store, 'quota', '自动订阅同步状态处理失败，请检查同步状态', { instanceId, level: 'warn' }) }
+      try { await this.subscriptionSync?.observe(instanceId, results, { signal, previous }) } catch { recordRuntimeEvent(this.store, 'quota', '自动订阅同步状态处理失败，请检查同步状态', { instanceId, level: 'warn' }) }
       this.wakeScheduler?.()
       return results
     } finally { this.running.delete(instanceId) }

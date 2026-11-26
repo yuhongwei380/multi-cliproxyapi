@@ -279,6 +279,30 @@ test('keeps reset times attached to their accounts and windows in cards, dialogs
   expect(screen.getByText('未提供重置时间')).toBeInTheDocument()
 })
 
+test('refreshing subscription status reloads upstream quotas and displays the resulting sync', async () => {
+  let refreshed = false
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((url, options) => {
+    const route = String(url)
+    if (route.endsWith('/auth/status')) return response({ authenticated: true, username: 'admin' }) as any
+    if (route.endsWith('/instances')) return response({ items: [{ id: 'cpa_1', name: 'one', port: 8317, desired_state: 'running', version: 'v1', revision: 1, status: { state: 'running', ready: true } }] }) as any
+    if (route.endsWith('/quotas')) {
+      if (options?.method === 'POST') refreshed = true
+      return response({ items: [{ account_id: 'a', provider: 'codex', status: 'ok', values: [{ name: '周限额', remaining: refreshed ? 100 : 10, total: 100, unit: '%', reset_at: '2030-09-23T08:00:00Z' }] }] }) as any
+    }
+    if (route.endsWith('/subscription-sync')) return response({ available: true, message: refreshed ? '全部订阅额度已重置' : '等待上游重置' }) as any
+    return response(route.endsWith('/state') ? { state: 'idle' } : { items: [] }) as any
+  })
+  const user = userEvent.setup(); render(<App />)
+  await screen.findByText('one')
+  await user.click(screen.getByRole('link', { name: '额度观察' }))
+  await screen.findByText('等待上游重置')
+  expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '10')
+  await user.click(screen.getByRole('button', { name: '刷新同步状态' }))
+  expect(await screen.findByText('全部订阅额度已重置')).toBeInTheDocument()
+  expect(screen.getByRole('progressbar', { name: '周限额 剩余配额' })).toHaveAttribute('aria-valuenow', '100')
+  expect(fetchMock.mock.calls.filter(([url, options]) => String(url).endsWith('/quotas') && options?.method === 'POST')).toHaveLength(1)
+})
+
 test('keeps each summary limit independent when a window is missing or cached', async () => {
   const account = 'kimi-' + 'long-oauth-account-name-'.repeat(6) + '.json'
   vi.spyOn(globalThis, 'fetch')

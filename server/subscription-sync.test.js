@@ -10,8 +10,8 @@ function fixture() {
   const now0 = Date.parse('2026-11-06T00:00:00Z'); let now = now0
   store.createInstance({ id: 'cpa-a', name: 'a', port: 18001, directory: '/tmp/a', management_secret_ciphertext: 'encrypted', desired_state: 'running', version: '', revision: 1, created_at: at(now), updated_at: at(now) })
   const accounts = [
-    { account_id: 'a', status: 'ok', values: [{ name: '周限额', reset_at: at(now0 + 4 * H) }] },
-    { account_id: 'b', status: 'ok', values: [{ name: '周限额', reset_at: at(now0 + 2 * H) }, { name: '月限额', reset_at: at(now0 + H) }] }
+    { account_id: 'a', provider: 'codex', status: 'ok', values: [{ name: '周限额', reset_at: at(now0 + 4 * H) }] },
+    { account_id: 'b', provider: 'claude', status: 'ok', values: [{ name: '周限额', reset_at: at(now0 + 2 * H) }, { name: '月限额', reset_at: at(now0 + H) }] }
   ]
   const plans = [0, 1].map(index => ({ id: `plan-${index}`, name: `Plan ${index}`, currency: 'USD', shared_quota: false, windows: [
     { id: 'week', name: 'weekly', period_seconds: 604800, request_limit: 10, cycle_anchor_at: at(now0 + 5 * H) },
@@ -32,7 +32,9 @@ function fixture() {
   const instances = { operations: { run: async (_key, fn) => fn() }, withInstanceLock: async (_id, fn) => fn(), assertUnlocked: instance => { if (instance.locked) throw new Error('locked') }, assertUpgradeIdle() {} }
   const quota = { intervalMs: () => 6 * H }
   const sync = new SubscriptionSync({ store, instances, quota, clients: async () => client, clock: () => new Date(now) })
-  return { sync, store, quota, instances, client, accounts, plans, writes, reads, now0, observe: () => sync.observe('cpa-a', structuredClone(accounts)), setNow: value => { now = value } }
+  let previous = []
+  const observe = () => { const snapshots = structuredClone(accounts), old = previous; previous = snapshots; return sync.observe('cpa-a', snapshots, { previous: old }) }
+  return { sync, store, quota, instances, client, accounts, plans, writes, reads, now0, observe, setNow: value => { now = value } }
 }
 
 async function roll(f, delay = 1000) {
@@ -77,6 +79,119 @@ test('a first observation of a new future date does not infer that an official r
     f.setNow(f.now0 + H + 1000); f.accounts[1].values[1].reset_at = at(f.now0 + 30 * 24 * H)
     await f.observe(); assert.equal(f.writes.length, 0)
     assert.equal(f.sync.get('cpa-a').watch.reset_at, at(f.now0 + 2 * H))
+  } finally { f.store.close() }
+})
+
+test('upstream quota recovery before its due date resets subscriptions once, including a non-earliest account', async () => {
+  for (const [index, window, moved] of [[0, 0, false], [0, 0, true], [1, 1, false], [1, 1, true]]) {
+    const f = fixture(); try {
+      const value = f.accounts[index].values[window]
+      Object.assign(value, { remaining: 10, total: 100, unit: '%' })
+      await f.observe(); f.setNow(f.now0 + 60000)
+      value.remaining = 95
+      if (moved) value.reset_at = at(f.now0 + 7 * 24 * H)
+      await f.observe()
+      assert.equal(f.writes.length, 3)
+      assert.equal(f.sync.get('cpa-a').last_sync.reset_at, at(f.now0 + 60000))
+      assert.equal(f.sync.get('cpa-a').last_sync.next_reset_at, at(f.now0 + (index === 1 && moved ? 2 : 1) * H))
+      assert.equal(f.sync.get('cpa-a').upstream_reset, undefined)
+      await f.observe(); assert.equal(f.writes.length, 3)
+      const restarted = new SubscriptionSync({ store: f.store, quota: f.quota, instances: f.instances, clients: async () => f.client, clock: () => new Date(f.now0 + 120000) })
+      await restarted.observe('cpa-a', structuredClone(f.accounts), { previous: structuredClone(f.accounts) })
+      assert.equal(f.writes.length, 3)
+    } finally { f.store.close() }
+  }
+})
+
+test('date drift, changed limits, failed accounts and short windows do not imply an early reset', async () => {
+  for (const alter of [
+    value => { value.remaining = 10 }, value => { value.remaining = 5 },
+    value => { value.total = 200 }, value => { value.unit = 'tokens' },
+    value => { value.reset_at = 'invalid' }, value => { value.reset_at = '2026-11-06T03:00:00Z' },
+    (value, account) => { account.account_id = 'replacement' },
+    (value, account) => { account.provider = 'replacement' },
+    (value, account) => { account.status = 'failed' },
+    value => { value.name = '5 小时限额' }, value => { value.remaining = 101 },
+  ]) {
+    const f = fixture(); try {
+      Object.assign(f.accounts[0].values[0], { remaining: 10, total: 100, unit: '%' })
+      await f.observe(); f.setNow(f.now0 + 60000)
+      f.accounts[0].values[0].remaining = 100
+      alter(f.accounts[0].values[0], f.accounts[0])
+      await f.observe(); assert.equal(f.writes.length, 0)
+    } finally { f.store.close() }
+  }
+})
+
+test('late natural recovery cannot bypass the original 15 minute deadline', async () => {
+  const f = fixture(); try {
+    Object.assign(f.accounts[1].values[1], { remaining: 10, total: 100, unit: '%' })
+    await f.observe(); f.setNow(f.now0 + H + AUTO_WINDOW_MS + 1)
+    Object.assign(f.accounts[1].values[1], { remaining: 100, reset_at: at(f.now0 + 30 * 24 * H) })
+    await f.observe(); assert.equal(f.writes.length, 0)
+    assert.equal(f.sync.get('cpa-a').last_missed_reset_at, at(f.now0 + H))
+  } finally { f.store.close() }
+})
+
+test('rolling quota recovery does not reset subscriptions', async () => {
+  const f = fixture(); try {
+    f.accounts[0].provider = 'kimi'
+    Object.assign(f.accounts[0].values[0], { remaining: 10, total: 100, unit: '%' })
+    await f.observe(); f.setNow(f.now0 + 60000)
+    Object.assign(f.accounts[0].values[0], { remaining: 100, reset_at: at(f.now0 + 7 * 24 * H) })
+    await f.observe(); assert.equal(f.writes.length, 0)
+  } finally { f.store.close() }
+})
+
+test('an early reset is discarded if its source changes before a retry', async () => {
+  for (const change of [
+    f => { f.accounts[0].provider = 'claude' },
+    f => { f.accounts[0].values[0].reset_at = at(f.now0 + 4 * H) },
+  ]) {
+    const f = fixture(); try {
+      Object.assign(f.accounts[0].values[0], { remaining: 10, total: 100, unit: '%' })
+      await f.observe(); f.setNow(f.now0 + 60000)
+      Object.assign(f.accounts[0].values[0], { remaining: 100, reset_at: at(f.now0 + 7 * 24 * H) })
+      f.instances.assertUnlocked = () => { throw new Error('locked') }
+      await f.observe()
+      f.instances.assertUnlocked = () => {}; change(f)
+      await f.observe(); assert.equal(f.writes.length, 0)
+      assert.equal(f.sync.get('cpa-a').upstream_reset, undefined)
+    } finally { f.store.close() }
+  }
+})
+
+test('an early reset survives preflight failure and restart, with polling bounded by detection plus 15 minutes', async () => {
+  for (const delay of [120000, AUTO_WINDOW_MS + 1]) {
+    const f = fixture(); try {
+      Object.assign(f.accounts[0].values[0], { remaining: 10, total: 100, unit: '%' })
+      await f.observe(); f.setNow(f.now0 + 60000)
+      f.accounts[0].values[0].remaining = 100
+      f.instances.assertUnlocked = () => { throw new Error('locked') }
+      await f.observe(); assert.equal(f.writes.length, 0)
+      assert.equal(f.sync.get('cpa-a').upstream_reset.reset_at, at(f.now0 + 60000))
+      assert.equal(f.sync.nextRefreshAt('cpa-a'), f.now0 + 120000)
+      f.instances.assertUnlocked = () => {}
+      const restarted = new SubscriptionSync({ store: f.store, quota: f.quota, instances: f.instances, clients: async () => f.client, clock: () => new Date(f.now0 + 60000 + delay) })
+      await restarted.observe('cpa-a', structuredClone(f.accounts), { previous: structuredClone(f.accounts) })
+      assert.equal(f.writes.length, delay <= AUTO_WINDOW_MS ? 3 : 0)
+      assert.equal(restarted.get('cpa-a').upstream_reset, undefined)
+    } finally { f.store.close() }
+  }
+})
+
+test('an early reset waits for all accounts and never retries an uncertain write', async () => {
+  const f = fixture(); try {
+    Object.assign(f.accounts[0].values[0], { remaining: 10, total: 100, unit: '%' })
+    await f.observe(); f.setNow(f.now0 + 60000)
+    f.accounts[0].values[0].remaining = 100; f.accounts[1].status = 'failed'
+    await f.observe(); assert.equal(f.writes.length, 0)
+    f.accounts[1].status = 'ok'
+    const request = f.client.singleRequest
+    f.client.singleRequest = async (...args) => { const result = await request(...args); if (args[0] === 'PATCH') throw new Error('lost response'); return result }
+    await f.observe(); assert.equal(f.writes.length, 1)
+    await f.observe(); assert.equal(f.writes.length, 1)
+    assert.equal(f.sync.get('cpa-a').pending.status, 'in_flight')
   } finally { f.store.close() }
 })
 

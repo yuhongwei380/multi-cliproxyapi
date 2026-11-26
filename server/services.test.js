@@ -558,14 +558,22 @@ test('automatic subscription observation runs after releasing quota locks and do
   const f = fixture()
   try {
     const item = await f.instances.create({ name: 'auto-observer-locks', port: await port() }); await f.instances.start(item.id)
-    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => new StaticClient({ accounts: [{ id: 'a' }], quotas: { a: { values: [] } } }), secrets: f.secrets })
+    const client = new StaticClient({ accounts: [{ id: 'a' }], quotas: { a: { values: [{ name: '周限额', remaining: 10, total: 100 }] } } })
+    const quota = new QuotaService({ store: f.store, instances: f.instances, clients: async () => client, secrets: f.secrets })
     let observed = 0
-    quota.subscriptionSync = { observe: async (id, results) => {
-      await f.instances.operations.run('global', () => f.instances.withInstanceLock(id, async () => { observed++; assert.equal(results.length, 1) }))
+    quota.subscriptionSync = { observe: async (id, results, { previous }) => {
+      await f.instances.operations.run('global', () => f.instances.withInstanceLock(id, async () => {
+        observed++; assert.equal(results.length, 1)
+        assert.equal(results[0].values[0].remaining, observed === 1 ? 10 : 100)
+        assert.equal(previous.length, observed === 1 ? 0 : 1)
+        if (observed === 2) assert.equal(previous[0].values[0].remaining, 10)
+      }))
       throw new Error('observer failure must not invalidate quotas')
     } }
     assert.equal((await quota.refreshInstance(item.id))[0].status, 'ok'); assert.equal(observed, 1)
     assert.equal(f.store.listQuotas(item.id)[0].status, 'ok')
+    client.quotas.a.values[0].remaining = 100
+    await quota.refreshInstance(item.id); assert.equal(observed, 2)
   } finally { f.store.close(); fs.rmSync(f.root, { recursive: true, force: true }) }
 })
 
